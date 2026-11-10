@@ -3,8 +3,12 @@
 #define PSHB_CONFIG_H
 
 // Firmware version reported in PONG: 0x00MMmmpp (major, minor, patch).
+// Set by CMake from project(VERSION); the build number counts commits.
 #ifndef PSHB_FW_VERSION
-#define PSHB_FW_VERSION 0x000100
+#define PSHB_FW_VERSION 0x000900
+#endif
+#ifndef PSHB_FW_BUILD
+#define PSHB_FW_BUILD 0
 #endif
 
 // Accept unencrypted protocol version 0 (debug/bring-up builds only).
@@ -32,6 +36,12 @@
 // 1 = 8-bit fallback in case a host rejects the 16-bit descriptor.
 #ifndef PSHB_MOUSE_8BIT
 #define PSHB_MOUSE_8BIT 0
+#endif
+
+// Test image for the update rollback: never confirms itself after a
+// network update, so the bootrom must fall back to the previous firmware.
+#ifndef PSHB_OTA_NO_CONFIRM
+#define PSHB_OTA_NO_CONFIRM 0
 #endif
 
 // Build the slow "mouse draws a square" test image (no network needed).

@@ -16,6 +16,7 @@ set(PSHB_CORE_SOURCES
     ${PSHB_FW_DIR}/src/core/proto.c
     ${PSHB_FW_DIR}/src/core/settings.c
     ${PSHB_FW_DIR}/src/core/test_pattern.c
+    ${PSHB_FW_DIR}/src/core/uf2_writer.c
     ${PSHB_FW_DIR}/src/core/web.c
     ${PSHB_FW_DIR}/lib/monocypher/src/monocypher.c
 )

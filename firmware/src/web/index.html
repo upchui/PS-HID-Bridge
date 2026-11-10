@@ -137,6 +137,15 @@
 
     <section id="t-system" class="tabpane" hidden>
       <div class="card">
+        <h2>Firmware-Update</h2>
+        <p>Aktuell: <strong id="fw-current">–</strong>. Die neue Firmware (<code>ps5-hid-bridge.uf2</code>) wird in den zweiten Speicherplatz geschrieben und erst nach erfolgreichem Start übernommen. Startet sie nicht richtig, kehrt das Board nach einem Neustart zur bisherigen Version zurück.</p>
+        <form id="f-ota">
+          <label>UF2-Datei <input type="file" name="file" accept=".uf2" required></label>
+          <progress id="ota-progress" max="100" value="0" hidden></progress>
+          <button type="submit">Hochladen und installieren</button>
+        </form>
+      </div>
+      <div class="card">
         <h2>Neustart</h2>
         <p>Das Board startet neu. Die Eingaben sind dabei für wenige Sekunden unterbrochen.</p>
         <button id="b-reboot" class="secondary">Neu starten</button>

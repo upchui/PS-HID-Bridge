@@ -37,6 +37,9 @@ extern pshb_settings_t g_settings;
 // (aligned 32-bit loads are atomic).
 extern bridge_t g_bridge;
 
+// Firmware slot we booted from ("A", "B" or "-"), set at boot.
+extern const char *g_running_slot;
+
 // Core 1 -> core 0: new key / sender filter (picked up by core 0's loop).
 void input_cfg_post(const pshb_settings_t *s);
 // Core 0: apply a pending update to the bridge, if any.

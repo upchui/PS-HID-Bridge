@@ -43,6 +43,14 @@ typedef struct {
     void (*factory_reset)(void *ctx);  // erase settings, then reboot
     void (*random)(void *ctx, uint8_t *buf, size_t n);
     uint64_t (*now_us)(void *ctx);
+
+    // Firmware update: the UF2 file is streamed in; errors as German text.
+    bool (*ota_begin)(void *ctx, uint32_t size, char *err, size_t err_cap);
+    bool (*ota_write)(void *ctx, const uint8_t *data, size_t len);
+    bool (*ota_finish)(void *ctx, uint32_t crc, char *err, size_t err_cap);
+    void (*ota_abort)(void *ctx);
+    // Boot the new firmware (called after the response has been sent).
+    void (*ota_activate)(void *ctx);
 } web_backend_t;
 
 typedef struct {
@@ -57,7 +65,7 @@ typedef struct {
     uint64_t lockout_until_us;
 } web_app_t;
 
-typedef enum { WEB_AFTER_NONE, WEB_AFTER_REBOOT, WEB_AFTER_FACTORY_RESET } web_after_t;
+typedef enum { WEB_AFTER_NONE, WEB_AFTER_REBOOT, WEB_AFTER_FACTORY_RESET, WEB_AFTER_OTA } web_after_t;
 
 typedef struct {
     http_req_t req;
@@ -70,6 +78,9 @@ typedef struct {
     bool responding;
     web_after_t after;
     uint64_t started_us;
+    bool ota;          // this request streams a firmware image
+    bool ota_failed;
+    bool close_early;  // answered before the body arrived: close after sending
 } web_conn_t;
 
 void web_app_init(web_app_t *app, const web_backend_t *be, pshb_settings_t *settings);
@@ -87,6 +98,10 @@ size_t web_conn_output(const web_conn_t *c, const uint8_t **data);
 void web_conn_sent(web_app_t *app, web_conn_t *c, size_t n);
 
 bool web_conn_done(const web_conn_t *c);
+
+// The connection is being closed (done, timeout or client gone). Aborts an
+// unfinished firmware upload.
+void web_conn_close(web_app_t *app, web_conn_t *c);
 
 // Parse "a.b.c.d"; false on anything else.
 bool web_parse_ip(const char *s, uint8_t out[4]);

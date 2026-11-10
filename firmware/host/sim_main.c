@@ -31,6 +31,7 @@
 #include "input_state.h"
 #include "protocol.h"
 #include "settings.h"
+#include "uf2_writer.h"
 #include "web.h"
 
 #define FLASH_SIZE (2 * PSHB_SETTINGS_SECTOR)
@@ -203,8 +204,80 @@ static uint64_t be_now(void *ctx) {
     return now_us();
 }
 
+// Firmware update into a RAM "slot" (same writer as on the board).
+#define SIM_SLOT_SIZE (1000u * 1024u)
+static uint8_t s_slot[SIM_SLOT_SIZE];
+static uf2_writer_t s_uf2;
+static bool s_ota_running;
+
+static bool slot_erase(void *ctx, uint32_t off) {
+    (void)ctx;
+    memset(s_slot + off, 0xFF, UF2_SECTOR_SIZE);
+    return true;
+}
+
+static bool slot_program(void *ctx, uint32_t off, const uint8_t data[UF2_PAYLOAD_SIZE]) {
+    (void)ctx;
+    memcpy(s_slot + off, data, UF2_PAYLOAD_SIZE);
+    return true;
+}
+
+static const uf2_flash_t k_slot = {NULL, slot_erase, slot_program};
+
+static bool be_ota_begin(void *ctx, uint32_t size, char *err, size_t cap) {
+    (void)ctx;
+    if (size == 0 || size % UF2_BLOCK_SIZE != 0) {
+        snprintf(err, cap, "Das ist keine UF2-Datei.");
+        return false;
+    }
+    uf2_writer_init(&s_uf2, &k_slot, SIM_SLOT_SIZE, UF2_FAMILY_RP2350_ARM_S);
+    s_ota_running = true;
+    printf("OTA BEGIN %u\n", (unsigned)size);
+    return true;
+}
+
+static bool be_ota_write(void *ctx, const uint8_t *data, size_t len) {
+    (void)ctx;
+    return uf2_writer_feed(&s_uf2, data, len);
+}
+
+static bool be_ota_finish(void *ctx, uint32_t crc, char *err, size_t cap) {
+    (void)ctx;
+    uf2_result_t r = uf2_writer_finish(&s_uf2, crc);
+    if (r != UF2_OK) {
+        snprintf(err, cap, "%s", uf2_error_text(r));
+        return false;
+    }
+    printf("OTA OK %u\n", (unsigned)s_uf2.blocks_written);
+    return true;
+}
+
+static void be_ota_abort(void *ctx) {
+    (void)ctx;
+    if (s_ota_running) printf("OTA ABORT\n");
+    s_ota_running = false;
+}
+
+static void be_ota_activate(void *ctx) {
+    (void)ctx;
+    s_ota_running = false;
+    S.reboot_requested = true;
+}
+
 static const web_backend_t k_backend = {
-    NULL, be_status, be_save, be_apply, be_reboot, be_factory_reset, be_random, be_now,
+    .ctx = NULL,
+    .status = be_status,
+    .save = be_save,
+    .apply = be_apply,
+    .reboot = be_reboot,
+    .factory_reset = be_factory_reset,
+    .random = be_random,
+    .now_us = be_now,
+    .ota_begin = be_ota_begin,
+    .ota_write = be_ota_write,
+    .ota_finish = be_ota_finish,
+    .ota_abort = be_ota_abort,
+    .ota_activate = be_ota_activate,
 };
 
 // ---------------------------------------------------------------- main loop
@@ -280,6 +353,7 @@ static void http_service(web_app_t *app, http_slot_t *slots, int listen_fd, uint
         if (n > 0) {
             web_conn_input(app, &s->conn, buf, (size_t)n);
         } else if (n == 0 && !s->conn.responding) {
+            web_conn_close(app, &s->conn);
             close(s->fd);
             s->fd = -1;
             continue;
@@ -293,6 +367,7 @@ static void http_service(web_app_t *app, http_slot_t *slots, int listen_fd, uint
             web_conn_sent(app, &s->conn, (size_t)w);
         }
         if (web_conn_done(&s->conn) || t - s->conn.started_us > CONN_TIMEOUT_US) {
+            web_conn_close(app, &s->conn);
             close(s->fd);
             s->fd = -1;
         }

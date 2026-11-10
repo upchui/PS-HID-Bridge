@@ -500,25 +500,98 @@ void web_conn_reset(web_conn_t *c, uint64_t now_us) {
     c->responding = false;
     c->after = WEB_AFTER_NONE;
     c->started_us = now_us;
+    c->ota = false;
+    c->ota_failed = false;
+    c->close_early = false;
+}
+
+typedef struct {
+    web_app_t *app;
+    web_conn_t *conn;
+} body_ctx_t;
+
+static void ota_body(void *ctx, const uint8_t *data, size_t len) {
+    body_ctx_t *b = ctx;
+    if (!b->conn->ota_failed && !b->app->be->ota_write(b->app->be->ctx, data, len)) b->conn->ota_failed = true;
+}
+
+// Headers of POST /api/ota are complete: authorise, then stream the body.
+// Returns false if a response was produced already.
+static bool ota_start(web_app_t *app, web_conn_t *c) {
+    http_req_t *r = &c->req;
+    if (!r->csrf_header) {
+        respond_error(c, 403, "Anfrage abgelehnt (X-PSHB-Header fehlt)");
+        return false;
+    }
+    if (!r->session[0] || session_find(app, r->session) < 0) {
+        respond_error(c, 401, "Bitte anmelden");
+        return false;
+    }
+    if (!app->settings->pw_set) {
+        respond_error(c, 403, "Bitte zuerst ein eigenes Passwort setzen");
+        return false;
+    }
+    if (!r->has_crc) {
+        respond_error(c, 400, "Prüfsumme (X-PSHB-CRC32) fehlt");
+        return false;
+    }
+    char err[96] = "Update nicht möglich";
+    if (!app->be->ota_begin || !app->be->ota_begin(app->be->ctx, r->content_length, err, sizeof(err))) {
+        respond_error(c, 400, err);
+        return false;
+    }
+    c->ota = true;
+    return true;
+}
+
+static void ota_done(web_app_t *app, web_conn_t *c) {
+    // finish() also reports why an earlier write failed (bad file, flash error).
+    char err[96] = "Schreiben in den Flash fehlgeschlagen";
+    bool ok = app->be->ota_finish(app->be->ctx, c->req.crc, err, sizeof(err));
+    if (!ok || c->ota_failed) {
+        app->be->ota_abort(app->be->ctx);
+        respond_error(c, 400, err);
+        return;
+    }
+    json_writer_t w;
+    jw_begin(&w, c->dyn, sizeof(c->dyn));
+    jw_bool(&w, "ok", true);
+    jw_bool(&w, "reboot", true);
+    respond_json(c, 200, &w, NULL);
+    c->after = WEB_AFTER_OTA;
 }
 
 void web_conn_input(web_app_t *app, web_conn_t *c, const uint8_t *data, size_t len) {
     if (c->responding) return;  // one request per connection
+    body_ctx_t bctx = {app, c};
     while (len) {
-        size_t n = http_req_feed(&c->req, data, len, NULL, NULL);
+        size_t n = http_req_feed(&c->req, data, len, ota_body, &bctx);
         data += n;
         len -= n;
         if (c->req.state == HTTP_PARSE_BODY && !c->req.body_decided) {
-            http_req_decide(&c->req, false);  // all current routes take a small JSON body
+            if (c->req.method == HTTP_POST && strcmp(c->req.path, "/api/ota") == 0) {
+                if (!ota_start(app, c)) {
+                    c->close_early = true;
+                    return;
+                }
+                http_req_decide(&c->req, true);
+            } else {
+                http_req_decide(&c->req, false);  // all other routes take a small JSON body
+            }
             continue;
         }
         if (n == 0) break;
         if (c->req.state != HTTP_PARSE_HEADERS && c->req.state != HTTP_PARSE_BODY) break;
     }
     if (c->req.state == HTTP_PARSE_ERROR) {
+        if (c->ota) app->be->ota_abort(app->be->ctx);
         respond_error(c, c->req.error_status ? c->req.error_status : 400, "Ungültige Anfrage");
     } else if (c->req.state == HTTP_PARSE_DONE) {
-        handle(app, c);
+        if (c->ota) {
+            ota_done(app, c);
+        } else {
+            handle(app, c);
+        }
     }
 }
 
@@ -543,7 +616,13 @@ void web_conn_sent(web_app_t *app, web_conn_t *c, size_t n) {
         c->after = WEB_AFTER_NONE;
         if (after == WEB_AFTER_REBOOT) app->be->reboot(app->be->ctx);
         if (after == WEB_AFTER_FACTORY_RESET) app->be->factory_reset(app->be->ctx);
+        if (after == WEB_AFTER_OTA) app->be->ota_activate(app->be->ctx);
     }
+}
+
+void web_conn_close(web_app_t *app, web_conn_t *c) {
+    if (c->ota && !c->responding) app->be->ota_abort(app->be->ctx);
+    c->ota = false;
 }
 
 bool web_conn_done(const web_conn_t *c) {

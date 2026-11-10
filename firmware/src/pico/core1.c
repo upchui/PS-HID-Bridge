@@ -11,6 +11,7 @@
 #include "dhcp.h"
 #include "flash_store.h"
 #include "net_shared.h"
+#include "ota.h"
 #include "protocol.h"
 #include "pshb_config.h"
 #include "socket.h"
@@ -177,7 +178,7 @@ static void be_status(void *ctx, web_status_t *out) {
     out->rx_replay = g_bridge.stats.rx_replay;
     out->rx_filtered = g_bridge.stats.rx_filtered;
     out->rx_malformed = g_bridge.stats.rx_malformed;
-    out->partition = "-";
+    out->partition = g_running_slot;
 }
 
 static bool be_save(void *ctx, const pshb_settings_t *s) {
@@ -220,8 +221,47 @@ static uint64_t be_now(void *ctx) {
     return time_us_64();
 }
 
+static bool be_ota_begin(void *ctx, uint32_t size, char *err, size_t cap) {
+    (void)ctx;
+    return ota_begin(size, err, cap);
+}
+
+static bool be_ota_write(void *ctx, const uint8_t *data, size_t len) {
+    (void)ctx;
+    return ota_write(data, len);
+}
+
+static bool be_ota_finish(void *ctx, uint32_t crc, char *err, size_t cap) {
+    (void)ctx;
+    return ota_finish(crc, err, cap);
+}
+
+static void be_ota_abort(void *ctx) {
+    (void)ctx;
+    ota_abort();
+}
+
+static volatile bool s_ota_activate;
+
+static void be_ota_activate(void *ctx) {
+    (void)ctx;
+    s_ota_activate = true;
+}
+
 static const web_backend_t k_backend = {
-    NULL, be_status, be_save, be_apply, be_reboot, be_factory_reset, be_random, be_now,
+    .ctx = NULL,
+    .status = be_status,
+    .save = be_save,
+    .apply = be_apply,
+    .reboot = be_reboot,
+    .factory_reset = be_factory_reset,
+    .random = be_random,
+    .now_us = be_now,
+    .ota_begin = be_ota_begin,
+    .ota_write = be_ota_write,
+    .ota_finish = be_ota_finish,
+    .ota_abort = be_ota_abort,
+    .ota_activate = be_ota_activate,
 };
 
 // ---------------------------------------------------------------- BOOTSEL
@@ -258,6 +298,11 @@ void core1_main(void) {
         if (time_reached(next_second)) {
             next_second = delayed_by_ms(next_second, 1000);
             DHCP_time_handler();
+        }
+
+        if (s_ota_activate) {
+            sleep_ms(50);  // let the response leave the chip
+            ota_activate();
         }
 
         if (s_reboot) {

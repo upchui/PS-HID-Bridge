@@ -20,6 +20,7 @@
 #include "hid_out.h"
 #include "input_state.h"
 #include "net_shared.h"
+#include "ota.h"
 #include "pshb_config.h"
 #include "w5500_port.h"
 #include "wizchip_conf.h"
@@ -30,6 +31,7 @@
 net_shared_t g_net;
 pshb_settings_t g_settings;
 bridge_t g_bridge;
+const char *g_running_slot = "-";
 
 static input_state_t g_input;
 static bool s_chip_ok;
@@ -186,8 +188,8 @@ int main(void) {
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-    printf("ps5-hid-bridge %d.%d.%d: boot%s%s\n", (PSHB_FW_VERSION >> 16) & 0xFF,
-           (PSHB_FW_VERSION >> 8) & 0xFF, PSHB_FW_VERSION & 0xFF,
+    printf("ps5-hid-bridge %d.%d.%d build %d: boot%s%s\n", (PSHB_FW_VERSION >> 16) & 0xFF,
+           (PSHB_FW_VERSION >> 8) & 0xFF, PSHB_FW_VERSION & 0xFF, PSHB_FW_BUILD,
            PSHB_TEST_PATTERN ? " (test pattern)" : "",
            PSHB_PLAINTEXT_DEBUG ? " (PLAINTEXT DEBUG)" : "");
 
@@ -200,6 +202,12 @@ int main(void) {
     tud_init(0);
 
     s_chip_ok = w5500_port_init();
+    // After an update the bootrom runs us "on trial": confirm only once the
+    // essentials work, otherwise the next reset returns to the old firmware.
+#if !PSHB_OTA_NO_CONFIRM
+    if (s_chip_ok) ota_confirm_if_trial();
+#endif
+    g_running_slot = ota_running_slot();
     if (s_chip_ok) {
         multicore_launch_core1(core1_main);
     } else {

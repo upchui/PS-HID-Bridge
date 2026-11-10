@@ -8,7 +8,7 @@
 
 #define HTTP_PORT 80
 #define CHUNK 1024  // bounds the time core 0 may wait for the SPI bus
-#define CONN_TIMEOUT_US 10000000u
+#define CONN_TIMEOUT_US 60000000u  // generous: a firmware upload takes a few seconds
 
 static web_app_t s_app;
 static web_conn_t s_conn[2];
@@ -48,6 +48,7 @@ static void serve(int i, uint8_t sn) {
     }
 
     if (web_conn_done(c) || now - c->started_us > CONN_TIMEOUT_US) {
+        web_conn_close(&s_app, c);
         disconnect(sn);
         s_open[i] = false;
     }
@@ -65,6 +66,7 @@ void web_server_service(void) {
             if (getSn_RX_RSR(sn) > 0 || (s_open[i] && s_conn[i].responding && !web_conn_done(&s_conn[i]))) {
                 serve(i, sn);
             } else {
+                web_conn_close(&s_app, &s_conn[i]);
                 disconnect(sn);
                 s_open[i] = false;
             }

@@ -407,11 +407,46 @@ class Web:
             payload = raw
         return status, payload, headers
 
+    def upload(self, path: str, data: bytes, crc: int | None):
+        import urllib.error
+        import urllib.request
+        r = urllib.request.Request(self.base + path, data=data, method="POST")
+        r.add_header("X-PSHB", "1")
+        r.add_header("Content-Type", "application/octet-stream")
+        if crc is not None:
+            r.add_header("X-PSHB-CRC32", f"{crc:x}")
+        if self.cookie:
+            r.add_header("Cookie", self.cookie)
+        try:
+            with urllib.request.urlopen(r, timeout=10) as resp:
+                return resp.status, json.loads(resp.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"{}")
+        except (ConnectionResetError, BrokenPipeError):
+            return 0, {}
+
     def login(self, password: str):
         return self.req("POST", "/api/login", {"password": password})
 
 
 NEW_PW = "SicheresPasswort1"
+
+
+def make_uf2(blocks: int, abs_block: bool = True) -> bytes:
+    """Synthetic UF2 for the RP2350 (plus the SDK's RP2350-E10 absolute block)."""
+    import struct
+
+    def block(addr, no, total, family, fill):
+        payload = bytes((fill + i) & 0xFF for i in range(256)).ljust(476, b"\0")
+        return struct.pack("<8I", 0x0A324655, 0x9E5D5157, 0x2000, addr, 256, no, total, family) + payload + \
+            struct.pack("<I", 0x0AB16F30)
+
+    out = b""
+    if abs_block:
+        out += block(0x10FFFF00, 0, 1, 0xE48BFF57, 0xEE)
+    for i in range(blocks):
+        out += block(0x10000000 + 256 * i, i, blocks, 0xE48BFF59, i)
+    return out
 
 
 class WebTests(unittest.TestCase):
@@ -519,6 +554,37 @@ class WebTests(unittest.TestCase):
         status, r, _ = self.web.login("ps5-hid-bridge")
         self.assertEqual(status, 200)
         self.assertTrue(r["must_change_password"])
+
+    def test_firmware_upload(self):
+        import zlib
+        self.setup_password()
+        uf2 = make_uf2(100)
+        status, r = self.web.upload("/api/ota", uf2, zlib.crc32(uf2))
+        self.assertEqual((status, r), (200, {"ok": True, "reboot": True}))
+        self.assertTrue(self.sim.wait_line("OTA OK 100", timeout=2))
+        self.assertTrue(self.sim.wait_line("REBOOT", timeout=2))
+
+    def test_firmware_upload_rejects_bad_files(self):
+        import zlib
+        self.setup_password()
+        uf2 = make_uf2(10)
+        status, r = self.web.upload("/api/ota", uf2, zlib.crc32(uf2) ^ 1)
+        self.assertEqual(status, 400)
+        self.assertIn("Prüfsumme", r["error"])
+        junk = bytes(range(256)) * 4
+        status, r = self.web.upload("/api/ota", junk, zlib.crc32(junk))
+        self.assertEqual(status, 400)
+        self.assertIn("UF2", r["error"])
+        status, r = self.web.upload("/api/ota", uf2, None)
+        self.assertEqual(status, 400)
+        self.assertFalse(self.sim.wait_line("REBOOT", timeout=0.3))
+
+    def test_firmware_upload_needs_login(self):
+        import zlib
+        uf2 = make_uf2(4)
+        status, _ = self.web.upload("/api/ota", uf2, zlib.crc32(uf2))
+        self.assertIn(status, (0, 401))
+        self.assertFalse(self.sim.wait_line("OTA BEGIN", timeout=0.3))
 
     def test_settings_survive_restart(self):
         self.setup_password()

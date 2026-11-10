@@ -85,6 +85,7 @@ function renderStatus(st) {
   $("s-net").textContent = `${st.net_state} · ${st.ip_mode === "static" ? "feste Adresse" : "DHCP"}`;
   $("s-fw").textContent = st.firmware;
   $("s-uptime").textContent = `Läuft seit ${fmtUptime(st.uptime_ms)} · Slot ${st.partition}`;
+  $("fw-current").textContent = `${st.firmware} (Slot ${st.partition})`;
   $("s-ok").textContent = st.rx_ok;
   $("s-auth").textContent = st.rx_auth_fail;
   $("s-replay").textContent = st.rx_replay;
@@ -182,6 +183,41 @@ function waitForReboot(text) {
   }, 2000);
 }
 
+// CRC-32 (IEEE) -- crypto.subtle is not available on plain-HTTP pages.
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function uploadFirmware(data, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/ota");
+    xhr.setRequestHeader("X-PSHB", "1");
+    xhr.setRequestHeader("X-PSHB-CRC32", crc32(data).toString(16));
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(100 * e.loaded / e.total); };
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch (e) { /* ignore */ }
+      if (xhr.status === 200) resolve(body); else reject(new Error(body.error || "Fehler " + xhr.status));
+    };
+    xhr.onerror = () => reject(new Error("Verbindung abgebrochen."));
+    xhr.send(data);
+  });
+}
+
 function init() {
   onSubmit("f-login", async (f) => {
     const r = await api("/api/login", { password: f.password.value });
@@ -250,6 +286,24 @@ function init() {
     await api("/api/allowed-sender", { ip: f.ip.value.trim() });
     message(f.ip.value.trim() ? "Absenderfilter gespeichert." : "Absenderfilter aus: alle Absender erlaubt.", true);
     refreshStatus(false);
+  });
+
+  onSubmit("f-ota", async (f) => {
+    const file = f.file.files[0];
+    if (!file) throw new Error("Bitte eine UF2-Datei auswählen.");
+    if (!file.name.toLowerCase().endsWith(".uf2")) throw new Error("Bitte die Datei ps5-hid-bridge.uf2 wählen.");
+    const data = new Uint8Array(await file.arrayBuffer());
+    const bar = $("ota-progress");
+    bar.hidden = false;
+    bar.value = 0;
+    stopStatus();
+    try {
+      await uploadFirmware(data, (p) => { bar.value = p; });
+    } finally {
+      bar.hidden = true;
+    }
+    f.reset();
+    waitForReboot("Firmware geschrieben. Das Board startet mit der neuen Version …");
   });
 
   $("b-reboot").addEventListener("click", async () => {
