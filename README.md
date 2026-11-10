@@ -24,9 +24,13 @@ All parts are implemented and tested automatically: unit tests, shared protocol 
 | Command line tool `pshb-cli` | ✅ |
 | Desktop app (Kirigami, setup wizard, triggers, tray) | ✅ offscreen self-test |
 
+## Download
+
+Every commit on `main` is built and tested automatically and published as a pre-release on the [releases page](https://github.com/upchui/PS-HID-Bridge/releases), named `v<version>-build.<number>`. Each release contains the AppImage, the command line tool (`pshb-cli-x86_64-linux`), all firmware images and `SHA256SUMS`. The build number is the same one the firmware reports as its version, so a higher number is always newer.
+
 ## Quick start
 
-1. **Build:** `make submodules && make all` (see "Building"; the first run takes long because of Qt).
+1. **Get the files:** download them from the latest release, or build them yourself with `make submodules && make all` (see "Building"; the first run takes long because of Qt).
 2. **Flash the board:** hold BOOTSEL and plug the board into the PC via USB; the drive `RP2350` appears. First copy `out/ps5-hid-bridge-pt.uf2` onto it (partition table; the board comes back as a drive afterwards), then `out/ps5-hid-bridge.uf2`.
 3. **Connect the board:** network cable, USB to the PS5. Look up the IP in your router (`ps5-hid-bridge-XXXXXX`) and open it in the browser.
 4. **Web interface:** log in with `ps5-hid-bridge`, set your own password, generate a key under "Security".
@@ -195,6 +199,15 @@ All versions are kept in [versions.env](versions.env); downloads are checked by 
 
 For development builds without the web interface a key can be compiled in: `make firmware DEV_PSK=<64 hex digits>`. It only applies as long as no key is set in the web interface.
 
+### Continuous integration
+
+GitHub Actions builds on GitHub-hosted runners with the same Makefile:
+
+- [`release.yml`](.github/workflows/release.yml) runs on every push to `main`: `make all` (firmware, CLI, AppImage, every test, AppImage self-test), then it publishes the pre-release `v<version>-build.<commit count>`.
+- The toolchain images are stored in the GitHub Container Registry (`ghcr.io/<owner>/pshb-*`), tagged with a hash of `versions.env` and `docker/` (`make print-toolchain-tag`). Only when that hash changes does [`toolchain.yml`](.github/workflows/toolchain.yml) rebuild them; with Qt this takes a few hours, a normal release run takes about 20 minutes.
+- `make PREBUILT=1 FW_IMAGE=… RUST_IMAGE=… DESKTOP_IMAGE=… APPTEST_IMAGE=… all` is what CI runs: the image targets only check that the pulled images exist.
+- The version in `firmware/CMakeLists.txt`, `desktop/Cargo.toml` and the metainfo file must match (`make check-version`, part of `make test`).
+
 ## Testing without a board
 
 `make sim` starts a board simulator: input on UDP port 45045, web interface at http://localhost:8080. It uses the same core as the firmware and prints text lines instead of USB reports (`KBD …`, `MOUSE …`); its settings are kept in `.cache/sim/flash.bin`. Connect the app or `pshb-cli` with the address `127.0.0.1`.
@@ -219,4 +232,5 @@ make udp-test IP=192.168.1.50 ARGS='--psk-file psk.txt flood --rate 1000 --secon
 | `desktop/ui/` | Kirigami user interface (QML, cxx-qt), tray, window rule |
 | `protocol/` | packet format and shared test vectors |
 | `docker/` | build environments |
-| `tools/` | test tools (UDP test, simulator integration tests) |
+| `tools/` | test tools (UDP test, simulator integration tests), version and release helpers |
+| `.github/workflows/` | CI: toolchain images and automatic releases |

@@ -13,10 +13,14 @@ JOBS ?= $(shell nproc)
 # Qt/qtdeclarative needs ~2 GB RAM per compile job; keep this moderate.
 QT_JOBS ?= 6
 
-FW_IMAGE      := pshb-firmware
-RUST_IMAGE    := pshb-rust
-DESKTOP_IMAGE := pshb-desktop
-APPTEST_IMAGE := pshb-apptest
+# Toolchain images. CI overrides the names with registry images and sets
+# PREBUILT=1, so the image targets only check that the pulled image exists.
+FW_IMAGE      ?= pshb-firmware
+RUST_IMAGE    ?= pshb-rust
+DESKTOP_IMAGE ?= pshb-desktop
+APPTEST_IMAGE ?= pshb-apptest
+PREBUILT      ?=
+REPO_URL      ?= https://github.com/upchui/PS-HID-Bridge
 
 FW_ARGS      := UBUNTU_TAG PICO_SDK_TAG PICOTOOL_TAG ARM_TOOLCHAIN_VERSION ARM_TOOLCHAIN_SHA256
 RUST_ARGS    := ALMA_TAG CMAKE_VERSION CMAKE_SHA256 RUSTUP_VERSION RUSTUP_SHA256 RUST_VERSION
@@ -26,6 +30,13 @@ DESKTOP_ARGS := $(RUST_ARGS) QT_VERSION QTBASE_SHA256 QTSHADERTOOLS_SHA256 QTDEC
                 LINUXDEPLOY_APPIMAGE_TAG LINUXDEPLOY_APPIMAGE_SHA256 APPIMAGE_RUNTIME_TAG APPIMAGE_RUNTIME_SHA256
 
 build_args = $(foreach v,$(1),--build-arg $(v)=$($(v)))
+
+# $(call image,NAME,DOCKER BUILD ARGUMENTS)
+ifeq ($(PREBUILT),1)
+image = docker image inspect $(1) >/dev/null || { echo "Image $(1) not found (PREBUILT=1)"; exit 1; }
+else
+image = docker build --label org.opencontainers.image.source=$(REPO_URL) $(2) -t $(1)
+endif
 
 FW_BUILD   := .cache/build/firmware
 HOST_BUILD := .cache/build/host
@@ -38,7 +49,8 @@ DESKTOP_RUN = $(DOCKER_RUN) -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR
 FW_RUN      = $(DOCKER_RUN) $(FW_IMAGE)
 
 .PHONY: help all firmware desktop desktop-cli test test-firmware test-desktop test-appimage \
-        test-sim test-protocol test-uf2 sim udp-test fmt submodules check-pins images image-firmware image-rust image-desktop \
+        test-sim test-protocol test-uf2 sim udp-test fmt submodules check-pins check-version images \
+        image-firmware image-rust image-desktop image-apptest print-release-tag print-toolchain-tag \
         shell-fw shell-desktop clean distclean dirs
 
 help:
@@ -52,6 +64,7 @@ help:
 	@echo "  make all           everything above"
 	@echo "  make submodules    fetch firmware libraries (non-recursive)"
 	@echo "  make check-pins    verify submodule tags against versions.env"
+	@echo "  make images        build the toolchain images (PREBUILT=1: only check they exist)"
 	@echo "  make shell-fw | shell-desktop   interactive build shell"
 	@echo "  make clean | distclean"
 
@@ -61,22 +74,26 @@ dirs:
 	@mkdir -p out .cache/home .cache/cargo
 
 # ---------------------------------------------------------------- images
-images: image-firmware image-rust image-desktop
+images: image-firmware image-rust image-desktop image-apptest
 
 image-firmware:
-	docker build $(call build_args,$(FW_ARGS)) -t $(FW_IMAGE) -f docker/firmware.Dockerfile docker
+	$(call image,$(FW_IMAGE),$(call build_args,$(FW_ARGS)) -f docker/firmware.Dockerfile docker)
 
 image-rust:
-	docker build $(call build_args,$(RUST_ARGS)) --target rust-base -t $(RUST_IMAGE) \
-		-f docker/desktop.Dockerfile docker
+	$(call image,$(RUST_IMAGE),$(call build_args,$(RUST_ARGS)) --target rust-base \
+		-f docker/desktop.Dockerfile docker)
 
 image-desktop:
-	docker build $(call build_args,$(DESKTOP_ARGS)) --build-arg JOBS=$(QT_JOBS) --target desktop \
-		-t $(DESKTOP_IMAGE) -f docker/desktop.Dockerfile docker
+	$(call image,$(DESKTOP_IMAGE),$(call build_args,$(DESKTOP_ARGS)) --build-arg JOBS=$(QT_JOBS) \
+		--target desktop -f docker/desktop.Dockerfile docker)
 
 image-apptest:
-	docker build --build-arg ALMA_TAG=$(ALMA_TAG) --target appimage-test \
-		-t $(APPTEST_IMAGE) -f docker/desktop.Dockerfile docker
+	$(call image,$(APPTEST_IMAGE),--build-arg ALMA_TAG=$(ALMA_TAG) --target appimage-test \
+		-f docker/desktop.Dockerfile docker)
+
+# Content hash of everything that goes into the images (CI image tag).
+print-toolchain-tag:
+	@tools/toolchain-tag.sh
 
 # ---------------------------------------------------------------- sources
 submodules:
@@ -84,6 +101,15 @@ submodules:
 
 check-pins:
 	@tools/check-pins.sh
+
+# Firmware, desktop app and metainfo carry the same version.
+check-version:
+	@tools/version.sh >/dev/null
+
+# Release tag: version plus build number (= commit count, the same number the
+# firmware carries as its binary version).
+print-release-tag:
+	@echo "v$$(tools/version.sh)-build.$$(git rev-list --count HEAD)"
 
 # ---------------------------------------------------------------- firmware
 firmware: image-firmware check-pins dirs
@@ -103,7 +129,7 @@ desktop: image-desktop dirs
 	$(DESKTOP_RUN) bash desktop/packaging/build-appimage.sh
 
 # ---------------------------------------------------------------- tests
-test: test-protocol test-firmware test-sim test-desktop
+test: check-version test-protocol test-firmware test-sim test-desktop
 
 test-firmware: image-firmware dirs
 	$(FW_RUN) bash -c 'cmake -S firmware/host -B $(HOST_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=Debug \
@@ -167,4 +193,4 @@ clean:
 
 distclean: clean
 	rm -rf .cache
-	-docker image rm $(FW_IMAGE) $(RUST_IMAGE) $(DESKTOP_IMAGE)
+	-docker image rm $(FW_IMAGE) $(RUST_IMAGE) $(DESKTOP_IMAGE) $(APPTEST_IMAGE)

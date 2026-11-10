@@ -1,0 +1,59 @@
+# Builds the four toolchain images and pushes them to the GitHub Container
+# Registry, tagged with the content hash of versions.env and docker/
+# (tools/toolchain-tag.sh). The release workflow calls this only when an image
+# for the current hash is missing; building Qt from source takes hours.
+
+name: Toolchain images
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Image tag (output of tools/toolchain-tag.sh)
+        required: true
+        type: string
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: firmware, var: FW_IMAGE }
+          - { image: rust, var: RUST_IMAGE }
+          - { image: desktop, var: DESKTOP_IMAGE }
+          - { image: apptest, var: APPTEST_IMAGE }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The Qt build needs about 20 GB; the runner image ships SDKs we do not use.
+      - name: Free disk space
+        if: matrix.image == 'desktop'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Log in to the container registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and push
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          IMAGE: ${{ matrix.image }}
+          VAR: ${{ matrix.var }}
+        run: |
+          tag=${INPUT_TAG:-$(tools/toolchain-tag.sh)}
+          ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pshb-$IMAGE:$tag"
+          # The source label links the package to this repository.
+          make "image-$IMAGE" "$VAR=$ref" QT_JOBS=4 REPO_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          docker push "$ref"
