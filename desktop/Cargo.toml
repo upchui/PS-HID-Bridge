@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = ["core", "ui"]
+# The UI crate needs Qt (only available in the full desktop image); plain
+# `cargo build/test` in the lightweight Rust image covers the core only.
+default-members = ["core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

@@ -1,0 +1,17 @@
+[package]
+name = "pshb-core"
+description = "PS5 HID Bridge core: input capture, protocol, crypto, transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "pshb_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pshb-cli"
+path = "src/bin/pshb-cli.rs"
+
+[dependencies]

@@ -1,0 +1,12 @@
+# Build outputs and caches (everything is built in Docker)
+/out/
+/.cache/
+/desktop/target/
+/firmware/build*/
+__pycache__/
+*.pyc
+
+# Editors
+.vscode/
+.idea/
+*.swp

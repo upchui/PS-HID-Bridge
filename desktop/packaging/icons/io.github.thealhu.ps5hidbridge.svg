@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- App icon: keyboard + mouse sending to a console. -->
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="#1d2b4f"/>
+  <!-- keyboard -->
+  <rect x="32" y="120" width="132" height="72" rx="10" fill="#e8ecf4"/>
+  <g fill="#1d2b4f">
+    <rect x="42" y="132" width="16" height="14" rx="3"/>
+    <rect x="64" y="132" width="16" height="14" rx="3"/>
+    <rect x="86" y="132" width="16" height="14" rx="3"/>
+    <rect x="108" y="132" width="16" height="14" rx="3"/>
+    <rect x="130" y="132" width="24" height="14" rx="3"/>
+    <rect x="42" y="152" width="24" height="14" rx="3"/>
+    <rect x="72" y="152" width="16" height="14" rx="3"/>
+    <rect x="94" y="152" width="16" height="14" rx="3"/>
+    <rect x="116" y="152" width="38" height="14" rx="3"/>
+    <rect x="62" y="172" width="72" height="12" rx="3"/>
+  </g>
+  <!-- mouse -->
+  <rect x="180" y="120" width="44" height="72" rx="22" fill="#e8ecf4"/>
+  <line x1="202" y1="120" x2="202" y2="146" stroke="#1d2b4f" stroke-width="4"/>
+  <!-- link waves -->
+  <g fill="none" stroke="#4da3ff" stroke-width="10" stroke-linecap="round">
+    <path d="M96 96 A48 48 0 0 1 160 96"/>
+    <path d="M72 72 A84 84 0 0 1 184 72"/>
+  </g>
+</svg>

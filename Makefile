@@ -1,0 +1,127 @@
+# PS5 HID Bridge -- every build step runs inside Docker.
+# Host requirements: docker, make, git.
+
+SHELL := /bin/bash
+.DEFAULT_GOAL := help
+
+include versions.env
+
+UID  := $(shell id -u)
+GID  := $(shell id -g)
+TTY  := $(shell [ -t 0 ] && echo -t)
+JOBS ?= $(shell nproc)
+# Qt/qtdeclarative needs ~2 GB RAM per compile job; keep this moderate.
+QT_JOBS ?= 6
+
+FW_IMAGE      := pshb-firmware
+RUST_IMAGE    := pshb-rust
+DESKTOP_IMAGE := pshb-desktop
+
+FW_ARGS      := UBUNTU_TAG PICO_SDK_TAG PICOTOOL_TAG ARM_TOOLCHAIN_VERSION ARM_TOOLCHAIN_SHA256
+RUST_ARGS    := ALMA_TAG CMAKE_VERSION CMAKE_SHA256 RUSTUP_VERSION RUSTUP_SHA256 RUST_VERSION
+DESKTOP_ARGS := $(RUST_ARGS) QT_VERSION QTBASE_SHA256 QTSHADERTOOLS_SHA256 QTDECLARATIVE_SHA256 \
+                QTSVG_SHA256 KF_VERSION ECM_SHA256 KIRIGAMI_SHA256 \
+                LINUXDEPLOY_TAG LINUXDEPLOY_SHA256 LINUXDEPLOY_QT_TAG LINUXDEPLOY_QT_SHA256 \
+                LINUXDEPLOY_APPIMAGE_TAG LINUXDEPLOY_APPIMAGE_SHA256
+
+build_args = $(foreach v,$(1),--build-arg $(v)=$($(v)))
+
+FW_BUILD   := .cache/build/firmware
+HOST_BUILD := .cache/build/host
+
+DOCKER_RUN = docker run --rm $(TTY) -u $(UID):$(GID) -v $(CURDIR):/work -w /work \
+             -e HOME=/work/.cache/home -e JOBS=$(JOBS) $(DOCKER_EXTRA)
+RUST_RUN    = $(DOCKER_RUN) -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR=/work/.cache/target/rust $(RUST_IMAGE)
+DESKTOP_RUN = $(DOCKER_RUN) -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR=/work/.cache/target/desktop \
+              -e APPIMAGE_EXTRACT_AND_RUN=1 $(DESKTOP_IMAGE)
+FW_RUN      = $(DOCKER_RUN) $(FW_IMAGE)
+
+.PHONY: help all firmware desktop desktop-cli test test-firmware test-desktop test-appimage \
+        submodules check-pins images image-firmware image-rust image-desktop \
+        shell-fw shell-desktop clean distclean dirs
+
+help:
+	@echo "Targets:"
+	@echo "  make firmware      UF2 images            -> out/*.uf2"
+	@echo "  make desktop       AppImage (Qt build!)  -> out/PS5-HID-Bridge-x86_64.AppImage"
+	@echo "  make desktop-cli   command line tool     -> out/pshb-cli"
+	@echo "  make test          unit tests, protocol vectors, simulator"
+	@echo "  make all           everything above"
+	@echo "  make submodules    fetch firmware libraries (non-recursive)"
+	@echo "  make check-pins    verify submodule tags against versions.env"
+	@echo "  make shell-fw | shell-desktop   interactive build shell"
+	@echo "  make clean | distclean"
+
+all: firmware desktop-cli desktop test test-appimage
+
+dirs:
+	@mkdir -p out .cache/home .cache/cargo
+
+# ---------------------------------------------------------------- images
+images: image-firmware image-rust image-desktop
+
+image-firmware:
+	docker build $(call build_args,$(FW_ARGS)) -t $(FW_IMAGE) -f docker/firmware.Dockerfile docker
+
+image-rust:
+	docker build $(call build_args,$(RUST_ARGS)) --target rust-base -t $(RUST_IMAGE) \
+		-f docker/desktop.Dockerfile docker
+
+image-desktop:
+	docker build $(call build_args,$(DESKTOP_ARGS)) --build-arg JOBS=$(QT_JOBS) --target desktop \
+		-t $(DESKTOP_IMAGE) -f docker/desktop.Dockerfile docker
+
+# ---------------------------------------------------------------- sources
+submodules:
+	git submodule update --init
+
+check-pins:
+	@tools/check-pins.sh
+
+# ---------------------------------------------------------------- firmware
+firmware: image-firmware check-pins dirs
+	$(FW_RUN) bash -c 'cmake -S firmware -B $(FW_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		&& cmake --build $(FW_BUILD) --parallel $(JOBS)'
+	cp $(FW_BUILD)/*.uf2 out/
+	cp $(FW_BUILD)/ps5-hid-bridge.elf out/
+	@ls -l out/*.uf2
+
+# ---------------------------------------------------------------- desktop
+desktop-cli: image-rust dirs
+	$(RUST_RUN) bash -c 'cd desktop && cargo build --release --locked -p pshb-core --bin pshb-cli'
+	cp .cache/target/rust/release/pshb-cli out/
+
+desktop: image-desktop dirs
+	$(DESKTOP_RUN) bash desktop/packaging/build-appimage.sh
+
+# ---------------------------------------------------------------- tests
+test: test-firmware test-desktop
+
+test-firmware: image-firmware dirs
+	$(FW_RUN) bash -c 'cmake -S firmware/host -B $(HOST_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+		&& cmake --build $(HOST_BUILD) --parallel $(JOBS) \
+		&& ctest --test-dir $(HOST_BUILD) --output-on-failure'
+
+test-desktop: image-rust dirs
+	$(RUST_RUN) bash -c 'cd desktop && cargo fmt --all --check \
+		&& cargo clippy --locked -p pshb-core --all-targets -- -D warnings \
+		&& cargo test --locked -p pshb-core'
+
+# Smoke test of the packaged app: loads all QML offscreen and quits.
+test-appimage: image-desktop dirs
+	$(DESKTOP_RUN) bash -c 'QT_QPA_PLATFORM=offscreen timeout 60 out/PS5-HID-Bridge-x86_64.AppImage --self-test'
+
+# ---------------------------------------------------------------- misc
+shell-fw: image-firmware dirs
+	$(DOCKER_RUN) -i $(FW_IMAGE) bash
+
+shell-desktop: image-desktop dirs
+	$(DOCKER_RUN) -i -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR=/work/.cache/target/desktop \
+		$(DESKTOP_IMAGE) bash
+
+clean:
+	rm -rf out .cache/build .cache/target
+
+distclean: clean
+	rm -rf .cache
+	-docker image rm $(FW_IMAGE) $(RUST_IMAGE) $(DESKTOP_IMAGE)
