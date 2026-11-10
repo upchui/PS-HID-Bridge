@@ -5,6 +5,9 @@
 
 #include <stdio.h>
 
+#include <string.h>
+
+#include "pico/critical_section.h"
 #include "pico/multicore.h"
 #include "pico/rand.h"
 #include "pico/stdlib.h"
@@ -12,6 +15,7 @@
 
 #include "bridge.h"
 #include "core1.h"
+#include "flash_store.h"
 #include "hexutil.h"
 #include "hid_out.h"
 #include "input_state.h"
@@ -24,10 +28,39 @@
 #endif
 
 net_shared_t g_net;
+pshb_settings_t g_settings;
+bridge_t g_bridge;
 
 static input_state_t g_input;
-static bridge_t g_bridge;
 static bool s_chip_ok;
+
+// ---------------------------------------------------------------- core 1 -> core 0 config
+
+static critical_section_t s_cfg_lock;
+static struct {
+    uint8_t key[32];
+    bool key_set;
+    uint32_t allowed_ip;
+} s_cfg;
+static volatile bool s_cfg_dirty;
+
+void input_cfg_post(const pshb_settings_t *s) {
+    critical_section_enter_blocking(&s_cfg_lock);
+    memcpy(s_cfg.key, s->psk, 32);
+    s_cfg.key_set = s->psk_set;
+    s_cfg.allowed_ip = ip_to_u32(s->allowed_ip);
+    s_cfg_dirty = true;
+    critical_section_exit(&s_cfg_lock);
+}
+
+void input_cfg_poll(bridge_t *b) {
+    if (!s_cfg_dirty) return;
+    critical_section_enter_blocking(&s_cfg_lock);
+    bridge_set_key(b, s_cfg.key_set ? s_cfg.key : NULL);
+    b->allowed_ip = s_cfg.allowed_ip;
+    s_cfg_dirty = false;
+    critical_section_exit(&s_cfg_lock);
+}
 
 // ---------------------------------------------------------------- LED
 // USB not mounted: 1 Hz blink. Mounted, no network: 4 Hz blink.
@@ -128,16 +161,24 @@ static void usb_status_service(void) {
     prev = s;
 }
 
-static void load_key(void) {
+static void load_settings(void) {
+    if (!settings_load(&g_settings_flash, &g_settings)) {
+        printf("settings: none stored, using defaults\n");
+    }
 #ifdef PSHB_DEV_PSK
-    uint8_t key[32];
-    if (hex_decode(PSHB_DEV_PSK, key, sizeof(key))) {
-        bridge_set_key(&g_bridge, key);
-        printf("security: development PSK active\n");
-    } else {
-        printf("security: PSHB_DEV_PSK is not 64 hex digits\n");
+    // Development builds: a compiled-in key is used until one is set in the web UI.
+    if (!g_settings.psk_set) {
+        if (hex_decode(PSHB_DEV_PSK, g_settings.psk, sizeof(g_settings.psk))) {
+            g_settings.psk_set = 1;
+            printf("security: development PSK active\n");
+        } else {
+            printf("security: PSHB_DEV_PSK is not 64 hex digits\n");
+        }
     }
 #endif
+    bridge_set_key(&g_bridge, g_settings.psk_set ? g_settings.psk : NULL);
+    g_bridge.allowed_ip = ip_to_u32(g_settings.allowed_ip);
+    if (!g_settings.psk_set) printf("security: no key set yet -- create one in the web interface\n");
 }
 
 int main(void) {
@@ -153,7 +194,8 @@ int main(void) {
     input_state_init(&g_input);
     bridge_init(&g_bridge, &g_input, get_rand_64(), get_rand_64(), time_us_64());
     g_bridge.allow_plaintext = PSHB_PLAINTEXT_DEBUG;
-    load_key();
+    critical_section_init(&s_cfg_lock);
+    load_settings();
     hid_out_init(&g_input);
     tud_init(0);
 
@@ -171,6 +213,7 @@ int main(void) {
 #if PSHB_TEST_PATTERN
         test_pattern_service();
 #endif
+        input_cfg_poll(&g_bridge);
         usb_status_service();
         bridge_tick(&g_bridge, time_us_64());
         hid_out_service();

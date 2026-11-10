@@ -1,16 +1,20 @@
-// Board simulator: runs the portable firmware core (bridge, input state) on
-// Linux behind a UDP socket and prints the HID reports the board would send
-// to the PS5. Used by the integration tests and for manual testing without
-// hardware.
+// Board simulator: runs the portable firmware core (bridge, input state,
+// settings, web interface) on Linux and prints the HID reports the board
+// would send to the PS5. Used by the integration tests and for manual
+// testing without hardware.
 //
 // Output lines (stdout, line-buffered):
-//   READY <port>
+//   READY <udp port> HTTP <http port or 0>
 //   KBD mods=02 keys=04 1d 00 00 00 00
 //   MOUSE buttons=01 dx=15 dy=-3 wheel=0 pan=0
+//   FAILSAFE
+//   REBOOT
 #define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -26,6 +30,12 @@
 #include "hexutil.h"
 #include "input_state.h"
 #include "protocol.h"
+#include "settings.h"
+#include "web.h"
+
+#define FLASH_SIZE (2 * PSHB_SETTINGS_SECTOR)
+#define MAX_CONNS 2
+#define CONN_TIMEOUT_US 10000000ull
 
 static volatile sig_atomic_t s_stop;
 
@@ -40,63 +50,267 @@ static uint64_t now_us(void) {
     return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
 }
 
-static uint64_t random_u64(void) {
-    uint64_t v = 0;
+static void random_bytes(uint8_t *buf, size_t n) {
     FILE *f = fopen("/dev/urandom", "rb");
-    if (!f || fread(&v, sizeof(v), 1, f) != 1) {
+    if (!f || fread(buf, 1, n, f) != n) {
         fprintf(stderr, "sim: cannot read /dev/urandom\n");
         exit(1);
     }
     fclose(f);
+}
+
+static uint64_t random_u64(void) {
+    uint64_t v;
+    random_bytes((uint8_t *)&v, sizeof(v));
     return v;
 }
+
+// ---------------------------------------------------------------- simulated board
+
+typedef struct {
+    // options
+    bool plaintext, usb_mounted, have_session, have_key_override;
+    uint64_t session;
+    uint8_t key_override[32];
+    uint32_t allowed_override;
+    unsigned failsafe_ms;
+    const char *settings_file;
+
+    // state
+    uint8_t flash[FLASH_SIZE];
+    pshb_settings_t settings;
+    input_state_t input;
+    bridge_t bridge;
+    uint64_t boot_us;
+    bool reboot_requested;
+} sim_t;
+
+static sim_t S;
+
+static void flash_read(void *ctx, uint32_t off, void *buf, size_t len) {
+    (void)ctx;
+    memcpy(buf, S.flash + off, len);
+}
+
+static void flash_persist(void) {
+    if (!S.settings_file) return;
+    FILE *f = fopen(S.settings_file, "wb");
+    if (f) {
+        fwrite(S.flash, 1, sizeof(S.flash), f);
+        fclose(f);
+    }
+}
+
+static bool flash_erase(void *ctx, uint32_t off) {
+    (void)ctx;
+    memset(S.flash + off, 0xFF, PSHB_SETTINGS_SECTOR);
+    flash_persist();
+    return true;
+}
+
+static bool flash_program(void *ctx, uint32_t off, const void *data, size_t len) {
+    (void)ctx;
+    // NOR flash semantics: programming can only clear bits.
+    const uint8_t *d = data;
+    for (size_t i = 0; i < len; i++) S.flash[off + i] &= d[i];
+    flash_persist();
+    return true;
+}
+
+static const pshb_flash_t k_flash = {NULL, flash_read, flash_erase, flash_program};
+
+static void apply_settings(const pshb_settings_t *s) {
+    if (S.have_key_override) {
+        bridge_set_key(&S.bridge, S.key_override);
+    } else {
+        bridge_set_key(&S.bridge, s->psk_set ? s->psk : NULL);
+    }
+    S.bridge.allowed_ip = S.allowed_override
+                              ? S.allowed_override
+                              : ((uint32_t)s->allowed_ip[0] << 24) | ((uint32_t)s->allowed_ip[1] << 16) |
+                                    ((uint32_t)s->allowed_ip[2] << 8) | s->allowed_ip[3];
+}
+
+// Power-on: load settings, new session, empty input state.
+static void boot(void) {
+    settings_load(&k_flash, &S.settings);
+    S.boot_us = now_us();
+    input_state_init(&S.input);
+    uint8_t kbd[PSHB_KBD_REPORT_LEN], mouse[PSHB_MOUSE_REPORT_LEN];
+    input_state_take_kbd_report(&S.input, kbd);  // host already saw the empty state
+    input_state_take_mouse_report(&S.input, mouse, false);
+    bridge_init(&S.bridge, &S.input, S.have_session ? S.session : random_u64(), random_u64(), S.boot_us);
+    S.bridge.allow_plaintext = S.plaintext;
+    S.bridge.failsafe_us = S.failsafe_ms * 1000u;
+    S.bridge.usb_status = S.usb_mounted ? PSHB_STATUS_USB_MOUNTED : 0;
+    apply_settings(&S.settings);
+}
+
+// ---------------------------------------------------------------- web backend
+
+static void be_status(void *ctx, web_status_t *out) {
+    (void)ctx;
+    out->fw_version = S.bridge.fw_version;
+    out->uptime_ms = (uint32_t)((now_us() - S.boot_us) / 1000);
+    static const uint8_t mac[6] = {0x02, 0x00, 0x00, 0x51, 0x4D, 0x00};
+    memcpy(out->mac, mac, 6);
+    static const uint8_t ip[4] = {127, 0, 0, 1}, mask[4] = {255, 0, 0, 0};
+    memcpy(out->ip, S.settings.ip_mode == PSHB_IP_STATIC ? S.settings.ip : ip, 4);
+    memcpy(out->mask, S.settings.ip_mode == PSHB_IP_STATIC ? S.settings.mask : mask, 4);
+    memcpy(out->gw, S.settings.gw, 4);
+    memcpy(out->dns, S.settings.dns, 4);
+    out->link_up = true;
+    out->net_state = "Simulator";
+    out->usb_status = S.bridge.usb_status;
+    out->failsafe = S.bridge.failsafe_active;
+    out->rx_ok = S.bridge.stats.rx_ok;
+    out->rx_auth_fail = S.bridge.stats.rx_auth_fail;
+    out->rx_replay = S.bridge.stats.rx_replay;
+    out->rx_filtered = S.bridge.stats.rx_filtered;
+    out->rx_malformed = S.bridge.stats.rx_malformed;
+    out->partition = "-";
+}
+
+static bool be_save(void *ctx, const pshb_settings_t *s) {
+    (void)ctx;
+    pshb_settings_t copy = *s;
+    return settings_save(&k_flash, &copy) && (S.settings = copy, true);
+}
+
+static void be_apply(void *ctx, const pshb_settings_t *s) {
+    (void)ctx;
+    apply_settings(s);
+}
+
+static void be_reboot(void *ctx) {
+    (void)ctx;
+    S.reboot_requested = true;
+}
+
+static void be_factory_reset(void *ctx) {
+    (void)ctx;
+    settings_erase(&k_flash);
+    S.reboot_requested = true;
+}
+
+static void be_random(void *ctx, uint8_t *buf, size_t n) {
+    (void)ctx;
+    random_bytes(buf, n);
+}
+
+static uint64_t be_now(void *ctx) {
+    (void)ctx;
+    return now_us();
+}
+
+static const web_backend_t k_backend = {
+    NULL, be_status, be_save, be_apply, be_reboot, be_factory_reset, be_random, be_now,
+};
+
+// ---------------------------------------------------------------- main loop
+
+typedef struct {
+    int fd;
+    web_conn_t conn;
+} http_slot_t;
 
 static void usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [options]\n"
             "  --bind ADDR       listen address (default 127.0.0.1)\n"
             "  --port N          UDP port (default %d, 0 = any free port)\n"
+            "  --http-port N     web interface port (default: off, 0 = any free port)\n"
+            "  --settings FILE   keep the simulated settings flash in FILE\n"
             "  --plaintext       accept unencrypted debug packets (version 0)\n"
-            "  --psk HEX         pre-shared key (64 hex digits)\n"
+            "  --psk HEX         pre-shared key (overrides the settings)\n"
             "  --psk-file PATH   read the pre-shared key from a file\n"
             "  --failsafe-ms N   failsafe timeout (default 250)\n"
-            "  --session HEX     fixed session id (default: random)\n"
+            "  --session HEX     fixed session id (default: random per boot)\n"
             "  --allow IP        only accept packets from this sender\n"
             "  --usb-unmounted   simulate a board that is not plugged in\n",
             argv0, PSHB_UDP_PORT_DEFAULT);
 }
 
-// One simulated USB frame: at most one report per endpoint, like the real
-// 1 ms interrupt endpoints.
-static void usb_frame(input_state_t *in) {
-    if (input_state_kbd_pending(in)) {
+static void usb_frame(void) {
+    if (input_state_kbd_pending(&S.input)) {
         uint8_t r[PSHB_KBD_REPORT_LEN];
-        input_state_take_kbd_report(in, r);
-        printf("KBD mods=%02x keys=%02x %02x %02x %02x %02x %02x\n", r[0], r[2], r[3], r[4], r[5],
-               r[6], r[7]);
+        input_state_take_kbd_report(&S.input, r);
+        printf("KBD mods=%02x keys=%02x %02x %02x %02x %02x %02x\n", r[0], r[2], r[3], r[4], r[5], r[6], r[7]);
     }
-    if (input_state_mouse_pending(in)) {
+    if (input_state_mouse_pending(&S.input)) {
         uint8_t r[PSHB_MOUSE_REPORT_LEN];
-        input_state_take_mouse_report(in, r, false);
-        printf("MOUSE buttons=%02x dx=%d dy=%d wheel=%d pan=%d\n", r[0],
-               (int16_t)pshb_rd16(&r[1]), (int16_t)pshb_rd16(&r[3]), (int8_t)r[5], (int8_t)r[6]);
+        input_state_take_mouse_report(&S.input, r, false);
+        printf("MOUSE buttons=%02x dx=%d dy=%d wheel=%d pan=%d\n", r[0], (int16_t)pshb_rd16(&r[1]),
+               (int16_t)pshb_rd16(&r[3]), (int8_t)r[5], (int8_t)r[6]);
+    }
+}
+
+static int bind_socket(int type, const char *addr_s, int port, int *bound_port) {
+    int fd = socket(AF_INET, type, 0);
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
+    if (fd < 0 || inet_pton(AF_INET, addr_s, &addr.sin_addr) != 1 ||
+        bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        perror("sim: bind");
+        exit(1);
+    }
+    socklen_t alen = sizeof(addr);
+    getsockname(fd, (struct sockaddr *)&addr, &alen);
+    *bound_port = ntohs(addr.sin_port);
+    fcntl(fd, F_SETFL, O_NONBLOCK);
+    return fd;
+}
+
+static void http_service(web_app_t *app, http_slot_t *slots, int listen_fd, uint64_t t) {
+    for (int i = 0; i < MAX_CONNS; i++) {
+        if (slots[i].fd < 0) {
+            int fd = accept(listen_fd, NULL, NULL);
+            if (fd < 0) break;
+            fcntl(fd, F_SETFL, O_NONBLOCK);
+            slots[i].fd = fd;
+            web_conn_reset(&slots[i].conn, t);
+        }
+    }
+    for (int i = 0; i < MAX_CONNS; i++) {
+        http_slot_t *s = &slots[i];
+        if (s->fd < 0) continue;
+        uint8_t buf[1024];
+        ssize_t n = recv(s->fd, buf, sizeof(buf), 0);
+        if (n > 0) {
+            web_conn_input(app, &s->conn, buf, (size_t)n);
+        } else if (n == 0 && !s->conn.responding) {
+            close(s->fd);
+            s->fd = -1;
+            continue;
+        }
+        const uint8_t *out;
+        size_t len;
+        while ((len = web_conn_output(&s->conn, &out)) > 0) {
+            if (len > 1024) len = 1024;  // same chunking as the board
+            ssize_t w = send(s->fd, out, len, MSG_NOSIGNAL);
+            if (w <= 0) break;
+            web_conn_sent(app, &s->conn, (size_t)w);
+        }
+        if (web_conn_done(&s->conn) || t - s->conn.started_us > CONN_TIMEOUT_US) {
+            close(s->fd);
+            s->fd = -1;
+        }
     }
 }
 
 int main(int argc, char **argv) {
     const char *bind_addr = "127.0.0.1";
     int port = PSHB_UDP_PORT_DEFAULT;
-    bool plaintext = false, usb_mounted = true;
-    bool have_session = false;
-    uint64_t session = 0;
-    uint32_t allowed_ip = 0;
-    uint8_t key[32];
-    bool have_key = false;
-    unsigned failsafe_ms = PSHB_FAILSAFE_US_DEFAULT / 1000;
+    int http_port = -1;
+    S.usb_mounted = true;
+    S.failsafe_ms = PSHB_FAILSAFE_US_DEFAULT / 1000;
 
     static const struct option opts[] = {
         {"bind", required_argument, 0, 'b'},
         {"port", required_argument, 0, 'p'},
+        {"http-port", required_argument, 0, 'w'},
+        {"settings", required_argument, 0, 'S'},
         {"plaintext", no_argument, 0, 'P'},
         {"psk", required_argument, 0, 'k'},
         {"psk-file", required_argument, 0, 'K'},
@@ -112,13 +326,15 @@ int main(int argc, char **argv) {
         switch (c) {
         case 'b': bind_addr = optarg; break;
         case 'p': port = atoi(optarg); break;
-        case 'P': plaintext = true; break;
+        case 'w': http_port = atoi(optarg); break;
+        case 'S': S.settings_file = optarg; break;
+        case 'P': S.plaintext = true; break;
         case 'k':
-            if (!hex_decode(optarg, key, sizeof(key))) {
+            if (!hex_decode(optarg, S.key_override, 32)) {
                 fprintf(stderr, "sim: --psk needs 64 hex digits\n");
                 return 2;
             }
-            have_key = true;
+            S.have_key_override = true;
             break;
         case 'K': {
             char buf[80] = {0};
@@ -129,17 +345,17 @@ int main(int argc, char **argv) {
             }
             fclose(f);
             buf[strcspn(buf, "\r\n")] = '\0';
-            if (!hex_decode(buf, key, sizeof(key))) {
+            if (!hex_decode(buf, S.key_override, 32)) {
                 fprintf(stderr, "sim: %s does not contain 64 hex digits\n", optarg);
                 return 2;
             }
-            have_key = true;
+            S.have_key_override = true;
             break;
         }
-        case 'f': failsafe_ms = (unsigned)atoi(optarg); break;
+        case 'f': S.failsafe_ms = (unsigned)atoi(optarg); break;
         case 's':
-            session = strtoull(optarg, NULL, 16);
-            have_session = true;
+            S.session = strtoull(optarg, NULL, 16);
+            S.have_session = true;
             break;
         case 'a': {
             struct in_addr a;
@@ -147,10 +363,10 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "sim: bad IP %s\n", optarg);
                 return 2;
             }
-            allowed_ip = ntohl(a.s_addr);
+            S.allowed_override = ntohl(a.s_addr);
             break;
         }
-        case 'u': usb_mounted = false; break;
+        case 'u': S.usb_mounted = false; break;
         default: usage(argv[0]); return c == 'h' ? 0 : 2;
         }
     }
@@ -158,70 +374,82 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
+    signal(SIGPIPE, SIG_IGN);
 
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
-    if (fd < 0 || inet_pton(AF_INET, bind_addr, &addr.sin_addr) != 1 ||
-        bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        perror("sim: bind");
-        return 1;
+    memset(S.flash, 0xFF, sizeof(S.flash));
+    if (S.settings_file) {
+        FILE *f = fopen(S.settings_file, "rb");
+        if (f) {
+            if (fread(S.flash, 1, sizeof(S.flash), f) != sizeof(S.flash)) memset(S.flash, 0xFF, sizeof(S.flash));
+            fclose(f);
+        }
     }
-    socklen_t alen = sizeof(addr);
-    getsockname(fd, (struct sockaddr *)&addr, &alen);
+    boot();
 
-    input_state_t input;
-    bridge_t bridge;
-    input_state_init(&input);
-    bridge_init(&bridge, &input, have_session ? session : random_u64(), random_u64(), now_us());
-    bridge.allow_plaintext = plaintext;
-    bridge.failsafe_us = failsafe_ms * 1000u;
-    if (have_key) bridge_set_key(&bridge, key);
-    bridge.allowed_ip = allowed_ip;
-    bridge.usb_status = usb_mounted ? PSHB_STATUS_USB_MOUNTED : 0;
-
-    // The host has just "configured" the device: drop the initial empty reports.
-    {
-        uint8_t kbd[PSHB_KBD_REPORT_LEN], mouse[PSHB_MOUSE_REPORT_LEN];
-        input_state_take_kbd_report(&input, kbd);
-        input_state_take_mouse_report(&input, mouse, false);
+    int udp_port = 0, bound_http = 0;
+    int udp = bind_socket(SOCK_DGRAM, bind_addr, port, &udp_port);
+    int listen_fd = -1;
+    if (http_port >= 0) {
+        listen_fd = bind_socket(SOCK_STREAM, bind_addr, http_port, &bound_http);
+        listen(listen_fd, 4);
     }
 
-    printf("READY %d\n", ntohs(addr.sin_port));
+    web_app_t app;
+    web_app_init(&app, &k_backend, &S.settings);
+    http_slot_t slots[MAX_CONNS];
+    for (int i = 0; i < MAX_CONNS; i++) slots[i].fd = -1;
+
+    printf("READY %d HTTP %d\n", udp_port, bound_http);
 
     uint64_t next_frame = now_us() + 1000;
     while (!s_stop) {
         uint64_t t = now_us();
         int timeout_ms = next_frame > t ? (int)((next_frame - t + 999) / 1000) : 0;
-        struct pollfd pfd = {.fd = fd, .events = POLLIN};
-        int pr = poll(&pfd, 1, timeout_ms);
-        if (pr < 0 && errno != EINTR) {
+        struct pollfd pfd[2 + MAX_CONNS];
+        int nfds = 0;
+        pfd[nfds++] = (struct pollfd){.fd = udp, .events = POLLIN};
+        if (listen_fd >= 0) pfd[nfds++] = (struct pollfd){.fd = listen_fd, .events = POLLIN};
+        for (int i = 0; i < MAX_CONNS; i++) {
+            if (slots[i].fd >= 0) pfd[nfds++] = (struct pollfd){.fd = slots[i].fd, .events = POLLIN | POLLOUT};
+        }
+        if (poll(pfd, (nfds_t)nfds, timeout_ms) < 0 && errno != EINTR) {
             perror("sim: poll");
             break;
         }
-        if (pr > 0 && (pfd.revents & POLLIN)) {
+
+        for (;;) {
             uint8_t pkt[2048], reply[PSHB_MAX_PACKET_LEN];
             struct sockaddr_in src;
             socklen_t slen = sizeof(src);
-            ssize_t n = recvfrom(fd, pkt, sizeof(pkt), 0, (struct sockaddr *)&src, &slen);
-            if (n >= 0) {
-                size_t rlen = bridge_handle_packet(&bridge, pkt, (size_t)n, ntohl(src.sin_addr.s_addr),
-                                                   now_us(), reply, sizeof(reply));
-                if (rlen) sendto(fd, reply, rlen, 0, (struct sockaddr *)&src, slen);
-            }
+            ssize_t n = recvfrom(udp, pkt, sizeof(pkt), 0, (struct sockaddr *)&src, &slen);
+            if (n < 0) break;
+            size_t rlen = bridge_handle_packet(&S.bridge, pkt, (size_t)n, ntohl(src.sin_addr.s_addr), now_us(),
+                                               reply, sizeof(reply));
+            if (rlen) sendto(udp, reply, rlen, 0, (struct sockaddr *)&src, slen);
         }
+        if (listen_fd >= 0) http_service(&app, slots, listen_fd, now_us());
+
+        if (S.reboot_requested) {
+            S.reboot_requested = false;
+            printf("REBOOT\n");
+            boot();
+            web_app_init(&app, &k_backend, &S.settings);
+        }
+
         t = now_us();
-        bool was_failsafe = bridge.failsafe_active;
-        bridge_tick(&bridge, t);
-        if (bridge.failsafe_active && !was_failsafe) printf("FAILSAFE\n");
+        bool was_failsafe = S.bridge.failsafe_active;
+        bridge_tick(&S.bridge, t);
+        if (S.bridge.failsafe_active && !was_failsafe) printf("FAILSAFE\n");
         if (t >= next_frame) {
             next_frame = t + 1000;
-            if (usb_mounted) {
-                usb_frame(&input);
+            if (S.usb_mounted) {
+                usb_frame();
             } else {
-                input_state_drop_motion(&input);
+                input_state_drop_motion(&S.input);
             }
         }
     }
-    close(fd);
+    close(udp);
+    if (listen_fd >= 0) close(listen_fd);
     return 0;
 }

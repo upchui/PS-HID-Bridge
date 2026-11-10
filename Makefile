@@ -46,7 +46,7 @@ help:
 	@echo "  make desktop       AppImage (Qt build!)  -> out/PS5-HID-Bridge-x86_64.AppImage"
 	@echo "  make desktop-cli   command line tool     -> out/pshb-cli"
 	@echo "  make test          unit tests, protocol vectors, simulator"
-	@echo "  make sim           board simulator on UDP $(SIM_PORT) (Ctrl+C to stop)"
+	@echo "  make sim           board simulator: UDP $(SIM_PORT), web http://localhost:$(SIM_HTTP_PORT)"
 	@echo "  make udp-test IP=a.b.c.d ARGS='--plain ping'   test traffic to a board"
 	@echo "  make all           everything above"
 	@echo "  make submodules    fetch firmware libraries (non-recursive)"
@@ -128,11 +128,15 @@ test-appimage: image-desktop dirs
 
 # ---------------------------------------------------------------- manual testing
 SIM_PORT ?= 45045
-SIM_ARGS ?= --plaintext
+SIM_HTTP_PORT ?= 8080
+SIM_ARGS ?=
 
+# Simulated board: input on UDP $(SIM_PORT), web interface on http://localhost:$(SIM_HTTP_PORT)
+# (settings persist in .cache/sim/flash.bin).
 sim: test-firmware
+	@mkdir -p .cache/sim
 	$(DOCKER_RUN) -i --network host $(FW_IMAGE) $(HOST_BUILD)/pshb-sim --bind 0.0.0.0 \
-		--port $(SIM_PORT) $(SIM_ARGS)
+		--port $(SIM_PORT) --http-port $(SIM_HTTP_PORT) --settings .cache/sim/flash.bin $(SIM_ARGS)
 
 udp-test: image-firmware
 	@test -n "$(IP)" || (echo "usage: make udp-test IP=a.b.c.d ARGS='--plain ping'"; exit 2)

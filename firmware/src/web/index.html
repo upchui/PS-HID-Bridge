@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PS5 HID Bridge</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <h1>PS5 HID Bridge</h1>
+  <span id="pill" class="pill" hidden></span>
+  <button id="logout" class="link" hidden>Abmelden</button>
+</header>
+
+<main>
+  <p id="msg" class="msg" role="status" hidden></p>
+
+  <!-- Anmeldung -->
+  <section id="v-login" class="card narrow" hidden>
+    <h2>Anmelden</h2>
+    <form id="f-login">
+      <label>Passwort <input type="password" name="password" autocomplete="current-password" required autofocus></label>
+      <button type="submit">Anmelden</button>
+    </form>
+    <p class="hint">Ab Werk lautet das Passwort <code>ps5-hid-bridge</code>. Es muss beim ersten Anmelden geändert werden.</p>
+  </section>
+
+  <!-- Erzwungener Passwortwechsel -->
+  <section id="v-first" class="card narrow" hidden>
+    <h2>Eigenes Passwort festlegen</h2>
+    <p>Das Board nutzt noch das Werkspasswort. Bitte jetzt ein eigenes festlegen (8 bis 64 Zeichen).</p>
+    <form id="f-first">
+      <label>Werkspasswort <input type="password" name="old" autocomplete="current-password" required></label>
+      <label>Neues Passwort <input type="password" name="new" autocomplete="new-password" minlength="8" maxlength="64" required></label>
+      <label>Wiederholen <input type="password" name="new2" autocomplete="new-password" minlength="8" maxlength="64" required></label>
+      <button type="submit">Speichern</button>
+    </form>
+  </section>
+
+  <!-- Hauptansicht -->
+  <div id="v-main" hidden>
+    <nav class="tabs" role="tablist">
+      <button class="tab" data-tab="status" aria-selected="true">Status</button>
+      <button class="tab" data-tab="network">Netzwerk</button>
+      <button class="tab" data-tab="security">Sicherheit</button>
+      <button class="tab" data-tab="system">System</button>
+    </nav>
+
+    <section id="t-status" class="tabpane">
+      <div class="grid">
+        <div class="card"><h3>Eingaben</h3><p class="big" id="s-input">–</p><p class="sub" id="s-usb">–</p></div>
+        <div class="card"><h3>Netzwerk</h3><p class="big" id="s-ip">–</p><p class="sub" id="s-net">–</p></div>
+        <div class="card"><h3>Firmware</h3><p class="big" id="s-fw">–</p><p class="sub" id="s-uptime">–</p></div>
+      </div>
+      <div class="card">
+        <h3>Pakete</h3>
+        <table class="kv">
+          <tr><th>Gültig</th><td id="s-ok">–</td></tr>
+          <tr><th>Signatur falsch</th><td id="s-auth">–</td></tr>
+          <tr><th>Wiederholt / falsche Session</th><td id="s-replay">–</td></tr>
+          <tr><th>Fremder Absender</th><td id="s-filtered">–</td></tr>
+          <tr><th>Fehlerhaft</th><td id="s-malformed">–</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h3>Details</h3>
+        <table class="kv">
+          <tr><th>MAC-Adresse</th><td id="s-mac">–</td></tr>
+          <tr><th>Gateway / DNS</th><td id="s-gw">–</td></tr>
+          <tr><th>UDP-Port</th><td id="s-port">–</td></tr>
+          <tr><th>Schlüssel</th><td id="s-psk">–</td></tr>
+          <tr><th>Absenderfilter</th><td id="s-allowed">–</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section id="t-network" class="tabpane" hidden>
+      <div class="card">
+        <h2>Netzwerk</h2>
+        <form id="f-network">
+          <fieldset class="radios">
+            <label><input type="radio" name="mode" value="dhcp"> Automatisch (DHCP)</label>
+            <label><input type="radio" name="mode" value="static"> Feste Adresse</label>
+          </fieldset>
+          <div id="static-fields">
+            <label>IP-Adresse <input name="ip" inputmode="decimal" placeholder="192.168.1.50"></label>
+            <label>Subnetzmaske <input name="mask" inputmode="decimal" placeholder="255.255.255.0"></label>
+            <label>Gateway <input name="gateway" inputmode="decimal" placeholder="192.168.1.1"></label>
+            <label>DNS-Server <input name="dns" inputmode="decimal" placeholder="192.168.1.1"></label>
+          </div>
+          <label>UDP-Port für Eingaben <input name="udp_port" type="number" min="1" max="65535" required></label>
+          <p class="hint">Nach dem Speichern startet das Board neu. Bei fester Adresse ist es danach unter der neuen IP erreichbar.</p>
+          <button type="submit">Speichern und neu starten</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="t-security" class="tabpane" hidden>
+      <div class="card">
+        <h2>Pre-Shared Key</h2>
+        <p>Mit diesem Schlüssel verschlüsselt die App alle Eingaben. App und Board brauchen denselben Schlüssel.</p>
+        <p>Status: <strong id="psk-state">–</strong></p>
+        <button id="b-psk-gen">Neuen Schlüssel erzeugen</button>
+        <div id="psk-show" class="keybox" hidden>
+          <p><strong>Neuer Schlüssel</strong> – wird nur jetzt angezeigt. In der App unter „Board“ einfügen:</p>
+          <code id="psk-value"></code>
+          <button id="b-psk-copy" class="secondary">Kopieren</button>
+        </div>
+        <details>
+          <summary>Vorhandenen Schlüssel eintragen</summary>
+          <form id="f-psk">
+            <label>Schlüssel (64 Hex-Zeichen) <input name="psk" pattern="[0-9a-fA-F]{64}" autocomplete="off" required></label>
+            <button type="submit">Übernehmen</button>
+          </form>
+        </details>
+      </div>
+      <div class="card">
+        <h2>Absenderfilter</h2>
+        <p>Nur Pakete von dieser IP-Adresse annehmen. Leer lassen, um jede Adresse zuzulassen.</p>
+        <form id="f-allowed">
+          <label>Erlaubte Absender-IP <input name="ip" inputmode="decimal" placeholder="z. B. 192.168.1.20"></label>
+          <button type="submit">Speichern</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Passwort ändern</h2>
+        <form id="f-password">
+          <label>Bisheriges Passwort <input type="password" name="old" autocomplete="current-password" required></label>
+          <label>Neues Passwort <input type="password" name="new" autocomplete="new-password" minlength="8" maxlength="64" required></label>
+          <label>Wiederholen <input type="password" name="new2" autocomplete="new-password" minlength="8" maxlength="64" required></label>
+          <button type="submit">Passwort ändern</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="t-system" class="tabpane" hidden>
+      <div class="card">
+        <h2>Neustart</h2>
+        <p>Das Board startet neu. Die Eingaben sind dabei für wenige Sekunden unterbrochen.</p>
+        <button id="b-reboot" class="secondary">Neu starten</button>
+      </div>
+      <div class="card danger">
+        <h2>Werkseinstellungen</h2>
+        <p>Löscht Passwort, Schlüssel und Netzwerkeinstellungen. Danach gilt wieder das Werkspasswort und die App braucht einen neuen Schlüssel. Alternativ: BOOTSEL-Taste am Board 5 Sekunden halten.</p>
+        <button id="b-reset" class="danger">Auf Werkseinstellungen zurücksetzen</button>
+        <div id="reset-confirm" class="confirm" hidden>
+          <p>Wirklich alles zurücksetzen?</p>
+          <button id="b-reset-yes" class="danger">Ja, zurücksetzen</button>
+          <button id="b-reset-no" class="secondary">Abbrechen</button>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+</body>
+</html>

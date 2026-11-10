@@ -8,6 +8,7 @@ Usage: test_sim.py --sim PATH/TO/pshb-sim
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import queue
 import re
@@ -50,10 +51,11 @@ class Sim:
                                      stdout=subprocess.PIPE, text=True)
         self.lines: queue.Queue[str] = queue.Queue()
         ready = self.proc.stdout.readline()
-        m = re.match(r"READY (\d+)", ready)
+        m = re.match(r"READY (\d+) HTTP (\d+)", ready)
         if not m:
             raise RuntimeError(f"simulator did not start: {ready!r}")
         self.port = int(m.group(1))
+        self.http_port = int(m.group(2))
         threading.Thread(target=self._reader, daemon=True).start()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(0.5)
@@ -368,6 +370,163 @@ class FilterTests(unittest.TestCase):
             self.assertEqual(sim.reports("KBD"), [])
         finally:
             sim.close()
+
+
+class Web:
+    """Minimal HTTP client for the board API (manual cookie handling)."""
+
+    def __init__(self, port: int):
+        self.base = f"http://127.0.0.1:{port}"
+        self.cookie = ""
+
+    def req(self, method: str, path: str, body=None, csrf: bool = True):
+        import urllib.error
+        import urllib.request
+        data = None if body is None else json.dumps(body).encode()
+        r = urllib.request.Request(self.base + path, data=data, method=method)
+        if data is not None:
+            r.add_header("Content-Type", "application/json")
+        if csrf and method == "POST":
+            r.add_header("X-PSHB", "1")
+        if self.cookie:
+            r.add_header("Cookie", self.cookie)
+        try:
+            with urllib.request.urlopen(r, timeout=5) as resp:
+                status, headers, raw = resp.status, resp.headers, resp.read()
+        except urllib.error.HTTPError as e:
+            status, headers, raw = e.code, e.headers, e.read()
+        for c in headers.get_all("Set-Cookie") or []:
+            name_value = c.split(";", 1)[0]
+            self.cookie = "" if name_value.endswith("=") else name_value
+        if headers.get("Content-Encoding") == "gzip":
+            import gzip
+            raw = gzip.decompress(raw)
+        try:
+            payload = json.loads(raw) if raw else {}
+        except ValueError:
+            payload = raw
+        return status, payload, headers
+
+    def login(self, password: str):
+        return self.req("POST", "/api/login", {"password": password})
+
+
+NEW_PW = "SicheresPasswort1"
+
+
+class WebTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.settings = os.path.join(self.tmp, "flash.bin")
+        self.sim = Sim("--http-port", "0", "--settings", self.settings)
+        self.web = Web(self.sim.http_port)
+
+    def tearDown(self):
+        self.sim.close()
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def setup_password(self):
+        self.assertEqual(self.web.login("ps5-hid-bridge")[0], 200)
+        self.assertEqual(self.web.req("POST", "/api/password", {"old": "ps5-hid-bridge", "new": NEW_PW})[0], 200)
+
+    def test_static_files_and_headers(self):
+        status, body, headers = self.web.req("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"PS5 HID Bridge", body)
+        self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
+        self.assertEqual(headers["X-Frame-Options"], "DENY")
+        self.assertEqual(self.web.req("GET", "/app.js")[0], 200)
+        self.assertEqual(self.web.req("GET", "/nope")[0], 404)
+
+    def test_login_and_forced_password_change(self):
+        st = self.web.req("GET", "/api/state")[1]
+        self.assertEqual(st, {"logged_in": False, "must_change_password": True})
+        self.assertEqual(self.web.req("GET", "/api/status")[0], 401)
+        self.assertEqual(self.web.req("POST", "/api/login", {"password": "ps5-hid-bridge"}, csrf=False)[0], 403)
+        self.assertEqual(self.web.login("falsch")[0], 401)
+        status, r, _ = self.web.login("ps5-hid-bridge")
+        self.assertEqual(status, 200)
+        self.assertTrue(r["must_change_password"])
+        self.assertTrue(self.web.cookie.startswith("pshb_session="))
+        # Nothing but the password change works yet.
+        self.assertEqual(self.web.req("GET", "/api/status")[0], 403)
+        self.assertEqual(self.web.req("POST", "/api/password", {"old": "ps5-hid-bridge", "new": "kurz"})[0], 400)
+        self.assertEqual(self.web.req("POST", "/api/password", {"old": "ps5-hid-bridge", "new": "ps5-hid-bridge"})[0], 400)
+        self.assertEqual(self.web.req("POST", "/api/password", {"old": "x", "new": NEW_PW})[0], 403)
+        self.assertEqual(self.web.req("POST", "/api/password", {"old": "ps5-hid-bridge", "new": NEW_PW})[0], 200)
+        status, st, _ = self.web.req("GET", "/api/status")
+        self.assertEqual(status, 200)
+        self.assertFalse(st["psk_set"])
+        self.assertEqual(st["udp_port"], 45045)
+        # Logout, then only the new password works.
+        self.assertEqual(self.web.req("POST", "/api/logout", {})[0], 200)
+        self.assertEqual(self.web.req("GET", "/api/status")[0], 401)
+        self.assertEqual(self.web.login("ps5-hid-bridge")[0], 401)
+        self.assertEqual(self.web.login(NEW_PW)[0], 200)
+
+    def test_login_lockout(self):
+        for _ in range(3):
+            self.assertEqual(self.web.login("falsch")[0], 401)
+        status, r, _ = self.web.login("ps5-hid-bridge")
+        self.assertEqual(status, 429)
+        self.assertIn("warten", r["error"])
+
+    def test_generated_psk_is_used_by_the_input_path(self):
+        self.setup_password()
+        status, r, _ = self.web.req("POST", "/api/psk/generate", {})
+        self.assertEqual(status, 200)
+        key = bytes.fromhex(r["psk"])
+        self.sim.key = key
+        pong = self.sim.ping()
+        self.assertIsNotNone(pong)
+        self.sim.key = bytes(32)
+        self.assertIsNone(self.sim.ping())
+        self.assertTrue(self.web.req("GET", "/api/status")[1]["psk_set"])
+
+    def test_allowed_sender(self):
+        self.setup_password()
+        self.web.req("POST", "/api/psk", {"psk": KEY.hex()})
+        self.sim.key = KEY
+        self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "10.1.2.3"})[0], 200)
+        self.assertIsNone(self.sim.ping())
+        self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "127.0.0.1"})[0], 200)
+        self.assertIsNotNone(self.sim.ping())
+        self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "999.1.1.1"})[0], 400)
+
+    def test_network_settings_validation_and_reboot(self):
+        self.setup_password()
+        bad = {"mode": "static", "ip": "192.168.1.50", "mask": "255.0.255.0", "gateway": "", "dns": "",
+               "udp_port": 45045}
+        self.assertEqual(self.web.req("POST", "/api/network", bad)[0], 400)
+        self.assertEqual(self.web.req("POST", "/api/network", {**bad, "mask": "255.255.255.0", "udp_port": 0})[0], 400)
+        good = {**bad, "mask": "255.255.255.0", "gateway": "192.168.1.1", "udp_port": 45046}
+        status, r, _ = self.web.req("POST", "/api/network", good)
+        self.assertEqual((status, r), (200, {"ok": True, "reboot": True}))
+        self.assertTrue(self.sim.wait_line("REBOOT", timeout=2))
+        # Sessions do not survive a reboot.
+        self.assertEqual(self.web.req("GET", "/api/status")[0], 401)
+        self.assertEqual(self.web.login(NEW_PW)[0], 200)
+        st = self.web.req("GET", "/api/status")[1]
+        self.assertEqual((st["ip_mode"], st["static_ip"], st["udp_port"]), ("static", "192.168.1.50", 45046))
+
+    def test_factory_reset(self):
+        self.setup_password()
+        self.web.req("POST", "/api/psk/generate", {})
+        self.assertEqual(self.web.req("POST", "/api/factory-reset", {})[0], 200)
+        self.assertTrue(self.sim.wait_line("REBOOT", timeout=2))
+        status, r, _ = self.web.login("ps5-hid-bridge")
+        self.assertEqual(status, 200)
+        self.assertTrue(r["must_change_password"])
+
+    def test_settings_survive_restart(self):
+        self.setup_password()
+        self.sim.close()
+        self.sim = Sim("--http-port", "0", "--settings", self.settings)
+        self.web = Web(self.sim.http_port)
+        self.assertEqual(self.web.login("ps5-hid-bridge")[0], 401)
+        self.assertEqual(self.web.login(NEW_PW)[0], 200)
 
 
 def main() -> int:

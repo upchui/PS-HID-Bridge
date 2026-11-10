@@ -23,10 +23,13 @@ include(${CMAKE_CURRENT_LIST_DIR}/cmake/iolibrary.cmake)
 
 set(PSHB_PICO_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/main.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/pico/bootsel.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/core1.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/pico/flash_store.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/hid_out.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/usb_descriptors.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/w5500_port.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/pico/web_server.c
 )
 
 # pshb_add_firmware(<name> [DEFINES d1 d2 ...]) -> <name>.uf2
@@ -46,7 +49,9 @@ function(pshb_add_firmware name)
         pico_rand
         pico_sync
         pico_unique_id
+        hardware_flash
         hardware_spi
+        hardware_watchdog
         tinyusb_device
         iolibrary
     )
@@ -65,6 +70,17 @@ if(PSHB_DEV_PSK)
 endif()
 
 pshb_add_firmware(ps5-hid-bridge)
+
+# Partition table: A/B firmware slots + settings (see partitions/pt.json).
+# Flash it once before the first firmware image (README, "Erstinstallation").
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/ps5-hid-bridge-pt.uf2
+    COMMAND picotool partition create ${CMAKE_CURRENT_LIST_DIR}/partitions/pt.json
+            ${CMAKE_BINARY_DIR}/ps5-hid-bridge-pt.uf2
+    DEPENDS ${CMAKE_CURRENT_LIST_DIR}/partitions/pt.json
+    COMMENT "Creating partition table UF2"
+)
+add_custom_target(partition_table ALL DEPENDS ${CMAKE_BINARY_DIR}/ps5-hid-bridge-pt.uf2)
 pshb_add_firmware(ps5-hid-bridge-plain DEFINES PSHB_PLAINTEXT_DEBUG=1)
 pshb_add_firmware(ps5-hid-bridge-hidtest DEFINES PSHB_TEST_PATTERN=1)
 pshb_add_firmware(ps5-hid-bridge-hidtest-mouse8 DEFINES PSHB_TEST_PATTERN=1 PSHB_MOUSE_8BIT=1)

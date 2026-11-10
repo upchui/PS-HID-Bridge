@@ -20,7 +20,7 @@ Das Paketformat steht in [protocol/SPEC.md](protocol/SPEC.md). Kommt 250 ms lang
 | Firmware: Netzwerk, DHCP, UDP | ✅ (Simulator; Hardware-Test steht aus) |
 | Protokoll mit Verschlüsselung | ✅ (C, Rust, Python gegen gemeinsame Testvektoren) |
 | Kommandozeilen-Tool | ✅ |
-| Weboberfläche des Boards | – |
+| Weboberfläche des Boards | ✅ (im Simulator getestet) |
 | Desktop-App (Kirigami) | Grundgerüst |
 | Firmware-Update übers Netz | – |
 
@@ -108,6 +108,27 @@ focus on              # Fensterregel: Fenster hat den Fokus
 - Damit das Board im Ruhemodus der PS5 aktiv bleibt, in den Energiespar-Einstellungen der PS5 die USB-Stromversorgung im Ruhemodus einschalten.
 - Die PS5 muss auf **deutsches Tastaturlayout** gestellt sein. Das Board sendet Positionscodes, sonst sind z. B. Z und Y vertauscht.
 
+### Erstinstallation
+
+1. BOOTSEL gedrückt halten, Board per USB an den Rechner stecken. Es erscheint das Laufwerk `RP2350`.
+2. `out/ps5-hid-bridge-pt.uf2` darauf kopieren (Partitionstabelle: zwei Firmware-Slots für Updates übers Netz und ein Bereich für die Einstellungen). Das Board startet danach wieder im BOOTSEL-Modus.
+3. `out/ps5-hid-bridge.uf2` darauf kopieren.
+4. Netzwerkkabel anschließen, die IP im Router nachsehen (`ps5-hid-bridge-XXXXXX`) und im Browser öffnen.
+
+### Weboberfläche
+
+Unter `http://<IP-des-Boards>/`:
+
+- **Anmeldung:** Werkspasswort `ps5-hid-bridge`. Beim ersten Anmelden muss ein eigenes Passwort (8–64 Zeichen) gesetzt werden. Nach drei Fehlversuchen wächst die Wartezeit bis auf 64 Sekunden.
+- **Status:** Verbindung zur PS5, Netzwerk, Firmware, Paketzähler.
+- **Netzwerk:** DHCP oder feste Adresse, UDP-Port. Speichern startet das Board neu.
+- **Sicherheit:** Pre-Shared Key erzeugen (wird genau einmal angezeigt, dann in der App eintragen) oder einen vorhandenen eintragen, Absenderfilter, Passwort ändern.
+- **System:** Neustart, Werkseinstellungen.
+
+**Werkseinstellungen ohne Weboberfläche:** BOOTSEL-Taste im laufenden Betrieb 5 Sekunden halten. Passwort, Schlüssel und Netzwerkeinstellungen werden gelöscht, das Board startet neu.
+
+Die Weboberfläche läuft über unverschlüsseltes HTTP im lokalen Netz. Das Passwort schützt vor versehentlichen Änderungen und vor Geräten im selben Netz, nicht vor jemandem, der den Netzwerkverkehr mitschneiden kann.
+
 ### Netzwerk
 
 Das Board holt sich per DHCP eine Adresse und meldet sich als `ps5-hid-bridge-XXXXXX` (die letzten sechs Stellen der MAC-Adresse). Unter diesem Namen steht es im Router bzw. in UniFi. Eingaben empfängt es auf UDP-Port 45045.
@@ -116,7 +137,7 @@ LED: blinkt langsam = kein USB-Host, blinkt schnell = USB da, aber noch keine IP
 
 ### Ohne Board testen
 
-`make sim` startet einen Board-Simulator auf UDP-Port 45045. Er nutzt denselben Kern wie die Firmware und gibt statt USB-Reports Textzeilen aus (`KBD …`, `MOUSE …`). `make test` prüft damit den ganzen Eingabeweg automatisch.
+`make sim` startet einen Board-Simulator: Eingaben auf UDP-Port 45045, Weboberfläche unter http://localhost:8080. Er nutzt denselben Kern wie die Firmware und gibt statt USB-Reports Textzeilen aus (`KBD …`, `MOUSE …`). Die Einstellungen bleiben in `.cache/sim/flash.bin` erhalten. `make test` prüft damit den ganzen Eingabeweg und die Weboberfläche automatisch.
 
 Testverkehr an ein Board oder an den Simulator schicken:
 

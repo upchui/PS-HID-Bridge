@@ -1,0 +1,38 @@
+{
+  "$schema": "https://raw.githubusercontent.com/raspberrypi/picotool/master/json/schemas/partition-table-schema.json",
+  "version": [1, 0],
+  "unpartitioned": {
+    "families": ["absolute"],
+    "permissions": { "secure": "rw", "nonsecure": "rw", "bootloader": "rw" }
+  },
+  "partitions": [
+    {
+      "name": "Firmware A",
+      "id": 0,
+      "start": "16K",
+      "size": "1000K",
+      "families": ["rp2350-arm-s"],
+      "permissions": { "secure": "rw", "nonsecure": "rw", "bootloader": "rw" }
+    },
+    {
+      "name": "Firmware B",
+      "id": 1,
+      "start": "1016K",
+      "size": "1000K",
+      "families": ["rp2350-arm-s"],
+      "permissions": { "secure": "rw", "nonsecure": "rw", "bootloader": "rw" },
+      "link": ["a", 0]
+    },
+    {
+      "name": "Settings",
+      "id": "0x5053484253455454",
+      "start": "2016K",
+      "size": "8K",
+      "families": ["data"],
+      "permissions": { "secure": "rw", "nonsecure": "rw", "bootloader": "rw" },
+      "ignored_during_arm_boot": true,
+      "ignored_during_riscv_boot": true,
+      "no_reboot_on_uf2_download": true
+    }
+  ]
+}
