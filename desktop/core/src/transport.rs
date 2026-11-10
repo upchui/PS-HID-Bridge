@@ -6,6 +6,7 @@
 //! every second. A receiver thread verifies PONGs, learns the board's
 //! session id and measures the round trip time.
 
+use std::collections::VecDeque;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::path::PathBuf;
@@ -18,6 +19,9 @@ use std::time::{Duration, Instant};
 use crate::counter::TxCounter;
 use crate::crypto::PacketKey;
 use crate::protocol::{Direction, FLAG_RELEASE_ALL, InputPayload, KEY_LEN, PacketType, Ping, Pong};
+
+/// Upper bound for key states waiting to be sent (one per millisecond).
+const MAX_QUEUED_STATES: usize = 64;
 
 pub struct LinkConfig {
     pub board: SocketAddr,
@@ -290,7 +294,11 @@ impl TxWorker {
     }
 
     fn run(mut self, rx: Receiver<Cmd>) {
-        let mut state = KeyState::default();
+        // Key/button states are absolute, but every distinct state is sent in
+        // order (at most one packet per min_send_interval): a key that goes
+        // down and up within one interval must still reach the board.
+        let mut current = KeyState::default(); // latest requested state
+        let mut queue: VecDeque<KeyState> = VecDeque::new(); // not yet sent, oldest first
         let mut motion = Motion::default();
         let mut active = false;
         let mut release_pending = false;
@@ -304,8 +312,12 @@ impl TxWorker {
 
         loop {
             let session = self.shared.session();
+            let wants_send =
+                |queue: &VecDeque<KeyState>, motion: &Motion, board: Option<KeyState>, cur: KeyState| {
+                    !queue.is_empty() || !motion.is_zero() || board != Some(cur)
+                };
             let pending = session.is_some()
-                && (release_pending || (active && (Some(state) != board_state || !motion.is_zero())));
+                && (release_pending || (active && wants_send(&queue, &motion, board_state, current)));
 
             // Sleep until something is due or a command arrives.
             let mut due = next_ping;
@@ -322,7 +334,16 @@ impl TxWorker {
             };
             while let Some(c) = cmd.take().or_else(|| rx.try_recv().ok()) {
                 match c {
-                    Cmd::State(s) if active => state = s,
+                    Cmd::State(s) if active => {
+                        if s != current {
+                            current = s;
+                            queue.push_back(s);
+                            if queue.len() > MAX_QUEUED_STATES {
+                                // Far behind: keep the order of the newest states.
+                                queue.pop_front();
+                            }
+                        }
+                    }
                     Cmd::Motion(dx, dy, w, p) if active => {
                         motion.dx = motion.dx.saturating_add(dx.into());
                         motion.dy = motion.dy.saturating_add(dy.into());
@@ -333,14 +354,16 @@ impl TxWorker {
                     Cmd::Active(a) => {
                         if active && !a {
                             release_pending = true;
-                            state = KeyState::default();
+                            current = KeyState::default();
+                            queue.clear();
                             motion = Motion::default();
                         }
                         active = a;
                     }
                     Cmd::ReleaseAll => {
                         release_pending = true;
-                        state = KeyState::default();
+                        current = KeyState::default();
+                        queue.clear();
                         motion = Motion::default();
                     }
                     Cmd::PingInterval(d) => {
@@ -362,7 +385,7 @@ impl TxWorker {
 
             if let Some(sid) = session {
                 let changed =
-                    release_pending || (active && (Some(state) != board_state || !motion.is_zero()));
+                    release_pending || (active && wants_send(&queue, &motion, board_state, current));
                 if changed && (shutdown || now >= last_send + self.cfg.min_send_interval) {
                     let payload = if release_pending {
                         release_pending = false;
@@ -373,6 +396,7 @@ impl TxWorker {
                             ..Default::default()
                         }
                     } else {
+                        let state = queue.pop_front().unwrap_or(current);
                         let (dx, dy, wheel, pan) = motion.take();
                         board_state = Some(state);
                         InputPayload {
@@ -392,9 +416,9 @@ impl TxWorker {
                 } else if active && now >= last_send + self.cfg.heartbeat {
                     let payload = InputPayload {
                         session_id: sid,
-                        mods: state.mods,
-                        keys: state.keys,
-                        buttons: state.buttons,
+                        mods: current.mods,
+                        keys: current.keys,
+                        buttons: current.buttons,
                         ..Default::default()
                     };
                     self.send(PacketType::Heartbeat, &payload.encode());
@@ -548,6 +572,26 @@ mod tests {
         let wheel: i64 = got.iter().map(|(_, p, _)| p.wheel as i64).sum();
         assert_eq!(sum, 100_000);
         assert_eq!(wheel, 300);
+    }
+
+    #[test]
+    fn short_taps_are_not_merged() {
+        let mut board = FakeBoard::new();
+        let link = Link::start(LinkConfig::new(board.addr(), KEY)).unwrap();
+        board.run_for(Duration::from_millis(50));
+        assert!(link.wait_connected(Duration::from_millis(500)));
+        link.set_active(true);
+        let a = KeyState {
+            keys: [0x04, 0, 0, 0, 0, 0],
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            link.set_state(a);
+            link.set_state(KeyState::default());
+        }
+        let got = board.run_for(Duration::from_millis(100));
+        let presses = got.iter().filter(|(_, p, _)| p.keys[0] == 0x04).count();
+        assert_eq!(presses, 3);
     }
 
     #[test]

@@ -1,6 +1,8 @@
 // Input state between the network side and the USB side.
 //
-// Keyboard and mouse buttons are absolute state (last write wins).
+// Keyboard and mouse buttons are absolute state. Every distinct state is
+// queued and reported in order (one per USB frame), so a short tap -- down
+// and up arriving within the same frame -- is never swallowed.
 // Mouse motion and wheels are relative: deltas accumulate until the next
 // USB report; each report sends at most the representable range and the
 // remainder is carried into the following report, so no motion is lost.
@@ -16,14 +18,21 @@
 #define PSHB_MOUSE_BUTTON_MASK 0x1F
 // Accumulators saturate here so a stalled host cannot overflow them.
 #define PSHB_MOTION_ACC_LIMIT (1L << 24)
+// Pending key/button states; when full, the newest entry is overwritten.
+#define PSHB_STATE_QUEUE_LEN 8
 
 typedef struct {
+    // latest state
     uint8_t mods;
     uint8_t keys[6];
     uint8_t buttons;
+    // pending relative motion
     int32_t dx, dy, wheel, pan;
-    bool kbd_dirty;
-    bool buttons_dirty;
+    // states not yet reported, oldest first
+    uint8_t kbd_q[PSHB_STATE_QUEUE_LEN][PSHB_KBD_REPORT_LEN];
+    uint8_t kbd_n;
+    uint8_t btn_q[PSHB_STATE_QUEUE_LEN];
+    uint8_t btn_n;
 } input_state_t;
 
 void input_state_init(input_state_t *s);
@@ -46,7 +55,7 @@ bool input_state_mouse_pending(const input_state_t *s);
 
 // Pack the keyboard report (PSHB_KBD_REPORT_LEN bytes) and clear the flag.
 void input_state_take_kbd_report(input_state_t *s, uint8_t out[PSHB_KBD_REPORT_LEN]);
-// Read-only variant for GET_REPORT requests.
+// Latest keyboard state (for GET_REPORT requests); does not dequeue.
 void input_state_peek_kbd_report(const input_state_t *s, uint8_t out[PSHB_KBD_REPORT_LEN]);
 
 // Pack one mouse report, consuming as much pending motion as fits.

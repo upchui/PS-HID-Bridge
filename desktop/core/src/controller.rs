@@ -1,0 +1,133 @@
+//! Glue between the engine (decisions), the link (board) and the input
+//! readers (grab). Shared by the CLI and the GUI.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+use crate::engine::{Effect, Engine, Event, Notice};
+use crate::transport::Link;
+use crate::trigger::Action;
+
+pub struct Controller {
+    pub engine: Engine,
+    link: Arc<Link>,
+    grab: Option<Arc<AtomicBool>>,
+}
+
+impl Controller {
+    /// `grab`: the readers' grab flag (None when replaying a script).
+    pub fn new(engine: Engine, link: Arc<Link>, grab: Option<Arc<AtomicBool>>) -> Self {
+        Self { engine, link, grab }
+    }
+
+    pub fn link(&self) -> &Arc<Link> {
+        &self.link
+    }
+
+    pub fn handle(&mut self, ev: Event, now: Instant) -> Vec<Notice> {
+        let fx = self.engine.handle(ev, now);
+        self.apply(fx)
+    }
+
+    pub fn command(&mut self, action: Action) -> Vec<Notice> {
+        let fx = self.engine.command(action);
+        self.apply(fx)
+    }
+
+    fn apply(&mut self, fx: Vec<Effect>) -> Vec<Notice> {
+        let mut notices = Vec::new();
+        for e in fx {
+            match e {
+                Effect::Grab(on) => {
+                    if let Some(g) = &self.grab {
+                        g.store(on, Ordering::Release);
+                    }
+                }
+                Effect::SetActive(a) => self.link.set_active(a),
+                Effect::State(s) => self.link.set_state(s),
+                Effect::Motion(dx, dy, w, p) => self.link.add_motion(dx, dy, w, p),
+                Effect::ReleaseAll => self.link.release_all(),
+                Effect::Notice(n) => notices.push(n),
+            }
+        }
+        notices
+    }
+
+    /// Leave a clean state: everything released, devices free.
+    pub fn shutdown(&mut self) {
+        self.command(Action::Off);
+        self.link.set_active(false);
+        if let Some(g) = &self.grab {
+            g.store(false, Ordering::Release);
+        }
+    }
+}
+
+/// Releases the devices and the board if the main loop stops responding
+/// (a hung process must never keep keyboard and mouse grabbed).
+pub struct Watchdog {
+    alive_ms: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+    fired: Arc<AtomicBool>,
+    epoch: Instant,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Watchdog {
+    pub fn start(link: Arc<Link>, grab: Arc<AtomicBool>, timeout: Duration) -> Self {
+        let alive_ms = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let fired = Arc::new(AtomicBool::new(false));
+        let epoch = Instant::now();
+        let thread = {
+            let (alive_ms, stop, fired) = (alive_ms.clone(), stop.clone(), fired.clone());
+            thread::Builder::new()
+                .name("pshb-watchdog".into())
+                .spawn(move || {
+                    while !stop.load(Ordering::Acquire) {
+                        thread::sleep(Duration::from_millis(100));
+                        let now = epoch.elapsed().as_millis() as u64;
+                        let last = alive_ms.load(Ordering::Acquire);
+                        if now.saturating_sub(last) > timeout.as_millis() as u64
+                            && grab.load(Ordering::Acquire)
+                        {
+                            grab.store(false, Ordering::Release);
+                            link.set_active(false);
+                            fired.store(true, Ordering::Release);
+                        }
+                    }
+                })
+                .expect("spawn watchdog")
+        };
+        let w = Self {
+            alive_ms,
+            stop,
+            fired,
+            epoch,
+            thread: Some(thread),
+        };
+        w.feed();
+        w
+    }
+
+    pub fn feed(&self) {
+        self.alive_ms
+            .store(self.epoch.elapsed().as_millis() as u64, Ordering::Release);
+    }
+
+    /// True once if the watchdog had to intervene since the last call.
+    pub fn take_fired(&self) -> bool {
+        self.fired.swap(false, Ordering::AcqRel)
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}

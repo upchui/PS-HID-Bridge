@@ -17,6 +17,10 @@ path = "src/bin/pshb-cli.rs"
 [dependencies]
 chacha20poly1305 = "0.11"
 clap = { version = "4.6", features = ["derive"] }
+evdev = "0.13"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
 
 [dev-dependencies]
 serde_json = "1"

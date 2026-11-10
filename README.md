@@ -19,7 +19,7 @@ Das Paketformat steht in [protocol/SPEC.md](protocol/SPEC.md). Kommt 250 ms lang
 | Firmware: USB-HID | ✅ (Host-Tests; Hardware-Test steht aus) |
 | Firmware: Netzwerk, DHCP, UDP | ✅ (Simulator; Hardware-Test steht aus) |
 | Protokoll mit Verschlüsselung | ✅ (C, Rust, Python gegen gemeinsame Testvektoren) |
-| Kommandozeilen-Tool | – |
+| Kommandozeilen-Tool | ✅ |
 | Weboberfläche des Boards | – |
 | Desktop-App (Kirigami) | Grundgerüst |
 | Firmware-Update übers Netz | – |
@@ -40,6 +40,54 @@ make all               # alles
 Der erste `make desktop` baut Qt 6 und Kirigami aus dem Quellcode und dauert deshalb lange (je nach Rechner 1–3 Stunden). Danach liegt alles im Docker-Cache. Die Zahl der parallelen Qt-Jobs lässt sich mit `make desktop QT_JOBS=4` anpassen; qtdeclarative braucht pro Job etwa 2 GB RAM.
 
 Alle Versionen stehen zentral in [versions.env](versions.env). `make check-pins` prüft, dass die Submodule auf den dort eingetragenen Tags stehen.
+
+## Kommandozeilen-Tool
+
+`out/pshb-cli` läuft ohne Oberfläche und reicht für den Alltag, bis die App fertig ist.
+
+```sh
+pshb-cli list-devices                              # Tastaturen und Mäuse anzeigen
+pshb-cli config set --board 192.168.1.50 --device "K400" --device "G Pro"
+pshb-cli config set-psk <64 Hex-Zeichen>           # Schlüssel speichern (Datei mit Rechten 0600)
+pshb-cli ping                                      # Verbindung und Board-Status
+pshb-cli run                                       # weiterleiten; Umschalten mit Strg+Alt+P
+```
+
+- **Umschalten:** Standard ist `Strg+Alt+P` (änderbar mit `config set --hotkey`). Die Steuerung geht erst an, wenn alle Tasten losgelassen sind; erst dann werden Maus und Tastatur exklusiv übernommen. Sonst bleiben auf dem Desktop Tasten hängen.
+- **Not-Aus:** `Strg+Alt+Shift+Esc` gibt die Geräte immer frei und lässt auf der PS5 alles los. Diese Kombination lässt sich nicht abschalten.
+- **Hängt das Programm**, gibt ein Watchdog die Geräte nach einer Sekunde frei. Beim Beenden (Strg+C, `kill`) wird ebenfalls alles losgelassen.
+- Einstellungen liegen in `~/.config/ps5-hid-bridge/config.toml`, der Schlüssel in `~/.config/ps5-hid-bridge/psk`.
+- Tastennamen in Kombinationen richten sich nach der **Position auf einer US-Tastatur** (`Z` ist auf der deutschen Tastatur das `Y`). Modifikatoren: `Strg`, `Alt`, `AltGr`, `Shift`, `Super`; Maustasten: `Maus4`, `Maus5`, `MausMitte`.
+
+### Gerätezugriff
+
+Ohne Zusatzrechte darf ein normaler Benutzer Tastatur und Maus nicht roh lesen. Zwei Möglichkeiten:
+
+1. **udev-Regel nur für die gewählten Geräte** (empfohlen; die App richtet sie im Assistenten selbst ein). Hersteller- und Produktkennung zeigt `pshb-cli list-devices` in der Spalte „ID“:
+
+   ```
+   # /etc/udev/rules.d/70-ps5-hid-bridge.rules
+   SUBSYSTEM=="input", KERNEL=="event*", ATTRS{id/vendor}=="046d", ATTRS{id/product}=="c52b", TAG+="uaccess"
+   ```
+
+   Danach `sudo udevadm control --reload && sudo udevadm trigger -s input`. Der Dateiname muss mit einer Zahl unter 73 beginnen, sonst greift `uaccess` nicht.
+2. **Gruppe `input`:** `sudo usermod -aG input $USER`, danach neu anmelden. Das gibt Zugriff auf alle Eingabegeräte.
+
+### Testskripte
+
+`pshb-cli replay DATEI` spielt Eingaben aus einer Textdatei ab, durch dieselbe Logik wie echte Geräte. `make test` nutzt das gegen den Simulator.
+
+```
+combo Strg+Alt+P      # Kombination drücken und loslassen
+wait 30               # Millisekunden
+key LEFTSHIFT down
+tap H
+key LEFTSHIFT up
+move 30 -10           # Maus
+wheel 1
+button BTN_LEFT down
+focus on              # Fensterregel: Fenster hat den Fokus
+```
 
 ## Verzeichnisse
 

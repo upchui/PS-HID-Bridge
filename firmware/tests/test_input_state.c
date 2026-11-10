@@ -144,6 +144,8 @@ TEST(buttons_are_masked_and_tracked) {
 TEST(boot_protocol_report) {
     input_state_t s;
     input_state_init(&s);
+    uint8_t initial[PSHB_MOUSE_REPORT_LEN];
+    input_state_take_mouse_report(&s, initial, true);  // the initial empty state
     input_state_set_buttons(&s, 0x1F);
     input_state_add_motion(&s, 300, -5, 4, 4);
     uint8_t r[PSHB_MOUSE_REPORT_LEN];
@@ -192,6 +194,48 @@ TEST(mark_dirty_resends_state) {
     CHECK(input_state_mouse_pending(&s));
 }
 
+TEST(short_tap_within_one_frame_is_kept) {
+    input_state_t s;
+    input_state_init(&s);
+    uint8_t r[PSHB_KBD_REPORT_LEN];
+    input_state_take_kbd_report(&s, r);
+    take_mouse(&s);
+    const uint8_t a[6] = {0x04, 0, 0, 0, 0, 0}, none[6] = {0};
+    input_state_set_keyboard(&s, 0, a);     // down ...
+    input_state_set_keyboard(&s, 0, none);  // ... and up before the next USB frame
+    input_state_set_buttons(&s, 0x01);
+    input_state_set_buttons(&s, 0x00);
+    input_state_take_kbd_report(&s, r);
+    CHECK_EQ_U(r[2], 0x04);
+    CHECK(input_state_kbd_pending(&s));
+    input_state_take_kbd_report(&s, r);
+    CHECK_EQ_U(r[2], 0x00);
+    CHECK(!input_state_kbd_pending(&s));
+    CHECK_EQ_I(take_mouse(&s).buttons, 0x01);
+    CHECK_EQ_I(take_mouse(&s).buttons, 0x00);
+    CHECK(!input_state_mouse_pending(&s));
+}
+
+TEST(queue_overflow_keeps_newest) {
+    input_state_t s;
+    input_state_init(&s);
+    uint8_t r[PSHB_KBD_REPORT_LEN];
+    input_state_take_kbd_report(&s, r);
+    for (uint8_t k = 1; k <= 20; k++) {
+        const uint8_t keys[6] = {k, 0, 0, 0, 0, 0};
+        input_state_set_keyboard(&s, 0, keys);
+    }
+    int n = 0;
+    uint8_t last = 0;
+    while (input_state_kbd_pending(&s)) {
+        input_state_take_kbd_report(&s, r);
+        last = r[2];
+        n++;
+    }
+    CHECK_EQ_I(n, PSHB_STATE_QUEUE_LEN);
+    CHECK_EQ_U(last, 20);  // the final state always arrives
+}
+
 int main(void) {
     RUN(fresh_state_sends_empty_reports);
     RUN(keyboard_report_layout);
@@ -203,5 +247,7 @@ int main(void) {
     RUN(boot_protocol_report);
     RUN(release_all_clears_everything);
     RUN(mark_dirty_resends_state);
+    RUN(short_tap_within_one_frame_is_kept);
+    RUN(queue_overflow_keeps_newest);
     return TEST_SUMMARY();
 }

@@ -121,6 +121,20 @@ class Sim:
                 out.append(m.groupdict())
         return out
 
+    def reports_all(self, settle: float = 0.3) -> dict[str, list[dict]]:
+        """KBD and MOUSE reports arriving within `settle` seconds, in one pass."""
+        out = {kind: [] for kind in REPORT_RE}
+        deadline = time.monotonic() + settle
+        while (left := deadline - time.monotonic()) > 0:
+            try:
+                line = self.lines.get(timeout=left)
+            except queue.Empty:
+                break
+            for kind, rx in REPORT_RE.items():
+                if m := rx.fullmatch(line):
+                    out[kind].append(m.groupdict())
+        return out
+
     def drain(self):
         self.reports("", settle=0.05)
 
@@ -288,6 +302,47 @@ class InteropTests(unittest.TestCase):
         mouse = self.sim.reports("MOUSE", settle=0.3)
         self.assertEqual(sum(int(m["dx"]) for m in mouse), 40000)
         self.assertEqual(sum(int(m["dy"]) for m in mouse), -3)
+
+    def test_replay_script_end_to_end(self):
+        """evdev-like events -> engine (hotkey, grab rules) -> link -> C core -> HID reports."""
+        import tempfile
+        script = """
+            tap A                 # inactive: must not arrive
+            combo Strg+Alt+P      # activate (after all keys are released)
+            wait 30
+            key LEFTSHIFT down
+            tap H
+            key LEFTSHIFT up
+            move 30 -10
+            wheel 1
+            button BTN_LEFT down
+            button BTN_LEFT up
+            wait 30
+            combo Strg+Alt+P      # deactivate
+            wait 30
+            tap B                 # inactive again
+        """
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write(script)
+        try:
+            r = self.cli("replay", f.name, "--config", f.name + ".none.toml")
+        finally:
+            os.unlink(f.name)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Steuerung AN", r.stdout)
+        self.assertIn("Steuerung AUS", r.stdout)
+        rep = self.sim.reports_all()
+        kbd, mouse = rep["KBD"], rep["MOUSE"]
+        keys = [k["keys"].split()[0] for k in kbd]
+        self.assertIn({"mods": "02", "keys": "0b 00 00 00 00 00"}, kbd)  # Shift+H
+        for code in ("04", "05", "13"):  # A, B (inactive) and P (trigger key)
+            self.assertNotIn(code, keys)
+        self.assertEqual(kbd[-1], {"mods": "00", "keys": "00 00 00 00 00 00"})
+        self.assertEqual(sum(int(m["dx"]) for m in mouse), 30)
+        self.assertEqual(sum(int(m["dy"]) for m in mouse), -10)
+        self.assertEqual(sum(int(m["wheel"]) for m in mouse), 1)
+        self.assertIn("01", [m["buttons"] for m in mouse])  # the click arrived
+        self.assertEqual(mouse[-1]["buttons"], "00")
 
     def test_wrong_key(self):
         r = self.cli("ping", "--count", "1", key=bytes(32))
