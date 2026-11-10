@@ -9,7 +9,7 @@ Remote Play überträgt nur Controller-Eingaben. Darum läuft der Weg für Maus 
 3. Das Board (WIZnet W5500-EVB-Pico2) prüft und entschlüsselt sie und gibt sie als USB-HID-Report an die PS5 weiter.
 4. Die PS5 sieht eine normale Tastatur-Maus-Kombination. Der Controller läuft weiter über Remote Play.
 
-Das Paketformat steht in [protocol/SPEC.md](protocol/SPEC.md).
+Das Paketformat steht in [protocol/SPEC.md](protocol/SPEC.md). Kommt 250 ms lang kein gültiges Paket, lässt das Board alle Tasten los (Failsafe).
 
 ## Stand
 
@@ -18,7 +18,7 @@ Das Paketformat steht in [protocol/SPEC.md](protocol/SPEC.md).
 | Repository, Docker-Builds | ✅ |
 | Firmware: USB-HID | ✅ (Host-Tests; Hardware-Test steht aus) |
 | Firmware: Netzwerk, DHCP, UDP | ✅ (Simulator; Hardware-Test steht aus) |
-| Protokoll mit Verschlüsselung | – |
+| Protokoll mit Verschlüsselung | ✅ (C, Rust, Python gegen gemeinsame Testvektoren) |
 | Kommandozeilen-Tool | – |
 | Weboberfläche des Boards | – |
 | Desktop-App (Kirigami) | Grundgerüst |
@@ -73,12 +73,14 @@ LED: blinkt langsam = kein USB-Host, blinkt schnell = USB da, aber noch keine IP
 Testverkehr an ein Board oder an den Simulator schicken:
 
 ```sh
-make udp-test IP=192.168.1.50 ARGS='--plain ping'
-make udp-test IP=192.168.1.50 ARGS='--plain pattern'        # Maus-Quadrat, tippt „hallo“
-make udp-test IP=192.168.1.50 ARGS='--plain flood --rate 1000 --seconds 5'
+make udp-test IP=192.168.1.50 ARGS='--psk-file psk.txt ping'
+make udp-test IP=192.168.1.50 ARGS='--psk-file psk.txt pattern'   # Maus-Quadrat, tippt „hallo“
+make udp-test IP=192.168.1.50 ARGS='--psk-file psk.txt flood --rate 1000 --seconds 5'
 ```
 
-`--plain` funktioniert nur mit dem Debug-Image `out/ps5-hid-bridge-plain.uf2`, das unverschlüsselte Pakete annimmt. Dieses Image nur zur Inbetriebnahme verwenden.
+Bis die Weboberfläche fertig ist (Schritt 6), bekommt die Firmware den Schlüssel beim Bauen: `make firmware DEV_PSK=<64 Hex-Zeichen>`. Ohne Schlüssel lehnt sie alle Pakete ab.
+
+Statt `--psk-file` geht auch `--plain`, aber nur mit dem Debug-Image `out/ps5-hid-bridge-plain.uf2`, das unverschlüsselte Pakete annimmt. Dieses Image nur zur Inbetriebnahme verwenden.
 
 ### Testimages ohne Netzwerk
 

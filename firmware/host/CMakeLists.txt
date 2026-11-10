@@ -26,13 +26,26 @@ target_compile_definitions(pshb_core_mouse8 PUBLIC PSHB_MOUSE_8BIT=1)
 
 enable_testing()
 
+# Shared protocol test vectors -> C header (protocol/vectors/v1.json).
+set(PSHB_PROTOCOL_DIR ${PSHB_FW_DIR}/../protocol)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/gen/vectors_v1.h
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/gen
+    COMMAND Python3::Interpreter ${PSHB_PROTOCOL_DIR}/tools/gen_c_vectors.py
+            ${PSHB_PROTOCOL_DIR}/vectors/v1.json ${CMAKE_BINARY_DIR}/gen/vectors_v1.h
+    DEPENDS ${PSHB_PROTOCOL_DIR}/vectors/v1.json ${PSHB_PROTOCOL_DIR}/tools/gen_c_vectors.py
+)
+add_custom_target(pshb_vectors DEPENDS ${CMAKE_BINARY_DIR}/gen/vectors_v1.h)
+
 # Every tests/test_<name>.c becomes one ctest case against the default core.
 file(GLOB PSHB_TEST_SOURCES CONFIGURE_DEPENDS ${PSHB_FW_DIR}/tests/test_*.c)
 foreach(src ${PSHB_TEST_SOURCES})
     get_filename_component(name ${src} NAME_WE)
     add_executable(${name} ${src})
-    target_include_directories(${name} PRIVATE ${PSHB_FW_DIR}/tests)
+    target_include_directories(${name} PRIVATE ${PSHB_FW_DIR}/tests ${CMAKE_BINARY_DIR}/gen)
     target_link_libraries(${name} PRIVATE pshb_core)
+    add_dependencies(${name} pshb_vectors)
     add_test(NAME ${name} COMMAND ${name})
 endforeach()
 

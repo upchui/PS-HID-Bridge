@@ -37,7 +37,7 @@ DESKTOP_RUN = $(DOCKER_RUN) -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR
 FW_RUN      = $(DOCKER_RUN) $(FW_IMAGE)
 
 .PHONY: help all firmware desktop desktop-cli test test-firmware test-desktop test-appimage \
-        test-sim sim udp-test submodules check-pins images image-firmware image-rust image-desktop \
+        test-sim test-protocol sim udp-test fmt submodules check-pins images image-firmware image-rust image-desktop \
         shell-fw shell-desktop clean distclean dirs
 
 help:
@@ -83,6 +83,7 @@ check-pins:
 # ---------------------------------------------------------------- firmware
 firmware: image-firmware check-pins dirs
 	$(FW_RUN) bash -c 'cmake -S firmware -B $(FW_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DPSHB_DEV_PSK=$(DEV_PSK) \
 		&& cmake --build $(FW_BUILD) --parallel $(JOBS)'
 	cp $(FW_BUILD)/*.uf2 out/
 	cp $(FW_BUILD)/ps5-hid-bridge.elf out/
@@ -97,21 +98,29 @@ desktop: image-desktop dirs
 	$(DESKTOP_RUN) bash desktop/packaging/build-appimage.sh
 
 # ---------------------------------------------------------------- tests
-test: test-firmware test-sim test-desktop
+test: test-protocol test-firmware test-sim test-desktop
 
 test-firmware: image-firmware dirs
 	$(FW_RUN) bash -c 'cmake -S firmware/host -B $(HOST_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=Debug \
 		&& cmake --build $(HOST_BUILD) --parallel $(JOBS) \
 		&& ctest --test-dir $(HOST_BUILD) --output-on-failure'
 
-# Simulator integration tests (the simulator is built by test-firmware).
-test-sim: test-firmware
-	$(FW_RUN) python3 tools/test_sim.py --sim $(HOST_BUILD)/pshb-sim
+# Vectors are up to date and the Python reference agrees with them.
+test-protocol: image-firmware dirs
+	$(FW_RUN) bash -c 'python3 protocol/tools/gen_vectors.py --check && python3 protocol/tools/test_vectors.py'
+
+# Simulator integration tests (the simulator is built by test-firmware),
+# including Rust CLI <-> C core interop.
+test-sim: test-firmware desktop-cli
+	$(FW_RUN) python3 tools/test_sim.py --sim $(HOST_BUILD)/pshb-sim --cli out/pshb-cli
 
 test-desktop: image-rust dirs
 	$(RUST_RUN) bash -c 'cd desktop && cargo fmt --all --check \
 		&& cargo clippy --locked -p pshb-core --all-targets -- -D warnings \
 		&& cargo test --locked -p pshb-core'
+
+fmt: image-rust dirs
+	$(RUST_RUN) bash -c 'cd desktop && cargo fmt --all'
 
 # Smoke test of the packaged app: loads all QML offscreen and quits.
 test-appimage: image-desktop dirs

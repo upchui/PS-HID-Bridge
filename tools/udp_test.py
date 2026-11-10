@@ -2,6 +2,7 @@
 """Send test traffic to a PS5 HID Bridge board (or the simulator).
 
 Examples:
+  udp_test.py --psk-file psk.txt 192.168.1.50 ping
   udp_test.py --plain 192.168.1.50 ping
   udp_test.py --plain 192.168.1.50 pattern
   udp_test.py --plain 192.168.1.50 flood --rate 1000 --seconds 5
@@ -20,9 +21,8 @@ import pshb_proto as proto  # noqa: E402
 
 
 class Client:
-    def __init__(self, host: str, port: int, plain: bool):
-        if not plain:
-            raise SystemExit("encrypted mode needs a PSK (available from step 4 on); use --plain")
+    def __init__(self, host: str, port: int, key: bytes | None):
+        self.key = key  # None = plaintext debug protocol
         self.addr = (host, port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(0.5)
@@ -37,7 +37,16 @@ class Client:
         return self.counter
 
     def send(self, ptype: int, payload: bytes) -> None:
-        self.sock.sendto(proto.plain_packet(ptype, self._next(), payload), self.addr)
+        if self.key is None:
+            pkt = proto.plain_packet(ptype, self._next(), payload)
+        else:
+            pkt = proto.seal(self.key, proto.DIR_APP_TO_BOARD, ptype, self._next(), payload)
+        self.sock.sendto(pkt, self.addr)
+
+    def _open(self, data: bytes) -> tuple[int, int, bytes]:
+        if self.key is None:
+            return proto.parse_plain(data)
+        return proto.open_packet(self.key, proto.DIR_BOARD_TO_APP, data)
 
     def send_input(self, **kw) -> None:
         self.send(proto.TYPE_INPUT, proto.Input(session_id=self.session_id, **kw).encode())
@@ -53,12 +62,13 @@ class Client:
             except socket.timeout:
                 return None
             try:
-                ptype, _, payload = proto.parse_plain(data)
+                ptype, _, payload = self._open(data)
             except ValueError:
                 continue
             if ptype != proto.TYPE_PONG:
                 continue
             pong = proto.Pong.decode(payload)
+            self.session_id = pong.session_id
             if pong.seq == self.ping_seq:
                 rtt_ms = (time.monotonic_ns() // 1000 - pong.t_app_us) / 1000
                 self.session_id = pong.session_id
@@ -152,6 +162,8 @@ def main() -> int:
     ap.add_argument("host")
     ap.add_argument("--port", type=int, default=proto.UDP_PORT_DEFAULT)
     ap.add_argument("--plain", action="store_true", help="unverschlüsselte Debug-Pakete (Debug-Firmware)")
+    ap.add_argument("--psk", help="Pre-Shared Key (64 Hex-Zeichen)")
+    ap.add_argument("--psk-file", help="Datei mit dem Pre-Shared Key")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("ping")
     p.add_argument("--count", type=int, default=5)
@@ -162,7 +174,15 @@ def main() -> int:
     p.add_argument("--seconds", type=float, default=5)
     args = ap.parse_args()
 
-    c = Client(args.host, args.port, args.plain)
+    key = None
+    if not args.plain:
+        text = args.psk or (open(args.psk_file).read() if args.psk_file else None)
+        if not text:
+            ap.error("--psk, --psk-file oder --plain angeben")
+        key = bytes.fromhex("".join(text.split()))
+        if len(key) != proto.KEY_LEN:
+            ap.error("der Schlüssel muss 64 Hex-Zeichen haben")
+    c = Client(args.host, args.port, key)
     return {"ping": cmd_ping, "pattern": cmd_pattern, "flood": cmd_flood}[args.cmd](c, args)
 
 

@@ -58,6 +58,12 @@ function(pshb_add_firmware name)
     pico_add_extra_outputs(${name})
 endfunction()
 
+# Development PSK until settings exist: make firmware DEV_PSK=<64 hex digits>
+set(PSHB_DEV_PSK "" CACHE STRING "Development pre-shared key (64 hex digits)")
+if(PSHB_DEV_PSK)
+    add_compile_definitions(PSHB_DEV_PSK="${PSHB_DEV_PSK}")
+endif()
+
 pshb_add_firmware(ps5-hid-bridge)
 pshb_add_firmware(ps5-hid-bridge-plain DEFINES PSHB_PLAINTEXT_DEBUG=1)
 pshb_add_firmware(ps5-hid-bridge-hidtest DEFINES PSHB_TEST_PATTERN=1)

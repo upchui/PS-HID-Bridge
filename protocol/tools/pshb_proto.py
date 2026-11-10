@@ -133,3 +133,48 @@ def parse_plain(packet: bytes) -> tuple[int, int, bytes]:
     if len(payload) != PAYLOAD_LEN.get(ptype, -1):
         raise ValueError("bad payload length")
     return ptype, counter, payload
+
+
+# ---------------------------------------------------------------- encrypted (v1)
+
+class AuthError(ValueError):
+    """Tag verification failed (wrong key, direction or tampered packet)."""
+
+
+def _aead(key: bytes):
+    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+    if len(key) != KEY_LEN:
+        raise ValueError("key must be 32 bytes")
+    return ChaCha20Poly1305(key)
+
+
+def seal(key: bytes, direction: int, ptype: int, counter: int, payload: bytes) -> bytes:
+    """Build a v1 packet: header (AAD) | ciphertext | tag."""
+    hdr = header(VERSION, ptype, counter)
+    return hdr + _aead(key).encrypt(nonce(direction, counter), payload, hdr)
+
+
+def check(packet: bytes) -> tuple[int, int]:
+    """Structural check of a v1 packet. Returns (type, counter) or raises ValueError."""
+    if len(packet) < HEADER.size + TAG_LEN:
+        raise ValueError("packet too short")
+    version, ptype, counter = HEADER.unpack_from(packet)
+    if version != VERSION:
+        raise ValueError(f"unsupported version {version}")
+    if ptype not in PAYLOAD_LEN:
+        raise ValueError(f"unknown type {ptype}")
+    if len(packet) != HEADER.size + PAYLOAD_LEN[ptype] + TAG_LEN:
+        raise ValueError("bad length")
+    return ptype, counter
+
+
+def open_packet(key: bytes, direction: int, packet: bytes) -> tuple[int, int, bytes]:
+    """Verify and decrypt a v1 packet. Returns (type, counter, payload)."""
+    from cryptography.exceptions import InvalidTag
+    ptype, counter = check(packet)
+    hdr = packet[:HEADER.size]
+    try:
+        payload = _aead(key).decrypt(nonce(direction, counter), packet[HEADER.size:], hdr)
+    except InvalidTag as e:
+        raise AuthError("authentication failed") from e
+    return ptype, counter, payload

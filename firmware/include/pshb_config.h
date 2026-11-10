@@ -12,6 +12,10 @@
 #define PSHB_PLAINTEXT_DEBUG 0
 #endif
 
+// Development only: pre-shared key as 64 hex digits, used until settings
+// exist (step 6). Without it the board rejects every encrypted packet.
+// #define PSHB_DEV_PSK "00112233..."
+
 // W5500 SPI clock. clk_peri is 150 MHz, so 25 MHz and 37.5 MHz are exact.
 #ifndef PSHB_W5500_SPI_HZ
 #define PSHB_W5500_SPI_HZ (25 * 1000 * 1000)

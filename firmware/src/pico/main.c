@@ -12,6 +12,7 @@
 
 #include "bridge.h"
 #include "core1.h"
+#include "hexutil.h"
 #include "hid_out.h"
 #include "input_state.h"
 #include "net_shared.h"
@@ -116,6 +117,29 @@ static uint8_t usb_status(void) {
     return s;
 }
 
+// Track USB state; release everything when the host goes away or sleeps.
+static void usb_status_service(void) {
+    static uint8_t prev;
+    uint8_t s = usb_status();
+    bool lost = (prev & PSHB_STATUS_USB_MOUNTED) && !(s & PSHB_STATUS_USB_MOUNTED);
+    bool slept = !(prev & PSHB_STATUS_USB_SUSPENDED) && (s & PSHB_STATUS_USB_SUSPENDED);
+    if (lost || slept) bridge_release(&g_bridge);
+    g_bridge.usb_status = s;
+    prev = s;
+}
+
+static void load_key(void) {
+#ifdef PSHB_DEV_PSK
+    uint8_t key[32];
+    if (hex_decode(PSHB_DEV_PSK, key, sizeof(key))) {
+        bridge_set_key(&g_bridge, key);
+        printf("security: development PSK active\n");
+    } else {
+        printf("security: PSHB_DEV_PSK is not 64 hex digits\n");
+    }
+#endif
+}
+
 int main(void) {
     stdio_init_all();
     gpio_init(PICO_DEFAULT_LED_PIN);
@@ -127,8 +151,9 @@ int main(void) {
            PSHB_PLAINTEXT_DEBUG ? " (PLAINTEXT DEBUG)" : "");
 
     input_state_init(&g_input);
-    bridge_init(&g_bridge, &g_input, get_rand_64(), time_us_64());
+    bridge_init(&g_bridge, &g_input, get_rand_64(), get_rand_64(), time_us_64());
     g_bridge.allow_plaintext = PSHB_PLAINTEXT_DEBUG;
+    load_key();
     hid_out_init(&g_input);
     tud_init(0);
 
@@ -146,7 +171,8 @@ int main(void) {
 #if PSHB_TEST_PATTERN
         test_pattern_service();
 #endif
-        g_bridge.usb_status = usb_status();
+        usb_status_service();
+        bridge_tick(&g_bridge, time_us_64());
         hid_out_service();
         led_service();
     }

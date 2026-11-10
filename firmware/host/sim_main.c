@@ -23,6 +23,7 @@
 #include <unistd.h>
 
 #include "bridge.h"
+#include "hexutil.h"
 #include "input_state.h"
 #include "protocol.h"
 
@@ -56,6 +57,9 @@ static void usage(const char *argv0) {
             "  --bind ADDR       listen address (default 127.0.0.1)\n"
             "  --port N          UDP port (default %d, 0 = any free port)\n"
             "  --plaintext       accept unencrypted debug packets (version 0)\n"
+            "  --psk HEX         pre-shared key (64 hex digits)\n"
+            "  --psk-file PATH   read the pre-shared key from a file\n"
+            "  --failsafe-ms N   failsafe timeout (default 250)\n"
             "  --session HEX     fixed session id (default: random)\n"
             "  --allow IP        only accept packets from this sender\n"
             "  --usb-unmounted   simulate a board that is not plugged in\n",
@@ -86,11 +90,17 @@ int main(int argc, char **argv) {
     bool have_session = false;
     uint64_t session = 0;
     uint32_t allowed_ip = 0;
+    uint8_t key[32];
+    bool have_key = false;
+    unsigned failsafe_ms = PSHB_FAILSAFE_US_DEFAULT / 1000;
 
     static const struct option opts[] = {
         {"bind", required_argument, 0, 'b'},
         {"port", required_argument, 0, 'p'},
         {"plaintext", no_argument, 0, 'P'},
+        {"psk", required_argument, 0, 'k'},
+        {"psk-file", required_argument, 0, 'K'},
+        {"failsafe-ms", required_argument, 0, 'f'},
         {"session", required_argument, 0, 's'},
         {"allow", required_argument, 0, 'a'},
         {"usb-unmounted", no_argument, 0, 'u'},
@@ -103,6 +113,30 @@ int main(int argc, char **argv) {
         case 'b': bind_addr = optarg; break;
         case 'p': port = atoi(optarg); break;
         case 'P': plaintext = true; break;
+        case 'k':
+            if (!hex_decode(optarg, key, sizeof(key))) {
+                fprintf(stderr, "sim: --psk needs 64 hex digits\n");
+                return 2;
+            }
+            have_key = true;
+            break;
+        case 'K': {
+            char buf[80] = {0};
+            FILE *f = fopen(optarg, "r");
+            if (!f || !fgets(buf, sizeof(buf), f)) {
+                fprintf(stderr, "sim: cannot read %s\n", optarg);
+                return 2;
+            }
+            fclose(f);
+            buf[strcspn(buf, "\r\n")] = '\0';
+            if (!hex_decode(buf, key, sizeof(key))) {
+                fprintf(stderr, "sim: %s does not contain 64 hex digits\n", optarg);
+                return 2;
+            }
+            have_key = true;
+            break;
+        }
+        case 'f': failsafe_ms = (unsigned)atoi(optarg); break;
         case 's':
             session = strtoull(optarg, NULL, 16);
             have_session = true;
@@ -138,8 +172,10 @@ int main(int argc, char **argv) {
     input_state_t input;
     bridge_t bridge;
     input_state_init(&input);
-    bridge_init(&bridge, &input, have_session ? session : random_u64(), now_us());
+    bridge_init(&bridge, &input, have_session ? session : random_u64(), random_u64(), now_us());
     bridge.allow_plaintext = plaintext;
+    bridge.failsafe_us = failsafe_ms * 1000u;
+    if (have_key) bridge_set_key(&bridge, key);
     bridge.allowed_ip = allowed_ip;
     bridge.usb_status = usb_mounted ? PSHB_STATUS_USB_MOUNTED : 0;
 
@@ -174,6 +210,9 @@ int main(int argc, char **argv) {
             }
         }
         t = now_us();
+        bool was_failsafe = bridge.failsafe_active;
+        bridge_tick(&bridge, t);
+        if (bridge.failsafe_active && !was_failsafe) printf("FAILSAFE\n");
         if (t >= next_frame) {
             next_frame = t + 1000;
             if (usb_mounted) {
