@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.thealhu.ps5hidbridge</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <name>PS5 HID Bridge</name>
+  <summary>Maus und Tastatur dieses Rechners an der PS5 nutzen</summary>
+  <description>
+    <p>
+      Leitet Maus und Tastatur verschlüsselt über das Netzwerk an ein kleines Board am USB-Port
+      der PS5 weiter. Das Bild kommt dabei per Remote Play (zum Beispiel chiaki-ng).
+    </p>
+    <ul>
+      <li>Umschalten per Tastenkombination, Maustaste, Doppeltipp, Halten oder automatisch per Fensterregel</li>
+      <li>Not-Aus-Kombination, die die Geräte immer freigibt</li>
+      <li>Statusanzeige mit Laufzeitmessung zum Board</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.thealhu.ps5hidbridge.desktop</launchable>
+  <categories>
+    <category>Utility</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.9.0" date="2026-11-10"/>
+  </releases>
+</component>

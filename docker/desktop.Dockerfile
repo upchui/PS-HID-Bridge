@@ -112,6 +112,11 @@ ARG ECM_SHA256
 ARG KIRIGAMI_SHA256
 ARG JOBS=6
 
+# Kirigami packs app templates (bzip2) and optimises its shaders (spirv-opt).
+RUN dnf -y install bzip2 spirv-tools && dnf clean all
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
 RUN set -eux; \
     minor=${KF_VERSION%.*}; \
     cd /tmp; \
@@ -148,7 +153,10 @@ RUN --mount=type=cache,target=/ccache set -eux; \
     rm -rf /tmp/kirigami /tmp/kirigami.tar.xz
 
 ############################################################################
-FROM kf6 AS desktop
+# AppImage tooling in its own stage: downloads stay cached when the final
+# stage changes. The tools are AppImages themselves; extract them once
+# (no FUSE in containers).
+FROM base AS appimage-tools
 
 ARG LINUXDEPLOY_TAG
 ARG LINUXDEPLOY_SHA256
@@ -156,26 +164,56 @@ ARG LINUXDEPLOY_QT_TAG
 ARG LINUXDEPLOY_QT_SHA256
 ARG LINUXDEPLOY_APPIMAGE_TAG
 ARG LINUXDEPLOY_APPIMAGE_SHA256
+ARG APPIMAGE_RUNTIME_TAG
+ARG APPIMAGE_RUNTIME_SHA256
 
-COPY --from=rust-base /opt/rustup /opt/rustup
-COPY --from=rust-base /opt/cargo /opt/cargo
-
-ENV RUSTUP_HOME=/opt/rustup \
-    PATH=/opt/cargo/bin:/opt/qt6/bin:/opt/rh/gcc-toolset-14/root/usr/bin:/usr/local/bin:/usr/bin:/bin
-
-# The tools are AppImages themselves; extract them once (no FUSE in containers).
 RUN set -eux; \
+    mkdir -p /opt/appimage/bin; \
     get() { \
         name=$1; repo=$2; tag=$3; sha=$4; \
         fetch-verify.sh "https://github.com/linuxdeploy/${repo}/releases/download/${tag}/${name}-x86_64.AppImage" \
             "$sha" "/tmp/${name}.AppImage"; \
         chmod +x "/tmp/${name}.AppImage"; \
-        cd /opt && "/tmp/${name}.AppImage" --appimage-extract >/dev/null; \
-        mv /opt/squashfs-root "/opt/${name}"; \
-        ln -s "/opt/${name}/AppRun" "/usr/local/bin/${name}"; \
+        cd /opt/appimage && "/tmp/${name}.AppImage" --appimage-extract >/dev/null; \
+        mv /opt/appimage/squashfs-root "/opt/appimage/${name}"; \
+        ln -s "/opt/appimage/${name}/AppRun" "/opt/appimage/bin/${name}"; \
         rm "/tmp/${name}.AppImage"; \
     }; \
     get linuxdeploy linuxdeploy "${LINUXDEPLOY_TAG}" "${LINUXDEPLOY_SHA256}"; \
     get linuxdeploy-plugin-qt linuxdeploy-plugin-qt "${LINUXDEPLOY_QT_TAG}" "${LINUXDEPLOY_QT_SHA256}"; \
     get linuxdeploy-plugin-appimage linuxdeploy-plugin-appimage "${LINUXDEPLOY_APPIMAGE_TAG}" "${LINUXDEPLOY_APPIMAGE_SHA256}"; \
-    chmod -R a+rX /opt/linuxdeploy*
+    fetch-verify.sh "https://github.com/AppImage/type2-runtime/releases/download/${APPIMAGE_RUNTIME_TAG}/runtime-x86_64" \
+        "${APPIMAGE_RUNTIME_SHA256}" /opt/appimage/runtime-x86_64; \
+    chmod -R a+rX /opt/appimage
+
+############################################################################
+FROM kf6 AS desktop
+
+COPY --from=rust-base /opt/rustup /opt/rustup
+COPY --from=rust-base /opt/cargo /opt/cargo
+
+# Link with lld: cxx-qt would otherwise pick GNU gold, which emits two
+# .init_array sections -- the loader runs only one, so the static
+# initializers that register the QML module's resources never run.
+RUN dnf -y install lld && dnf clean all
+
+COPY --from=appimage-tools /opt/appimage /opt/appimage
+
+ENV RUSTUP_HOME=/opt/rustup \
+    PATH=/opt/appimage/bin:/opt/cargo/bin:/opt/qt6/bin:/opt/rh/gcc-toolset-14/root/usr/bin:/usr/local/bin:/usr/bin:/bin \
+    LD_LIBRARY_PATH=/opt/qt6/lib:/opt/rh/gcc-toolset-14/root/usr/lib64:/opt/rh/gcc-toolset-14/root/usr/lib \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
+    LDAI_RUNTIME_FILE=/opt/appimage/runtime-x86_64
+
+############################################################################
+# Plain desktop system without Qt: the AppImage must run here on its own.
+FROM almalinux:${ALMA_TAG} AS appimage-test
+
+RUN dnf -y install epel-release && dnf -y install \
+        mesa-libGL mesa-libEGL mesa-libgbm libdrm libglvnd-opengl libglvnd-glx libglvnd-egl \
+        fontconfig freetype dejavu-sans-fonts \
+        libxkbcommon libxkbcommon-x11 libX11 libX11-xcb libxcb libSM libICE \
+        xcb-util xcb-util-cursor xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm \
+        libwayland-client libwayland-cursor libwayland-egl dbus-libs glib2 \
+        brotli libpng bzip2-libs libxml2 libzstd graphite2 \
+ && dnf clean all

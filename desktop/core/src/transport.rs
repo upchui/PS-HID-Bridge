@@ -54,11 +54,16 @@ pub struct KeyState {
     pub buttons: u8,
 }
 
+/// How many round-trip samples the status keeps (for the latency view).
+pub const RTT_HISTORY: usize = 120;
+
 #[derive(Clone, Debug, Default)]
 pub struct LinkStatus {
     pub session_id: Option<u64>,
     pub last_pong: Option<Instant>,
     pub rtt: Option<Duration>,
+    /// Most recent round trips in milliseconds, oldest first.
+    pub rtt_history: VecDeque<f64>,
     pub board: Option<Pong>,
     pub packets_sent: u64,
     /// Replies that failed verification (wrong key on one side?).
@@ -235,7 +240,12 @@ fn receiver(sock: Arc<UdpSocket>, key: Arc<PacketKey>, shared: Arc<Shared>, wake
             st.session_id = Some(pong.session_id);
             st.last_pong = Some(Instant::now());
             if !pong.is_session_hint() && pong.t_app_us <= now_us {
-                st.rtt = Some(Duration::from_micros(now_us - pong.t_app_us));
+                let rtt = Duration::from_micros(now_us - pong.t_app_us);
+                st.rtt = Some(rtt);
+                if st.rtt_history.len() == RTT_HISTORY {
+                    st.rtt_history.pop_front();
+                }
+                st.rtt_history.push_back(rtt.as_secs_f64() * 1000.0);
             }
             st.board = Some(pong);
         }

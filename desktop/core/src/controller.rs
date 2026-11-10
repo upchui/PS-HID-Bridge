@@ -7,19 +7,34 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::engine::{Effect, Engine, Event, Notice};
-use crate::transport::Link;
+use crate::transport::{KeyState, Link};
 use crate::trigger::Action;
 
 pub struct Controller {
     pub engine: Engine,
     link: Arc<Link>,
     grab: Option<Arc<AtomicBool>>,
+    last_state: Option<KeyState>,
 }
 
 impl Controller {
     /// `grab`: the readers' grab flag (None when replaying a script).
     pub fn new(engine: Engine, link: Arc<Link>, grab: Option<Arc<AtomicBool>>) -> Self {
-        Self { engine, link, grab }
+        Self {
+            engine,
+            link,
+            grab,
+            last_state: None,
+        }
+    }
+
+    /// The key state most recently forwarded to the board (None while inactive).
+    pub fn last_state(&self) -> Option<KeyState> {
+        if self.engine.is_active() {
+            self.last_state
+        } else {
+            None
+        }
     }
 
     pub fn link(&self) -> &Arc<Link> {
@@ -46,7 +61,10 @@ impl Controller {
                     }
                 }
                 Effect::SetActive(a) => self.link.set_active(a),
-                Effect::State(s) => self.link.set_state(s),
+                Effect::State(s) => {
+                    self.last_state = Some(s);
+                    self.link.set_state(s);
+                }
                 Effect::Motion(dx, dy, w, p) => self.link.add_motion(dx, dy, w, p),
                 Effect::ReleaseAll => self.link.release_all(),
                 Effect::Notice(n) => notices.push(n),

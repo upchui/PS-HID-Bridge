@@ -269,15 +269,15 @@ fn trigger_summary(ctx: &Ctx, hotkey: Option<&str>) -> String {
 
 fn cmd_list_devices() -> Result<(), String> {
     let list = input::list_devices().map_err(|e| format!("/dev/input: {e}"))?;
-    println!("{:<20} {:<14} {:<10} Name", "Pfad", "Art", "ID");
+    println!("{:<20} {:<14} {:<10} {:<8} Name", "Pfad", "Art", "ID", "Zugriff");
     for d in &list.devices {
         if d.keyboard || d.mouse {
             println!(
-                "{:<20} {:<14} {:04x}:{:04x}  {}",
+                "{:<20} {:<14} {:<10} {:<8} {}",
                 d.path.display(),
                 d.kind(),
-                d.vendor,
-                d.product,
+                d.id_string(),
+                if d.accessible { "ja" } else { "nein" },
                 d.name
             );
         }
@@ -306,6 +306,13 @@ fn cmd_run(ctx: &Ctx, board: &BoardArgs, devices: &[String], hotkey: Option<&str
     let ecfg = engine_config(ctx, hotkey)?;
     let list = input::list_devices().map_err(|e| format!("/dev/input: {e}"))?;
     let selected = input::select(&list.devices, &specs);
+    let blocked: Vec<_> = selected.iter().filter(|d| !d.accessible).collect();
+    if !blocked.is_empty() {
+        let names: Vec<_> = blocked.iter().map(|d| d.name.as_str()).collect();
+        return Err(format!(
+            "Kein Leserecht für {names:?} (siehe README, „Gerätezugriff“)."
+        ));
+    }
     if selected.is_empty() {
         let mut msg = format!("Kein Gerät passt zu {specs:?}.");
         if list.inaccessible > 0 {
@@ -330,8 +337,8 @@ fn cmd_run(ctx: &Ctx, board: &BoardArgs, devices: &[String], hotkey: Option<&str
     }
 
     let (tx, rx) = mpsc::channel();
-    let readers = Readers::start(&selected, tx).map_err(|e| format!("Gerät öffnen: {e}"))?;
-    let grab = readers.grab_flag();
+    let grab = Arc::new(AtomicBool::new(false));
+    let readers = Readers::start(&selected, tx, grab.clone()).map_err(|e| format!("Gerät öffnen: {e}"))?;
     let watchdog = Watchdog::start(link.clone(), grab.clone(), Duration::from_secs(1));
     let mut ctl = Controller::new(Engine::new(ecfg), link.clone(), Some(grab));
     install_signal_handlers();
@@ -347,8 +354,8 @@ fn cmd_run(ctx: &Ctx, board: &BoardArgs, devices: &[String], hotkey: Option<&str
     while !STOP.load(Ordering::Acquire) {
         watchdog.feed();
         match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(InputMsg::Event(ev)) => {
-                for n in ctl.handle(ev, Instant::now()) {
+            Ok(InputMsg::Event { event, .. }) => {
+                for n in ctl.handle(event, Instant::now()) {
                     println!("{}", notice_text(n));
                 }
             }

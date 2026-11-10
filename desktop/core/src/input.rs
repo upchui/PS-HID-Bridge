@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::thread::{self, JoinHandle};
 
-use evdev::{Device, EventType, KeyCode, RelativeAxisCode};
+use evdev::{Device, EventType};
 
 use crate::engine::Event;
 
@@ -28,27 +28,69 @@ pub struct DeviceInfo {
     pub product: u16,
     pub keyboard: bool,
     pub mouse: bool,
+    /// We may open the event node (udev rule / group in place).
+    pub accessible: bool,
+}
+
+const KEY_A: usize = 30;
+const KEY_Z: usize = 44;
+const KEY_ENTER: usize = 28;
+const BTN_LEFT: usize = 0x110;
+const REL_X: usize = 0;
+const REL_Y: usize = 1;
+
+/// Is bit `n` set in a sysfs capability bitmap ("hex words, most significant first")?
+pub fn caps_bit(caps: &str, n: usize) -> bool {
+    let bits = usize::BITS as usize;
+    caps.split_whitespace()
+        .rev()
+        .nth(n / bits)
+        .and_then(|w| usize::from_str_radix(w, 16).ok())
+        .is_some_and(|w| w & (1 << (n % bits)) != 0)
+}
+
+fn sysfs(dir: &Path, attr: &str) -> String {
+    fs::read_to_string(dir.join(attr))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn readable(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: valid NUL-terminated path.
+    unsafe { libc::access(c.as_ptr(), libc::R_OK) == 0 }
 }
 
 impl DeviceInfo {
-    fn from_device(path: &Path, dev: &Device) -> Self {
-        let keys = dev.supported_keys();
-        let has_key = |k: KeyCode| keys.is_some_and(|s| s.contains(k));
-        let rel = dev.supported_relative_axes();
-        let has_rel = |r: RelativeAxisCode| rel.is_some_and(|s| s.contains(r));
-        let id = dev.input_id();
-        Self {
-            path: path.to_path_buf(),
-            name: dev.name().unwrap_or("").to_string(),
-            phys: dev.physical_path().unwrap_or("").to_string(),
-            uniq: dev.unique_name().unwrap_or("").to_string(),
-            vendor: id.vendor(),
-            product: id.product(),
-            keyboard: has_key(KeyCode::KEY_A) && has_key(KeyCode::KEY_Z) && has_key(KeyCode::KEY_ENTER),
-            mouse: has_rel(RelativeAxisCode::REL_X)
-                && has_rel(RelativeAxisCode::REL_Y)
-                && has_key(KeyCode::BTN_LEFT),
+    /// Describe /dev/input/eventN from sysfs (works without access rights).
+    pub fn from_sysfs(sys_root: &Path, event: &str) -> Option<Self> {
+        let dev = sys_root.join(event).join("device");
+        let name = sysfs(&dev, "name");
+        if name.is_empty() {
+            return None;
         }
+        let keys = sysfs(&dev, "capabilities/key");
+        let rel = sysfs(&dev, "capabilities/rel");
+        let hex = |s: String| u16::from_str_radix(&s, 16).unwrap_or(0);
+        let path = PathBuf::from("/dev/input").join(event);
+        Some(Self {
+            accessible: readable(&path),
+            path,
+            name,
+            phys: sysfs(&dev, "phys"),
+            uniq: sysfs(&dev, "uniq"),
+            vendor: hex(sysfs(&dev, "id/vendor")),
+            product: hex(sysfs(&dev, "id/product")),
+            keyboard: caps_bit(&keys, KEY_A) && caps_bit(&keys, KEY_Z) && caps_bit(&keys, KEY_ENTER),
+            mouse: caps_bit(&rel, REL_X) && caps_bit(&rel, REL_Y) && caps_bit(&keys, BTN_LEFT),
+        })
+    }
+
+    pub fn id_string(&self) -> String {
+        format!("{:04x}:{:04x}", self.vendor, self.product)
     }
 
     pub fn kind(&self) -> &'static str {
@@ -77,40 +119,36 @@ impl DeviceInfo {
 
 pub struct DeviceList {
     pub devices: Vec<DeviceInfo>,
-    /// Event nodes we may not open (missing udev rule / group).
+    /// Keyboards/mice we may not open (missing udev rule / group).
     pub inaccessible: usize,
 }
 
-fn event_number(p: &Path) -> u32 {
-    p.file_name()
-        .and_then(|n| n.to_str())
-        .and_then(|n| n.strip_prefix("event"))
+fn event_number(name: &str) -> u32 {
+    name.strip_prefix("event")
         .and_then(|n| n.parse().ok())
         .unwrap_or(u32::MAX)
 }
 
+/// All input event devices, described from sysfs (no access rights needed).
 pub fn list_devices() -> io::Result<DeviceList> {
-    let mut paths: Vec<PathBuf> = fs::read_dir("/dev/input")?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("event"))
-        })
+    let root = Path::new("/sys/class/input");
+    let mut names: Vec<String> = fs::read_dir(root)?
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|n| n.starts_with("event"))
         .collect();
-    paths.sort_by_key(|p| event_number(p));
-    let mut list = DeviceList {
-        devices: Vec::new(),
-        inaccessible: 0,
-    };
-    for path in paths {
-        match Device::open(&path) {
-            Ok(dev) => list.devices.push(DeviceInfo::from_device(&path, &dev)),
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => list.inaccessible += 1,
-            Err(_) => {}
-        }
-    }
-    Ok(list)
+    names.sort_by_key(|n| event_number(n));
+    let devices: Vec<DeviceInfo> = names
+        .iter()
+        .filter_map(|n| DeviceInfo::from_sysfs(root, n))
+        .collect();
+    let inaccessible = devices
+        .iter()
+        .filter(|d| (d.keyboard || d.mouse) && !d.accessible)
+        .count();
+    Ok(DeviceList {
+        devices,
+        inaccessible,
+    })
 }
 
 /// All devices matching any of the selectors (keyboards and mice only).
@@ -123,17 +161,12 @@ pub fn select(devices: &[DeviceInfo], specs: &[String]) -> Vec<DeviceInfo> {
 }
 
 pub enum InputMsg {
-    Event(Event),
+    /// An event from device number `dev` (index into the list given to Readers::start).
+    Event { dev: usize, event: Event },
     /// The device disappeared or failed; its reader has stopped.
-    Gone {
-        path: PathBuf,
-        error: String,
-    },
+    Gone { path: PathBuf, error: String },
     /// Grabbing failed (e.g. another program holds the device).
-    GrabFailed {
-        path: PathBuf,
-        error: String,
-    },
+    GrabFailed { path: PathBuf, error: String },
 }
 
 pub struct Readers {
@@ -143,18 +176,18 @@ pub struct Readers {
 }
 
 impl Readers {
-    pub fn start(devices: &[DeviceInfo], tx: Sender<InputMsg>) -> io::Result<Self> {
-        let grab = Arc::new(AtomicBool::new(false));
+    /// `grab`: shared flag; while true, every reader grabs its device.
+    pub fn start(devices: &[DeviceInfo], tx: Sender<InputMsg>, grab: Arc<AtomicBool>) -> io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let mut threads = Vec::new();
-        for info in devices {
+        for (index, info) in devices.iter().enumerate() {
             let dev = Device::open(&info.path)?;
             dev.set_nonblocking(true)?;
             let (grab, stop, tx, path) = (grab.clone(), stop.clone(), tx.clone(), info.path.clone());
             threads.push(
                 thread::Builder::new()
                     .name("pshb-input".into())
-                    .spawn(move || reader(dev, path, grab, stop, tx))?,
+                    .spawn(move || reader(index, dev, path, grab, stop, tx))?,
             );
         }
         Ok(Self { grab, stop, threads })
@@ -184,6 +217,7 @@ impl Drop for Readers {
 }
 
 fn reader(
+    index: usize,
     mut dev: Device,
     path: PathBuf,
     grab: Arc<AtomicBool>,
@@ -244,8 +278,8 @@ fn reader(
                         EventType::SYNCHRONIZATION if ev.code() == 0 => Some(Event::Sync),
                         _ => None,
                     };
-                    if let Some(e) = mapped
-                        && tx.send(InputMsg::Event(e)).is_err()
+                    if let Some(event) = mapped
+                        && tx.send(InputMsg::Event { dev: index, event }).is_err()
                     {
                         return;
                     }
@@ -270,8 +304,20 @@ fn reader(
 mod tests {
     use super::*;
 
+    #[test]
+    fn capability_bitmaps() {
+        // Typical keyboard: words for bits 128..191, 64..127, 0..63
+        let caps = "1000000000007 ff9f207ac14057ff febeffdfffefffff fffffffffffffffe";
+        assert!(caps_bit(caps, KEY_A));
+        assert!(caps_bit(caps, KEY_ENTER));
+        assert!(!caps_bit(caps, 0));
+        assert!(!caps_bit("", 5));
+        assert!(caps_bit("3", REL_Y) && !caps_bit("3", 2));
+    }
+
     fn dev(name: &str, kb: bool, mouse: bool) -> DeviceInfo {
         DeviceInfo {
+            accessible: true,
             path: PathBuf::from("/dev/input/event7"),
             name: name.into(),
             phys: String::new(),

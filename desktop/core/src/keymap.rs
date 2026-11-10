@@ -247,6 +247,15 @@ pub fn code_by_name(name: &str) -> Option<u16> {
     TABLE.iter().find(|(_, n, _)| *n == bare).map(|(c, _, _)| *c)
 }
 
+/// Readable name of a HID usage (page 0x07), for the live view.
+pub fn usage_name(usage: u8) -> String {
+    TABLE
+        .iter()
+        .find(|(_, _, u)| *u == usage)
+        .map(|(_, n, _)| n.to_string())
+        .unwrap_or_else(|| format!("0x{usage:02x}"))
+}
+
 /// Readable name of a code ("A", "LEFTCTRL", "BTN_SIDE", or the number).
 pub fn name_of(code: u16) -> String {
     if let Some((_, n)) = BUTTON_NAMES.iter().find(|(c, _)| *c == code) {

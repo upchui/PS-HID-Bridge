@@ -16,13 +16,14 @@ QT_JOBS ?= 6
 FW_IMAGE      := pshb-firmware
 RUST_IMAGE    := pshb-rust
 DESKTOP_IMAGE := pshb-desktop
+APPTEST_IMAGE := pshb-apptest
 
 FW_ARGS      := UBUNTU_TAG PICO_SDK_TAG PICOTOOL_TAG ARM_TOOLCHAIN_VERSION ARM_TOOLCHAIN_SHA256
 RUST_ARGS    := ALMA_TAG CMAKE_VERSION CMAKE_SHA256 RUSTUP_VERSION RUSTUP_SHA256 RUST_VERSION
 DESKTOP_ARGS := $(RUST_ARGS) QT_VERSION QTBASE_SHA256 QTSHADERTOOLS_SHA256 QTDECLARATIVE_SHA256 \
                 QTSVG_SHA256 KF_VERSION ECM_SHA256 KIRIGAMI_SHA256 \
                 LINUXDEPLOY_TAG LINUXDEPLOY_SHA256 LINUXDEPLOY_QT_TAG LINUXDEPLOY_QT_SHA256 \
-                LINUXDEPLOY_APPIMAGE_TAG LINUXDEPLOY_APPIMAGE_SHA256
+                LINUXDEPLOY_APPIMAGE_TAG LINUXDEPLOY_APPIMAGE_SHA256 APPIMAGE_RUNTIME_TAG APPIMAGE_RUNTIME_SHA256
 
 build_args = $(foreach v,$(1),--build-arg $(v)=$($(v)))
 
@@ -37,7 +38,7 @@ DESKTOP_RUN = $(DOCKER_RUN) -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR
 FW_RUN      = $(DOCKER_RUN) $(FW_IMAGE)
 
 .PHONY: help all firmware desktop desktop-cli test test-firmware test-desktop test-appimage \
-        test-sim test-protocol sim udp-test fmt submodules check-pins images image-firmware image-rust image-desktop \
+        test-sim test-protocol test-uf2 sim udp-test fmt submodules check-pins images image-firmware image-rust image-desktop \
         shell-fw shell-desktop clean distclean dirs
 
 help:
@@ -54,7 +55,7 @@ help:
 	@echo "  make shell-fw | shell-desktop   interactive build shell"
 	@echo "  make clean | distclean"
 
-all: firmware desktop-cli desktop test test-appimage
+all: firmware desktop-cli desktop test test-uf2 test-appimage
 
 dirs:
 	@mkdir -p out .cache/home .cache/cargo
@@ -72,6 +73,10 @@ image-rust:
 image-desktop:
 	docker build $(call build_args,$(DESKTOP_ARGS)) --build-arg JOBS=$(QT_JOBS) --target desktop \
 		-t $(DESKTOP_IMAGE) -f docker/desktop.Dockerfile docker
+
+image-apptest:
+	docker build --build-arg ALMA_TAG=$(ALMA_TAG) --target appimage-test \
+		-t $(APPTEST_IMAGE) -f docker/desktop.Dockerfile docker
 
 # ---------------------------------------------------------------- sources
 submodules:
@@ -105,6 +110,11 @@ test-firmware: image-firmware dirs
 		&& cmake --build $(HOST_BUILD) --parallel $(JOBS) \
 		&& ctest --test-dir $(HOST_BUILD) --output-on-failure'
 
+# The real firmware UF2 goes through the network-update writer unchanged.
+test-uf2: firmware test-firmware
+	$(FW_RUN) env PSHB_TEST_UF2=out/ps5-hid-bridge.uf2 PSHB_TEST_BIN=$(FW_BUILD)/ps5-hid-bridge.bin \
+		$(HOST_BUILD)/test_uf2_writer
+
 # Vectors are up to date and the Python reference agrees with them.
 test-protocol: image-firmware dirs
 	$(FW_RUN) bash -c 'python3 protocol/tools/gen_vectors.py --check && python3 protocol/tools/test_vectors.py'
@@ -122,9 +132,11 @@ test-desktop: image-rust dirs
 fmt: image-rust dirs
 	$(RUST_RUN) bash -c 'cd desktop && cargo fmt --all'
 
-# Smoke test of the packaged app: loads all QML offscreen and quits.
-test-appimage: image-desktop dirs
-	$(DESKTOP_RUN) bash -c 'QT_QPA_PLATFORM=offscreen timeout 60 out/PS5-HID-Bridge-x86_64.AppImage --self-test'
+# Smoke test of the packaged app on a system without Qt: loads every page
+# offscreen (warnings are fatal) and quits.
+test-appimage: image-apptest dirs
+	$(DOCKER_RUN) -e APPIMAGE_EXTRACT_AND_RUN=1 -e TMPDIR=/tmp -e LANG=C.UTF-8 $(APPTEST_IMAGE) \
+		bash -c 'timeout 120 out/PS5-HID-Bridge-x86_64.AppImage --self-test'
 
 # ---------------------------------------------------------------- manual testing
 SIM_PORT ?= 45045
