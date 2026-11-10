@@ -24,23 +24,23 @@ Kirigami.ScrollablePage {
 
             Controls.TextField {
                 id: address
-                Kirigami.FormData.label: "Adresse:"
+                Kirigami.FormData.label: "Address:"
                 Layout.preferredWidth: Kirigami.Units.gridUnit * 16
                 text: AppController.boardAddress
-                placeholderText: "z. B. 192.168.1.50"
+                placeholderText: "e.g. 192.168.1.50"
             }
             Controls.TextField {
                 id: psk
-                Kirigami.FormData.label: "Pre-Shared Key:"
+                Kirigami.FormData.label: "Pre-shared key:"
                 Layout.preferredWidth: Kirigami.Units.gridUnit * 24
                 echoMode: TextInput.Password
-                placeholderText: AppController.pskSet ? "gespeichert – nur zum Ändern ausfüllen" : "64 Hex-Zeichen aus der Weboberfläche"
+                placeholderText: AppController.pskSet ? "stored – fill in only to change it" : "64 hex digits from the web interface"
             }
         }
 
         RowLayout {
             Controls.Button {
-                text: "Speichern und verbinden"
+                text: "Save and connect"
                 highlighted: true
                 onClicked: {
                     page.error = AppController.saveBoard(address.text, psk.text);
@@ -50,7 +50,7 @@ Kirigami.ScrollablePage {
                 }
             }
             Controls.Button {
-                text: "Weboberfläche öffnen"
+                text: "Open web interface"
                 enabled: AppController.boardAddress !== ""
                 onClicked: Qt.openUrlExternally("http://" + page.host() + "/")
             }
@@ -66,14 +66,14 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             visible: page.saved && page.error === ""
             type: AppController.connected ? Kirigami.MessageType.Positive : Kirigami.MessageType.Information
-            text: AppController.connected ? "Verbunden." : "Gespeichert. Verbinde …"
+            text: AppController.connected ? "Connected." : "Saved. Connecting …"
         }
 
         Kirigami.FormLayout {
             Layout.fillWidth: true
             Controls.Label {
-                Kirigami.FormData.label: "Verbindung:"
-                text: AppController.connected ? "verbunden" : "nicht erreichbar"
+                Kirigami.FormData.label: "Connection:"
+                text: AppController.connected ? "connected" : "not reachable"
             }
             Controls.Label {
                 Kirigami.FormData.label: "Firmware:"
@@ -84,7 +84,7 @@ Kirigami.ScrollablePage {
                 text: AppController.boardUsb !== "" ? AppController.boardUsb : "–"
             }
             Controls.Label {
-                Kirigami.FormData.label: "Desktop-App:"
+                Kirigami.FormData.label: "Desktop app:"
                 text: "Version " + AppController.version
             }
         }
@@ -93,7 +93,7 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
             opacity: 0.8
-            text: "Den Schlüssel erzeugt die Weboberfläche des Boards unter „Sicherheit“. Die Adresse steht im Router (Gerätename ps5-hid-bridge-…)."
+            text: "The board's web interface creates the key under \"Security\". Your router shows the address (device name ps5-hid-bridge-…)."
         }
     }
 }

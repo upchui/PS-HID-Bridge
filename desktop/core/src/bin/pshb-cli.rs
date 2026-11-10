@@ -10,7 +10,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use pshb_core::config::{self, Config};
 use pshb_core::controller::{Controller, Watchdog};
 use pshb_core::crypto::parse_key_hex;
@@ -22,9 +22,9 @@ use pshb_core::transport::{KeyState, Link, LinkConfig};
 use pshb_core::trigger::{Action, Trigger};
 
 #[derive(Parser)]
-#[command(name = "pshb-cli", version, about = "PS5 HID Bridge – Kommandozeile")]
+#[command(name = "pshb-cli", version, about = "PS5 HID Bridge – command line")]
 struct Cli {
-    /// Einstellungsdatei (Standard: ~/.config/ps5-hid-bridge/config.toml)
+    /// Settings file (default: ~/.config/ps5-hid-bridge/config.toml)
     #[arg(long, global = true)]
     config: Option<PathBuf>,
     #[command(subcommand)]
@@ -33,70 +33,70 @@ struct Cli {
 
 #[derive(Args, Clone, Default)]
 struct BoardArgs {
-    /// Adresse des Boards, z. B. 192.168.1.50 oder 192.168.1.50:45045
+    /// Board address, e.g. 192.168.1.50 or 192.168.1.50:45045
     #[arg(long)]
     board: Option<String>,
-    /// Pre-Shared Key als 64 Hex-Zeichen
+    /// Pre-shared key as 64 hex digits
     #[arg(long, conflicts_with = "psk_file")]
     psk: Option<String>,
-    /// Datei mit dem Pre-Shared Key (Standard: ~/.config/ps5-hid-bridge/psk)
+    /// File with the pre-shared key (default: ~/.config/ps5-hid-bridge/psk)
     #[arg(long)]
     psk_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Eingabegeräte auflisten
+    /// List input devices
     ListDevices,
-    /// Maus und Tastatur an das Board weiterleiten
+    /// Forward mouse and keyboard to the board
     Run {
         #[command(flatten)]
         board: BoardArgs,
-        /// Gerät (Pfad, vvvv:pppp oder Teil des Namens); mehrfach möglich
+        /// Device (path, vvvv:pppp or part of the name); can be repeated
         #[arg(long = "device")]
         devices: Vec<String>,
-        /// Tastenkombination zum Umschalten, z. B. "Strg+Alt+P"
+        /// Key combination that toggles the bridge, e.g. "Ctrl+Alt+P"
         #[arg(long)]
         hotkey: Option<String>,
     },
-    /// Eingaben aus einer Skriptdatei abspielen (Test ohne echte Geräte)
+    /// Play input from a script file (test without real devices)
     Replay {
         #[command(flatten)]
         board: BoardArgs,
-        /// Skriptdatei (Format siehe README)
+        /// Script file (format: see README)
         file: PathBuf,
         #[arg(long)]
         hotkey: Option<String>,
     },
-    /// Verbindung prüfen und Board-Status anzeigen
+    /// Check the connection and show the board status
     Ping {
         #[command(flatten)]
         board: BoardArgs,
         #[arg(long, default_value_t = 5)]
         count: u32,
     },
-    /// Einmalig Tasten/Mausbewegung senden (zum Testen)
+    /// Send keys or mouse motion once (for testing)
     Send {
         #[command(flatten)]
         board: BoardArgs,
-        /// HID-Tastencodes (hex), z. B. 04,1d
+        /// HID key codes (hex), e.g. 04,1d
         #[arg(long, value_delimiter = ',')]
         keys: Vec<String>,
-        /// Modifikator-Byte (hex), z. B. 02 = Shift links
+        /// Modifier byte (hex), e.g. 02 = left Shift
         #[arg(long, default_value = "0")]
         mods: String,
-        /// Maustasten-Bits (hex)
+        /// Mouse button bits (hex)
         #[arg(long, default_value = "0")]
         buttons: String,
         #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
         dx: i32,
         #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
         dy: i32,
-        /// So lange gedrückt halten, dann alles loslassen
+        /// Hold this long, then release everything
         #[arg(long, default_value_t = 100)]
         hold_ms: u64,
     },
-    /// Einstellungen anzeigen und ändern
+    /// Show and change settings
     Config {
         #[command(subcommand)]
         cmd: ConfigCmd,
@@ -105,30 +105,52 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ConfigCmd {
-    /// Aktuelle Einstellungen anzeigen
+    /// Show the current settings
     Show,
-    /// Einstellungen setzen
+    /// Change settings
     Set {
         #[arg(long)]
         board: Option<String>,
-        /// Geräteliste ersetzen (mehrfach möglich)
+        /// Replace the device list (can be repeated)
         #[arg(long = "device")]
         devices: Vec<String>,
-        /// Umschalt-Kombination ersetzen, z. B. "Strg+Alt+P"
+        /// Replace the toggle combination, e.g. "Ctrl+Alt+P"
         #[arg(long)]
         hotkey: Option<String>,
-        /// Fensterregel: aktiv, solange dieses Fenster den Fokus hat (leer = aus)
-        #[arg(long)]
+        /// Window rule on or off (desktop app, KDE Plasma): forward while the
+        /// matching window has the focus
+        #[arg(long, value_enum)]
+        window_rule_enabled: Option<OnOff>,
+        /// Window rule pattern: part of the window class, title or desktop file
+        /// (default: "chiaki-ng")
+        #[arg(long, value_name = "TEXT")]
         window_rule: Option<String>,
+        /// Physical keyboard type: iso (e.g. German, UK) or ansi (e.g. US)
+        #[arg(long, value_enum)]
+        keyboard: Option<KeyboardType>,
         #[arg(long)]
         sensitivity: Option<f64>,
         #[arg(long)]
         accel: Option<f64>,
     },
-    /// Pre-Shared Key speichern ("-" liest von der Standardeingabe)
+    /// Store the pre-shared key ("-" reads it from standard input)
     SetPsk { key: String },
-    /// Neuen zufälligen Pre-Shared Key erzeugen, speichern und anzeigen
+    /// Create, store and print a new random pre-shared key
     GenPsk,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum OnOff {
+    On,
+    Off,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum KeyboardType {
+    /// ISO keyboard (105 keys, e.g. German, UK): extra key next to Enter
+    Iso,
+    /// ANSI keyboard (104 keys, e.g. US)
+    Ansi,
 }
 
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -153,7 +175,7 @@ struct Ctx {
 
 fn resolve(board: &str) -> Result<SocketAddr, String> {
     if board.is_empty() {
-        return Err("Keine Board-Adresse: --board angeben oder „pshb-cli config set --board …“.".into());
+        return Err("No board address: pass --board or run \"pshb-cli config set --board …\".".into());
     }
     let with_port = if board.contains(':') {
         board.to_string()
@@ -162,9 +184,9 @@ fn resolve(board: &str) -> Result<SocketAddr, String> {
     };
     with_port
         .to_socket_addrs()
-        .map_err(|e| format!("Adresse {board} nicht auflösbar: {e}"))?
+        .map_err(|e| format!("Cannot resolve address {board}: {e}"))?
         .next()
-        .ok_or_else(|| format!("Adresse {board} nicht auflösbar"))
+        .ok_or_else(|| format!("Cannot resolve address {board}"))
 }
 
 fn board_addr(ctx: &Ctx, args: &BoardArgs) -> Result<SocketAddr, String> {
@@ -188,9 +210,9 @@ fn start_link(ctx: &Ctx, args: &BoardArgs, ping: Duration) -> Result<Link, Strin
 
 fn no_answer_reason(link: &Link) -> String {
     if link.status().bad_replies > 0 {
-        "Das Board antwortet, aber die Antworten sind nicht gültig signiert: Stimmt der Schlüssel?".into()
+        "The board answers, but the answers are not validly signed: is the key correct?".into()
     } else {
-        "Keine Antwort vom Board (Adresse, Port, Schlüssel und Absenderfilter prüfen).".into()
+        "No answer from the board (check address, port, key and sender filter).".into()
     }
 }
 
@@ -203,23 +225,23 @@ fn connect(ctx: &Ctx, args: &BoardArgs, ping: Duration) -> Result<Link, String> 
 }
 
 fn parse_hex_u8(s: &str) -> Result<u8, String> {
-    u8::from_str_radix(s.trim_start_matches("0x"), 16).map_err(|_| format!("keine Hex-Zahl: {s}"))
+    u8::from_str_radix(s.trim_start_matches("0x"), 16).map_err(|_| format!("not a hex number: {s}"))
 }
 
 fn describe(p: &Pong) -> String {
     let mut flags = vec![if p.status & protocol::STATUS_USB_MOUNTED != 0 {
-        "USB verbunden"
+        "USB connected"
     } else {
-        "USB getrennt"
+        "USB disconnected"
     }];
     if p.status & protocol::STATUS_USB_SUSPENDED != 0 {
-        flags.push("USB im Ruhemodus");
+        flags.push("USB suspended");
     }
     if p.status & protocol::STATUS_FAILSAFE != 0 {
-        flags.push("Failsafe aktiv");
+        flags.push("failsafe active");
     }
     format!(
-        "Firmware {}, Laufzeit {:.1} s, Session {:016x}, {}\n  Pakete: ok {}, Signatur falsch {}, Replay {}, gefiltert {}, fehlerhaft {}",
+        "Firmware {}, up {:.1} s, session {:016x}, {}\n  Packets: ok {}, bad signature {}, replay {}, filtered {}, malformed {}",
         p.fw_version_string(),
         p.uptime_ms as f64 / 1000.0,
         p.session_id,
@@ -234,13 +256,13 @@ fn describe(p: &Pong) -> String {
 
 fn notice_text(n: Notice) -> &'static str {
     match n {
-        Notice::Activated => "Steuerung AN – Maus und Tastatur gehen an die PS5.",
-        Notice::Deactivated => "Steuerung AUS – Maus und Tastatur gehören wieder dem Desktop.",
-        Notice::WaitingForRelease => "Bitte alle Tasten loslassen …",
-        Notice::Paused => "Pausiert.",
-        Notice::Resumed => "Fortgesetzt.",
-        Notice::Emergency => "Not-Aus: Geräte freigegeben.",
-        Notice::ReleasedAll => "Alle Tasten losgelassen.",
+        Notice::Activated => "Bridge ON – mouse and keyboard go to the PS5.",
+        Notice::Deactivated => "Bridge OFF – mouse and keyboard belong to the desktop again.",
+        Notice::WaitingForRelease => "Please release all keys …",
+        Notice::Paused => "Paused.",
+        Notice::Resumed => "Resumed.",
+        Notice::Emergency => "Emergency stop: devices released.",
+        Notice::ReleasedAll => "All keys released.",
     }
 }
 
@@ -269,7 +291,7 @@ fn trigger_summary(ctx: &Ctx, hotkey: Option<&str>) -> String {
 
 fn cmd_list_devices() -> Result<(), String> {
     let list = input::list_devices().map_err(|e| format!("/dev/input: {e}"))?;
-    println!("{:<20} {:<14} {:<10} {:<8} Name", "Pfad", "Art", "ID", "Zugriff");
+    println!("{:<20} {:<14} {:<10} {:<8} Name", "Path", "Kind", "ID", "Access");
     for d in &list.devices {
         if d.keyboard || d.mouse {
             println!(
@@ -277,14 +299,14 @@ fn cmd_list_devices() -> Result<(), String> {
                 d.path.display(),
                 d.kind(),
                 d.id_string(),
-                if d.accessible { "ja" } else { "nein" },
+                if d.accessible { "yes" } else { "no" },
                 d.name
             );
         }
     }
     if list.inaccessible > 0 {
         println!(
-            "\n{} Geräte ohne Leserecht. Zugriff einrichten: siehe README, Abschnitt „Gerätezugriff“.",
+            "\n{} devices without read access. To set up access see the README, section \"Device access\".",
             list.inaccessible
         );
     }
@@ -299,7 +321,7 @@ fn cmd_run(ctx: &Ctx, board: &BoardArgs, devices: &[String], hotkey: Option<&str
     };
     if specs.is_empty() {
         return Err(
-            "Keine Geräte gewählt: --device angeben oder „pshb-cli config set --device …“ (siehe list-devices)."
+            "No devices selected: pass --device or run \"pshb-cli config set --device …\" (see list-devices)."
                 .into(),
         );
     }
@@ -310,41 +332,41 @@ fn cmd_run(ctx: &Ctx, board: &BoardArgs, devices: &[String], hotkey: Option<&str
     if !blocked.is_empty() {
         let names: Vec<_> = blocked.iter().map(|d| d.name.as_str()).collect();
         return Err(format!(
-            "Kein Leserecht für {names:?} (siehe README, „Gerätezugriff“)."
+            "No read access to {names:?} (see the README, section \"Device access\")."
         ));
     }
     if selected.is_empty() {
-        let mut msg = format!("Kein Gerät passt zu {specs:?}.");
+        let mut msg = format!("No device matches {specs:?}.");
         if list.inaccessible > 0 {
             msg += &format!(
-                " {} Geräte sind ohne Leserecht (siehe README, „Gerätezugriff“).",
+                " {} devices have no read access (see the README, section \"Device access\").",
                 list.inaccessible
             );
         }
         return Err(msg);
     }
     for d in &selected {
-        println!("Gerät: {} ({}, {})", d.name, d.kind(), d.path.display());
+        println!("Device: {} ({}, {})", d.name, d.kind(), d.path.display());
     }
 
     let link = Arc::new(start_link(ctx, board, Duration::from_secs(1))?);
     if link.wait_connected(Duration::from_secs(2)) {
         if let Some(p) = link.status().board {
-            println!("Board verbunden: {}", describe(&p));
+            println!("Board connected: {}", describe(&p));
         }
     } else {
-        eprintln!("Warnung: {} Es wird weiter versucht.", no_answer_reason(&link));
+        eprintln!("Warning: {} Still trying.", no_answer_reason(&link));
     }
 
     let (tx, rx) = mpsc::channel();
     let grab = Arc::new(AtomicBool::new(false));
-    let readers = Readers::start(&selected, tx, grab.clone()).map_err(|e| format!("Gerät öffnen: {e}"))?;
+    let readers = Readers::start(&selected, tx, grab.clone()).map_err(|e| format!("Opening device: {e}"))?;
     let watchdog = Watchdog::start(link.clone(), grab.clone(), Duration::from_secs(1));
     let mut ctl = Controller::new(Engine::new(ecfg), link.clone(), Some(grab));
     install_signal_handlers();
 
     println!(
-        "Bereit. Umschalten: {}. Not-Aus: Strg+Alt+Shift+Esc. Beenden: Strg+C.",
+        "Ready. Toggle: {}. Emergency stop: Ctrl+Alt+Shift+Esc. Quit: Ctrl+C.",
         trigger_summary(ctx, hotkey)
     );
 
@@ -360,16 +382,16 @@ fn cmd_run(ctx: &Ctx, board: &BoardArgs, devices: &[String], hotkey: Option<&str
                 }
             }
             Ok(InputMsg::Gone { path, error }) => {
-                eprintln!("Gerät {} getrennt: {error}", path.display());
+                eprintln!("Device {} disconnected: {error}", path.display());
                 remaining -= 1;
                 if remaining == 0 {
-                    result = Err("Alle Geräte getrennt.".into());
+                    result = Err("All devices disconnected.".into());
                     break;
                 }
             }
             Ok(InputMsg::GrabFailed { path, error }) => {
                 eprintln!(
-                    "Gerät {} kann nicht exklusiv übernommen werden ({error}). Steuerung bleibt aus.",
+                    "Cannot grab device {} exclusively ({error}). The bridge stays off.",
                     path.display()
                 );
                 for n in ctl.command(Action::Off) {
@@ -380,7 +402,7 @@ fn cmd_run(ctx: &Ctx, board: &BoardArgs, devices: &[String], hotkey: Option<&str
             Err(RecvTimeoutError::Disconnected) => break,
         }
         if watchdog.take_fired() {
-            eprintln!("Watchdog: Hauptschleife hing, Geräte wurden freigegeben.");
+            eprintln!("Watchdog: the main loop hung, devices were released.");
         }
         let now_connected = link.status().is_connected();
         if now_connected != connected {
@@ -388,9 +410,9 @@ fn cmd_run(ctx: &Ctx, board: &BoardArgs, devices: &[String], hotkey: Option<&str
             println!(
                 "{}",
                 if connected {
-                    "Board wieder erreichbar."
+                    "Board reachable again."
                 } else {
-                    "Board nicht erreichbar – Eingaben gehen verloren, Verbindung wird weiter versucht."
+                    "Board not reachable – input is lost, still trying to connect."
                 }
             );
         }
@@ -400,7 +422,7 @@ fn cmd_run(ctx: &Ctx, board: &BoardArgs, devices: &[String], hotkey: Option<&str
     drop(watchdog);
     drop(readers);
     thread::sleep(Duration::from_millis(30));
-    println!("Beendet.");
+    println!("Stopped.");
     result
 }
 
@@ -434,7 +456,7 @@ fn cmd_ping(ctx: &Ctx, board: &BoardArgs, count: u32) -> Result<(), String> {
             last = st.last_pong;
             answered += 1;
             if let Some(rtt) = st.rtt {
-                println!("Antwort: Laufzeit {:.2} ms", rtt.as_secs_f64() * 1000.0);
+                println!("Answer: round trip {:.2} ms", rtt.as_secs_f64() * 1000.0);
             }
         }
     }
@@ -456,7 +478,7 @@ fn cmd_send(
     hold_ms: u64,
 ) -> Result<(), String> {
     if keys.len() > 6 {
-        return Err("Höchstens 6 Tasten.".into());
+        return Err("At most 6 keys.".into());
     }
     let mut state = KeyState {
         mods: parse_hex_u8(mods)?,
@@ -484,18 +506,27 @@ fn cmd_config(ctx: &mut Ctx, cmd: &ConfigCmd) -> Result<(), String> {
                 "{}",
                 toml::to_string_pretty(&ctx.config).map_err(|e| e.to_string())?
             );
+            let c = &ctx.config;
+            println!("# Keyboard type: {}", if c.iso_keyboard { "ISO" } else { "ANSI" });
+            println!(
+                "# Window rule: {} (pattern \"{}\")",
+                if c.window_rule_active() { "on" } else { "off" },
+                c.window_rule
+            );
             let psk = config::psk_path();
             println!(
-                "# Schlüssel: {} ({})",
+                "# Key: {} ({})",
                 psk.display(),
-                if psk.exists() { "vorhanden" } else { "fehlt" }
+                if psk.exists() { "present" } else { "missing" }
             );
         }
         ConfigCmd::Set {
             board,
             devices,
             hotkey,
+            window_rule_enabled,
             window_rule,
+            keyboard,
             sensitivity,
             accel,
         } => {
@@ -514,8 +545,14 @@ fn cmd_config(ctx: &mut Ctx, cmd: &ConfigCmd) -> Result<(), String> {
                     ..Default::default()
                 }];
             }
+            if let Some(on) = window_rule_enabled {
+                c.window_rule_enabled = matches!(on, OnOff::On);
+            }
             if let Some(w) = window_rule {
-                c.window_rule = w.clone();
+                c.window_rule = w.trim().to_string();
+            }
+            if let Some(k) = keyboard {
+                c.iso_keyboard = matches!(k, KeyboardType::Iso);
             }
             if let Some(s) = sensitivity {
                 c.mouse.sensitivity = *s;
@@ -525,7 +562,7 @@ fn cmd_config(ctx: &mut Ctx, cmd: &ConfigCmd) -> Result<(), String> {
             }
             c.engine_config()?;
             c.save(&ctx.config_path)?;
-            println!("Gespeichert: {}", ctx.config_path.display());
+            println!("Saved: {}", ctx.config_path.display());
         }
         ConfigCmd::SetPsk { key } => {
             let text = if key == "-" {
@@ -539,7 +576,7 @@ fn cmd_config(ctx: &mut Ctx, cmd: &ConfigCmd) -> Result<(), String> {
             };
             let k = parse_key_hex(&text)?;
             config::save_psk(&config::psk_path(), &k)?;
-            println!("Schlüssel gespeichert: {}", config::psk_path().display());
+            println!("Key saved: {}", config::psk_path().display());
         }
         ConfigCmd::GenPsk => {
             let mut k = [0u8; 32];
@@ -550,7 +587,7 @@ fn cmd_config(ctx: &mut Ctx, cmd: &ConfigCmd) -> Result<(), String> {
             let hex: String = k.iter().map(|b| format!("{b:02x}")).collect();
             println!("{hex}");
             eprintln!(
-                "Gespeichert in {}. Derselbe Schlüssel muss auf dem Board eingetragen sein.",
+                "Saved to {}. The same key must be set on the board.",
                 config::psk_path().display()
             );
         }
@@ -564,7 +601,7 @@ fn main() -> ExitCode {
     let config = match Config::load(&config_path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Fehler in den Einstellungen: {e}");
+            eprintln!("Error in the settings: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -592,7 +629,7 @@ fn main() -> ExitCode {
     match res {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("Fehler: {e}");
+            eprintln!("Error: {e}");
             ExitCode::FAILURE
         }
     }

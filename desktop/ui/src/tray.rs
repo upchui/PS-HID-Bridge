@@ -23,7 +23,7 @@ pub fn spawn(qt: CxxQtThread<AppController>) -> Option<ksni::blocking::Handle<Br
     match tray.spawn() {
         Ok(h) => Some(h),
         Err(e) => {
-            eprintln!("Tray nicht verfügbar: {e}");
+            eprintln!("Tray not available: {e}");
             None
         }
     }
@@ -68,11 +68,11 @@ impl ksni::Tray for BridgeTray {
 
     fn title(&self) -> String {
         if self.active {
-            "PS5 HID Bridge – Steuerung an".into()
+            "PS5 HID Bridge – bridge on".into()
         } else if self.connected {
-            "PS5 HID Bridge – bereit".into()
+            "PS5 HID Bridge – ready".into()
         } else {
-            "PS5 HID Bridge – Board nicht erreichbar".into()
+            "PS5 HID Bridge – board not reachable".into()
         }
     }
 
@@ -98,9 +98,9 @@ impl ksni::Tray for BridgeTray {
         vec![
             StandardItem {
                 label: if self.active {
-                    "Steuerung aus".into()
+                    "Bridge off".into()
                 } else {
-                    "Steuerung an".into()
+                    "Bridge on".into()
                 },
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.qt.queue(|obj| obj.toggle());
@@ -109,7 +109,7 @@ impl ksni::Tray for BridgeTray {
             }
             .into(),
             StandardItem {
-                label: "Alle Tasten loslassen".into(),
+                label: "Release all keys".into(),
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.qt.queue(|obj| obj.release_all());
                 }),
@@ -118,7 +118,7 @@ impl ksni::Tray for BridgeTray {
             .into(),
             ksni::MenuItem::Separator,
             StandardItem {
-                label: "Beenden".into(),
+                label: "Quit".into(),
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.qt.queue(|obj| obj.quit_app());
                 }),

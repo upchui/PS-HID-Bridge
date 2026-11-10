@@ -12,6 +12,7 @@ fn main() {
         "qml/DeviceList.qml",
         "qml/TriggerEditor.qml",
         "qml/CurvePlot.qml",
+        "qml/KeyboardTypeChooser.qml",
     ]))
     .files(["src/controller.rs"])
     .qt_module("Quick")

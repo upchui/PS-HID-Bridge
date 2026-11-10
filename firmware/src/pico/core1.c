@@ -150,10 +150,10 @@ static void network_service(void) {
 
 static const char *net_state_text(void) {
     switch (atomic_load(&g_net.state)) {
-    case NET_STATE_CHIP_ERROR: return "Netzwerkchip antwortet nicht";
-    case NET_STATE_NO_LINK: return "Kein Netzwerkkabel";
-    case NET_STATE_DHCP: return "DHCP läuft";
-    case NET_STATE_READY: return "Bereit";
+    case NET_STATE_CHIP_ERROR: return "Network chip not responding";
+    case NET_STATE_NO_LINK: return "No network cable";
+    case NET_STATE_DHCP: return "Waiting for DHCP";
+    case NET_STATE_READY: return "Ready";
     default: return "Start";
     }
 }

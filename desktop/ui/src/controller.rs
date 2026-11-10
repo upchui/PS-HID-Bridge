@@ -49,8 +49,10 @@ pub mod qobject {
         #[qproperty(i32, devices_blocked)]
         #[qproperty(i32, devices_open)]
         #[qproperty(QString, triggers_json)]
+        #[qproperty(bool, window_rule_enabled)]
         #[qproperty(QString, window_rule)]
         #[qproperty(bool, window_rule_available)]
+        #[qproperty(bool, iso_keyboard)]
         #[qproperty(f64, sensitivity)]
         #[qproperty(f64, accel)]
         #[qproperty(bool, setup_done)]
@@ -98,6 +100,12 @@ pub mod qobject {
         fn set_triggers(self: Pin<&mut AppController>, json: &QString) -> QString;
         #[qinvokable]
         fn set_window_rule_text(self: Pin<&mut AppController>, text: &QString);
+        /// Switch the window rule on or off.
+        #[qinvokable]
+        fn set_window_rule_on(self: Pin<&mut AppController>, on: bool);
+        /// Physical keyboard type: ISO (true) or ANSI (false).
+        #[qinvokable]
+        fn set_keyboard_type(self: Pin<&mut AppController>, iso: bool);
         #[qinvokable]
         fn set_mouse(self: Pin<&mut AppController>, sensitivity: f64, accel: f64);
         /// Gain of the acceleration curve at a given speed (for the curve plot).
@@ -137,8 +145,10 @@ pub struct AppControllerRust {
     devices_blocked: i32,
     devices_open: i32,
     triggers_json: QString,
+    window_rule_enabled: bool,
     window_rule: QString,
     window_rule_available: bool,
+    iso_keyboard: bool,
     sensitivity: f64,
     accel: f64,
     setup_done: bool,
@@ -163,7 +173,7 @@ impl Default for AppControllerRust {
             active: false,
             pending: false,
             paused: false,
-            status_text: QString::from("Nicht verbunden"),
+            status_text: QString::from("Not connected"),
             rtt_ms: -1.0,
             rtt_p50: -1.0,
             rtt_p95: -1.0,
@@ -177,8 +187,10 @@ impl Default for AppControllerRust {
             devices_blocked: 0,
             devices_open: 0,
             triggers_json: QString::from("[]"),
+            window_rule_enabled: false,
             window_rule: QString::default(),
             window_rule_available: false,
+            iso_keyboard: true,
             sensitivity: 1.0,
             accel: 0.0,
             setup_done: false,
@@ -221,12 +233,13 @@ fn group_devices(devices: &[DeviceInfo], config: &Config) -> Vec<DeviceGroup> {
                 g.name = d.name.clone();
             }
             let kinds = [g.kind.as_str(), d.kind()];
-            g.kind =
-                if kinds.iter().any(|k| k.contains("Tastatur")) && kinds.iter().any(|k| k.contains("Maus")) {
-                    "Tastatur + Maus".into()
-                } else {
-                    g.kind.clone()
-                };
+            g.kind = if kinds.iter().any(|k| k.contains("keyboard"))
+                && kinds.iter().any(|k| k.contains("mouse"))
+            {
+                "keyboard + mouse".into()
+            } else {
+                g.kind.clone()
+            };
         } else {
             groups.push(DeviceGroup {
                 selected: config.devices.iter().any(|s| s.eq_ignore_ascii_case(&id)),
@@ -244,11 +257,11 @@ fn group_devices(devices: &[DeviceInfo], config: &Config) -> Vec<DeviceGroup> {
 
 fn usb_text(p: &Pong) -> &'static str {
     if p.status & protocol::STATUS_USB_MOUNTED == 0 {
-        "PS5 nicht verbunden"
+        "PS5 not connected"
     } else if p.status & protocol::STATUS_USB_SUSPENDED != 0 {
-        "PS5 im Ruhemodus"
+        "PS5 in rest mode"
     } else {
-        "PS5 verbunden"
+        "PS5 connected"
     }
 }
 
@@ -257,7 +270,7 @@ impl qobject::AppController {
         let path = config::config_path();
         if let Err(e) = self.config_ref().save(&path) {
             self.as_mut()
-                .set_last_error(QString::from(&format!("Einstellungen: {e}")));
+                .set_last_error(QString::from(&format!("Settings: {e}")));
         }
     }
 
@@ -272,7 +285,9 @@ impl qobject::AppController {
         self.as_mut().set_triggers_json(QString::from(
             &serde_json::to_string(&c.triggers).unwrap_or_default(),
         ));
+        self.as_mut().set_window_rule_enabled(c.window_rule_enabled);
         self.as_mut().set_window_rule(QString::from(&c.window_rule));
+        self.as_mut().set_iso_keyboard(c.iso_keyboard);
         self.as_mut().set_sensitivity(c.mouse.sensitivity);
         self.as_mut().set_accel(c.mouse.accel);
         self.as_mut().set_setup_done(c.setup_done);
@@ -290,13 +305,13 @@ impl qobject::AppController {
         let cfg = self.config_ref().clone();
         if cfg.board.is_empty() {
             self.as_mut()
-                .set_status_text(QString::from("Board-Adresse fehlt"));
+                .set_status_text(QString::from("Board address missing"));
             return;
         }
         let key = match config::load_psk(&config::psk_path()) {
             Ok(k) => k,
             Err(_) => {
-                self.as_mut().set_status_text(QString::from("Schlüssel fehlt"));
+                self.as_mut().set_status_text(QString::from("Key missing"));
                 return;
             }
         };
@@ -320,7 +335,7 @@ impl qobject::AppController {
         match Service::start(sc, sink) {
             Ok(s) => {
                 self.as_mut().rust_mut().service = Some(s);
-                self.as_mut().set_status_text(QString::from("Verbinde …"));
+                self.as_mut().set_status_text(QString::from("Connecting …"));
                 self.as_mut().set_last_error(QString::default());
             }
             Err(e) => self.as_mut().set_last_error(QString::from(&e)),
@@ -330,10 +345,10 @@ impl qobject::AppController {
 
     fn restart_focus_watcher(mut self: Pin<&mut Self>) {
         self.as_mut().rust_mut().focus = None;
-        let rule = self.config_ref().window_rule.trim().to_string();
-        if rule.is_empty() {
+        if !self.config_ref().window_rule_active() {
             return;
         }
+        let rule = self.config_ref().window_rule.trim().to_string();
         let qt = self.qt_thread();
         match FocusWatcher::start(&rule, move |focused| {
             let _ = qt.queue(move |obj| obj.command(ServiceCmd::Focus(focused)));
@@ -341,7 +356,7 @@ impl qobject::AppController {
             Ok(w) => self.as_mut().rust_mut().focus = Some(w),
             Err(e) => self
                 .as_mut()
-                .set_last_error(QString::from(&format!("Fensterregel nicht verfügbar: {e}"))),
+                .set_last_error(QString::from(&format!("Window rule not available: {e}"))),
         }
     }
 
@@ -370,15 +385,15 @@ impl qobject::AppController {
             self.as_mut().set_board_usb(QString::from(usb_text(p)));
         }
         let text = if !st.connected {
-            "Board nicht erreichbar"
+            "Board not reachable"
         } else if st.active {
-            "Steuerung an"
+            "Bridge on"
         } else if st.pending {
-            "Bitte alle Tasten loslassen …"
+            "Please release all keys …"
         } else if st.paused {
-            "Pausiert"
+            "Paused"
         } else {
-            "Bereit"
+            "Ready"
         };
         self.as_mut().set_status_text(QString::from(text));
         if let Some(t) = &self.rust().tray {
@@ -394,12 +409,12 @@ impl qobject::AppController {
             ServiceEvent::Status(st) => self.as_mut().apply_status(st),
             ServiceEvent::Notice(n) => {
                 let msg = match n {
-                    Notice::Activated => Some(("Steuerung an", "Maus und Tastatur gehen an die PS5.")),
+                    Notice::Activated => Some(("Bridge on", "Mouse and keyboard go to the PS5.")),
                     Notice::Deactivated => {
-                        Some(("Steuerung aus", "Maus und Tastatur gehören wieder dem Desktop."))
+                        Some(("Bridge off", "Mouse and keyboard belong to the desktop again."))
                     }
-                    Notice::Emergency => Some(("Not-Aus", "Alle Geräte wurden freigegeben.")),
-                    Notice::Paused => Some(("Pausiert", "Eingaben werden nicht weitergeleitet.")),
+                    Notice::Emergency => Some(("Emergency stop", "All devices were released.")),
+                    Notice::Paused => Some(("Paused", "Input is not forwarded.")),
                     _ => None,
                 };
                 if let Some((summary, body)) = msg {
@@ -454,7 +469,7 @@ impl qobject::AppController {
                 Err(e) => return QString::from(&e),
             }
         } else if !config::psk_path().exists() {
-            return QString::from("Bitte den Schlüssel aus der Weboberfläche des Boards einfügen.");
+            return QString::from("Please paste the key from the board's web interface.");
         }
         self.as_mut().rust_mut().config.board = address;
         self.as_mut().save_config();
@@ -472,7 +487,7 @@ impl qobject::AppController {
             Ok(l) => l.devices,
             Err(e) => {
                 self.as_mut()
-                    .set_last_error(QString::from(&format!("Geräteliste: {e}")));
+                    .set_last_error(QString::from(&format!("Device list: {e}")));
                 return;
             }
         };
@@ -499,7 +514,7 @@ impl qobject::AppController {
     pub fn install_access(mut self: Pin<&mut Self>) -> QString {
         let selected = input::select(&self.rust().devices, &self.config_ref().devices);
         if selected.is_empty() {
-            return QString::from("Bitte zuerst Tastatur und Maus auswählen.");
+            return QString::from("Please select keyboard and mouse first.");
         }
         let rule = pshb_core::access::udev_rule(&selected);
         if let Err(e) = pshb_core::access::install_rule(&rule) {
@@ -515,8 +530,8 @@ impl qobject::AppController {
             .count();
         if still > 0 {
             QString::from(
-                "Regel installiert, aber noch kein Zugriff. Bitte die Geräte einmal aus- und wieder einstecken \
-                 oder neu anmelden.",
+                "Rule installed, but no access yet. Please unplug and replug the devices once, \
+                 or log in again.",
             )
         } else {
             QString::default()
@@ -536,7 +551,7 @@ impl qobject::AppController {
     pub fn set_triggers(mut self: Pin<&mut Self>, json: &QString) -> QString {
         let triggers: Vec<TriggerConfig> = match serde_json::from_str(&String::from(json)) {
             Ok(t) => t,
-            Err(e) => return QString::from(&format!("Ungültige Auslöser: {e}")),
+            Err(e) => return QString::from(&format!("Invalid triggers: {e}")),
         };
         for t in &triggers {
             if let Err(e) = t.to_trigger() {
@@ -552,6 +567,20 @@ impl qobject::AppController {
 
     pub fn set_window_rule_text(mut self: Pin<&mut Self>, text: &QString) {
         self.as_mut().rust_mut().config.window_rule = String::from(text).trim().to_string();
+        self.as_mut().save_config();
+        self.as_mut().publish_config();
+        self.as_mut().restart_service();
+    }
+
+    pub fn set_window_rule_on(mut self: Pin<&mut Self>, on: bool) {
+        self.as_mut().rust_mut().config.window_rule_enabled = on;
+        self.as_mut().save_config();
+        self.as_mut().publish_config();
+        self.as_mut().restart_service();
+    }
+
+    pub fn set_keyboard_type(mut self: Pin<&mut Self>, iso: bool) {
+        self.as_mut().rust_mut().config.iso_keyboard = iso;
         self.as_mut().save_config();
         self.as_mut().publish_config();
         self.as_mut().restart_service();
@@ -624,7 +653,7 @@ impl cxx_qt::Initialize for qobject::AppController {
 fn resolve(board: &str) -> Result<std::net::SocketAddr, String> {
     use std::net::ToSocketAddrs;
     if board.is_empty() {
-        return Err("Bitte die Adresse des Boards eingeben.".into());
+        return Err("Please enter the board address.".into());
     }
     let with_port = if board.contains(':') {
         board.to_string()
@@ -633,7 +662,7 @@ fn resolve(board: &str) -> Result<std::net::SocketAddr, String> {
     };
     with_port
         .to_socket_addrs()
-        .map_err(|_| format!("Adresse „{board}“ nicht gefunden."))?
+        .map_err(|_| format!("Address \"{board}\" not found."))?
         .next()
-        .ok_or_else(|| format!("Adresse „{board}“ nicht gefunden."))
+        .ok_or_else(|| format!("Address \"{board}\" not found."))
 }

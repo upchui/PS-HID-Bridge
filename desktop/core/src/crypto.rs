@@ -16,8 +16,8 @@ pub enum OpenError {
 impl std::fmt::Display for OpenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Malformed(why) => write!(f, "ungültiges Paket: {why}"),
-            Self::Auth => write!(f, "Signatur ungültig (falscher Schlüssel?)"),
+            Self::Malformed(why) => write!(f, "invalid packet: {why}"),
+            Self::Auth => write!(f, "invalid signature (wrong key?)"),
         }
     }
 }
@@ -73,15 +73,15 @@ impl PacketKey {
 /// Structural check: version, known type and exact length.
 pub fn check(packet: &[u8]) -> Result<Header, OpenError> {
     if packet.len() < HEADER_LEN + TAG_LEN {
-        return Err(OpenError::Malformed("zu kurz"));
+        return Err(OpenError::Malformed("too short"));
     }
     let header = Header::decode(packet);
     if header.version != VERSION {
-        return Err(OpenError::Malformed("Version"));
+        return Err(OpenError::Malformed("version"));
     }
-    let ptype = PacketType::from_u8(header.ptype).ok_or(OpenError::Malformed("Typ"))?;
+    let ptype = PacketType::from_u8(header.ptype).ok_or(OpenError::Malformed("type"))?;
     if packet.len() != HEADER_LEN + ptype.payload_len() + TAG_LEN {
-        return Err(OpenError::Malformed("Länge"));
+        return Err(OpenError::Malformed("length"));
     }
     Ok(header)
 }
@@ -91,7 +91,7 @@ pub fn parse_key_hex(text: &str) -> Result<[u8; KEY_LEN], String> {
     let digits: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     if digits.len() != 2 * KEY_LEN {
         return Err(format!(
-            "Der Schlüssel muss aus {} Hex-Zeichen bestehen (gefunden: {}).",
+            "The key must consist of {} hex digits (found: {}).",
             2 * KEY_LEN,
             digits.len()
         ));
@@ -99,7 +99,7 @@ pub fn parse_key_hex(text: &str) -> Result<[u8; KEY_LEN], String> {
     let mut key = [0u8; KEY_LEN];
     for (i, byte) in key.iter_mut().enumerate() {
         *byte = u8::from_str_radix(&digits[2 * i..2 * i + 2], 16)
-            .map_err(|_| "Der Schlüssel enthält Zeichen, die keine Hex-Ziffern sind.".to_string())?;
+            .map_err(|_| "The key contains characters that are not hex digits.".to_string())?;
     }
     Ok(key)
 }

@@ -1,8 +1,8 @@
 //! Trigger definitions: which input switches the bridge on and off.
 //!
 //! Textual form (config file, CLI, GUI recorder):
-//!   "Strg+Alt+P"            key combination (modifiers match left or right)
-//!   "Maus5" / "BTN_EXTRA"   mouse button (optionally with modifiers)
+//!   "Ctrl+Alt+P"            key combination (modifiers match left or right)
+//!   "Mouse5" / "BTN_EXTRA"  mouse button (optionally with modifiers)
 //!   "LEFTCTRL"              single key (e.g. for double tap)
 
 use crate::keymap::{self, BTN_EXTRA, BTN_MIDDLE, BTN_SIDE};
@@ -36,7 +36,7 @@ impl Combo {
         for raw in text.split('+') {
             let name = raw.trim();
             if name.is_empty() {
-                return Err(format!("Leerer Teil in „{text}“"));
+                return Err(format!("Empty part in \"{text}\""));
             }
             let alt = match name.to_ascii_lowercase().as_str() {
                 "strg" | "ctrl" | "control" => vec![KEY_LEFTCTRL, KEY_RIGHTCTRL],
@@ -44,10 +44,11 @@ impl Combo {
                 "alt" => vec![KEY_LEFTALT],
                 "altgr" => vec![KEY_RIGHTALT],
                 "super" | "meta" | "win" => vec![KEY_LEFTMETA, KEY_RIGHTMETA],
-                "maus4" | "mouse4" | "seitentaste4" => vec![BTN_SIDE],
-                "maus5" | "mouse5" | "seitentaste5" => vec![BTN_EXTRA],
-                "mausmitte" | "mousemiddle" => vec![BTN_MIDDLE],
-                _ => vec![keymap::code_by_name(name).ok_or_else(|| format!("Unbekannte Taste „{name}“"))?],
+                // German names are still accepted (configs from earlier versions).
+                "mouse4" | "maus4" | "seitentaste4" => vec![BTN_SIDE],
+                "mouse5" | "maus5" | "seitentaste5" => vec![BTN_EXTRA],
+                "mousemiddle" | "mausmitte" => vec![BTN_MIDDLE],
+                _ => vec![keymap::code_by_name(name).ok_or_else(|| format!("Unknown key \"{name}\""))?],
             };
             parts.push(KeyAlt(alt));
         }
@@ -63,21 +64,21 @@ impl Combo {
         self.0.iter().any(|alt| alt.matches(code))
     }
 
-    /// Canonical text form, e.g. "Strg+Alt+P".
+    /// Canonical text form, e.g. "Ctrl+Alt+P".
     pub fn to_text(&self) -> String {
         self.0
             .iter()
             .map(|alt| {
                 let c = alt.0[0];
                 match c {
-                    KEY_LEFTCTRL if alt.0.len() > 1 => "Strg".to_string(),
+                    KEY_LEFTCTRL if alt.0.len() > 1 => "Ctrl".to_string(),
                     KEY_LEFTSHIFT if alt.0.len() > 1 => "Shift".to_string(),
                     KEY_LEFTMETA if alt.0.len() > 1 => "Super".to_string(),
                     KEY_LEFTALT => "Alt".to_string(),
                     KEY_RIGHTALT => "AltGr".to_string(),
-                    BTN_SIDE => "Maus4".to_string(),
-                    BTN_EXTRA => "Maus5".to_string(),
-                    BTN_MIDDLE => "MausMitte".to_string(),
+                    BTN_SIDE => "Mouse4".to_string(),
+                    BTN_EXTRA => "Mouse5".to_string(),
+                    BTN_MIDDLE => "MouseMiddle".to_string(),
                     _ => keymap::name_of(c),
                 }
             })
@@ -104,7 +105,7 @@ impl Action {
             "off" | "aus" => Self::Off,
             "pause" | "pausieren" => Self::Pause,
             "release" | "release-all" | "loslassen" => Self::ReleaseAll,
-            _ => return Err(format!("Unbekannte Aktion „{s}“")),
+            _ => return Err(format!("Unknown action \"{s}\"")),
         })
     }
 
@@ -146,7 +147,7 @@ impl Trigger {
 
 /// The fixed emergency combination: always releases the devices.
 pub fn emergency_combo() -> Combo {
-    Combo::parse("Strg+Alt+Shift+Esc").unwrap()
+    Combo::parse("Ctrl+Alt+Shift+Esc").unwrap()
 }
 
 #[cfg(test)]
@@ -155,19 +156,27 @@ mod tests {
 
     #[test]
     fn parse_and_print() {
-        let c = Combo::parse("strg+Alt+p").unwrap();
-        assert_eq!(c.to_text(), "Strg+Alt+P");
+        let c = Combo::parse("ctrl+Alt+p").unwrap();
+        assert_eq!(c.to_text(), "Ctrl+Alt+P");
         assert!(c.satisfied(&[KEY_RIGHTCTRL, KEY_LEFTALT, 25]));
         assert!(!c.satisfied(&[KEY_RIGHTCTRL, 25]));
-        assert_eq!(Combo::parse("Maus5").unwrap().to_text(), "Maus5");
-        assert_eq!(Combo::parse("Ctrl+BTN_SIDE").unwrap().to_text(), "Strg+Maus4");
-        assert!(Combo::parse("Strg+Quatsch").is_err());
-        assert!(Combo::parse("Strg++P").is_err());
+        assert_eq!(Combo::parse("Mouse5").unwrap().to_text(), "Mouse5");
+        assert_eq!(Combo::parse("Ctrl+BTN_SIDE").unwrap().to_text(), "Ctrl+Mouse4");
+        assert!(Combo::parse("Ctrl+Nonsense").is_err());
+        assert!(Combo::parse("Ctrl++P").is_err());
+    }
+
+    #[test]
+    fn german_aliases_still_work() {
+        assert_eq!(Combo::parse("Strg+Alt+P").unwrap().to_text(), "Ctrl+Alt+P");
+        assert_eq!(Combo::parse("Umschalt+Maus4").unwrap().to_text(), "Shift+Mouse4");
+        assert_eq!(Combo::parse("MausMitte").unwrap().to_text(), "MouseMiddle");
+        assert_eq!(Action::parse("umschalten").unwrap(), Action::Toggle);
     }
 
     #[test]
     fn actions() {
-        assert_eq!(Action::parse("Umschalten").unwrap(), Action::Toggle);
+        assert_eq!(Action::parse("Toggle").unwrap(), Action::Toggle);
         assert_eq!(Action::parse(Action::Pause.as_str()).unwrap(), Action::Pause);
         assert!(Action::parse("x").is_err());
     }

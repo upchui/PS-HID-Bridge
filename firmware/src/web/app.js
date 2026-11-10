@@ -1,4 +1,4 @@
-// PS5 HID Bridge – Weboberfläche des Boards.
+// PS5 HID Bridge – board web interface.
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -17,15 +17,15 @@ async function api(path, body) {
   try {
     res = await fetch(path, opt);
   } catch (e) {
-    throw new Error("Board nicht erreichbar.");
+    throw new Error("Board not reachable.");
   }
   let data = {};
   try { data = await res.json(); } catch (e) { /* empty body */ }
   if (res.status === 401 && path !== "/api/login") {
     showLogin();
-    throw new Error(data.error || "Bitte anmelden.");
+    throw new Error(data.error || "Please log in.");
   }
-  if (!res.ok) throw new Error(data.error || "Fehler " + res.status);
+  if (!res.ok) throw new Error(data.error || "Error " + res.status);
   return data;
 }
 
@@ -61,31 +61,31 @@ function fmtUptime(ms) {
   const d = Math.floor(s / 86400); s %= 86400;
   const h = Math.floor(s / 3600); s %= 3600;
   const m = Math.floor(s / 60); s %= 60;
-  if (d) return `${d} T ${h} Std`;
-  if (h) return `${h} Std ${m} Min`;
-  return `${m} Min ${s} s`;
+  if (d) return `${d} d ${h} h`;
+  if (h) return `${h} h ${m} min`;
+  return `${m} min ${s} s`;
 }
 
 function setPill(st) {
   const p = $("pill");
   p.hidden = false;
-  if (!st.usb_mounted) { p.textContent = "PS5 nicht verbunden"; p.className = "pill bad"; }
-  else if (st.usb_suspended) { p.textContent = "PS5 im Ruhemodus"; p.className = "pill warn"; }
-  else if (st.input_active) { p.textContent = "Eingaben aktiv"; p.className = "pill ok"; }
-  else { p.textContent = "Bereit"; p.className = "pill ok"; }
+  if (!st.usb_mounted) { p.textContent = "PS5 not connected"; p.className = "pill bad"; }
+  else if (st.usb_suspended) { p.textContent = "PS5 in rest mode"; p.className = "pill warn"; }
+  else if (st.input_active) { p.textContent = "Input active"; p.className = "pill ok"; }
+  else { p.textContent = "Ready"; p.className = "pill ok"; }
 }
 
 function renderStatus(st) {
   lastStatus = st;
   setPill(st);
-  $("s-input").textContent = st.input_active ? "Aktiv" : "Keine";
-  $("s-usb").textContent = !st.usb_mounted ? "USB: nicht verbunden"
-    : st.usb_suspended ? "USB: Ruhemodus" : "USB: verbunden";
+  $("s-input").textContent = st.input_active ? "Active" : "None";
+  $("s-usb").textContent = !st.usb_mounted ? "USB: not connected"
+    : st.usb_suspended ? "USB: rest mode" : "USB: connected";
   $("s-ip").textContent = st.ip;
-  $("s-net").textContent = `${st.net_state} · ${st.ip_mode === "static" ? "feste Adresse" : "DHCP"}`;
+  $("s-net").textContent = `${st.net_state} · ${st.ip_mode === "static" ? "static address" : "DHCP"}`;
   $("s-fw").textContent = st.firmware;
-  $("s-uptime").textContent = `Läuft seit ${fmtUptime(st.uptime_ms)} · Slot ${st.partition}`;
-  $("fw-current").textContent = `${st.firmware} (Slot ${st.partition})`;
+  $("s-uptime").textContent = `Up for ${fmtUptime(st.uptime_ms)} · slot ${st.partition}`;
+  $("fw-current").textContent = `${st.firmware} (slot ${st.partition})`;
   $("s-ok").textContent = st.rx_ok;
   $("s-auth").textContent = st.rx_auth_fail;
   $("s-replay").textContent = st.rx_replay;
@@ -94,9 +94,9 @@ function renderStatus(st) {
   $("s-mac").textContent = st.mac;
   $("s-gw").textContent = `${st.gateway} / ${st.dns}`;
   $("s-port").textContent = st.udp_port;
-  $("s-psk").textContent = st.psk_set ? "gesetzt" : "fehlt – unter „Sicherheit“ erzeugen";
-  $("s-allowed").textContent = st.allowed_sender || "alle Absender";
-  $("psk-state").textContent = st.psk_set ? "gesetzt" : "noch kein Schlüssel";
+  $("s-psk").textContent = st.psk_set ? "set" : "missing – generate one under “Security”";
+  $("s-allowed").textContent = st.allowed_sender || "any sender";
+  $("psk-state").textContent = st.psk_set ? "set" : "no key yet";
 }
 
 function fillForms(st) {
@@ -122,7 +122,7 @@ async function refreshStatus(fill) {
     renderStatus(st);
     if (fill) fillForms(st);
   } catch (e) {
-    $("pill").textContent = "keine Verbindung";
+    $("pill").textContent = "no connection";
     $("pill").className = "pill bad";
   }
 }
@@ -172,12 +172,12 @@ function waitForReboot(text) {
     try {
       const st = await api("/api/state");
       clearInterval(poll);
-      message("Board ist wieder da.", true);
+      message("The board is back.", true);
       if (st.logged_in) enterMain(); else showLogin();
     } catch (e) {
       if (tries > 30) {
         clearInterval(poll);
-        message("Das Board antwortet nicht mehr unter dieser Adresse. Bei geänderter IP die neue Adresse im Browser öffnen.", false);
+        message("The board no longer answers at this address. If the IP changed, open the new address in the browser.", false);
       }
     }
   }, 2000);
@@ -211,9 +211,9 @@ function uploadFirmware(data, onProgress) {
     xhr.onload = () => {
       let body = {};
       try { body = JSON.parse(xhr.responseText); } catch (e) { /* ignore */ }
-      if (xhr.status === 200) resolve(body); else reject(new Error(body.error || "Fehler " + xhr.status));
+      if (xhr.status === 200) resolve(body); else reject(new Error(body.error || "Error " + xhr.status));
     };
-    xhr.onerror = () => reject(new Error("Verbindung abgebrochen."));
+    xhr.onerror = () => reject(new Error("Connection lost."));
     xhr.send(data);
   });
 }
@@ -227,18 +227,18 @@ function init() {
   });
 
   const pwChange = async (f) => {
-    if (f.new.value !== f.new2.value) throw new Error("Die beiden neuen Passwörter stimmen nicht überein.");
+    if (f.new.value !== f.new2.value) throw new Error("The two new passwords do not match.");
     await api("/api/password", { old: f.old.value, new: f.new.value });
     f.reset();
   };
   onSubmit("f-first", async (f) => {
     await pwChange(f);
-    message("Passwort gespeichert.", true);
+    message("Password saved.", true);
     enterMain();
   });
   onSubmit("f-password", async (f) => {
     await pwChange(f);
-    message("Passwort geändert.", true);
+    message("Password changed.", true);
   });
 
   onSubmit("f-network", async (f) => {
@@ -249,8 +249,8 @@ function init() {
     }
     await api("/api/network", body);
     waitForReboot(body.mode === "static"
-      ? `Gespeichert. Das Board startet neu und ist dann unter ${body.ip} erreichbar.`
-      : "Gespeichert. Das Board startet neu und holt sich eine Adresse per DHCP.");
+      ? `Saved. The board restarts and will then be reachable at ${body.ip}.`
+      : "Saved. The board restarts and gets an address via DHCP.");
   });
   for (const r of $("f-network").querySelectorAll("input[name=mode]")) r.addEventListener("change", updateStaticFields);
 
@@ -259,39 +259,39 @@ function init() {
       const r = await api("/api/psk/generate", {});
       $("psk-value").textContent = r.psk;
       $("psk-show").hidden = false;
-      message("Neuer Schlüssel ist aktiv. Die App braucht ihn, sonst nimmt das Board keine Eingaben mehr an.", true);
+      message("The new key is active. The app needs it, otherwise the board will no longer accept input.", true);
       refreshStatus(false);
     } catch (e) { message(e.message, false); }
   });
   $("b-psk-copy").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText($("psk-value").textContent);
-      message("Schlüssel kopiert.", true);
+      message("Key copied.", true);
     } catch (e) {
       const range = document.createRange();
       range.selectNodeContents($("psk-value"));
       const sel = window.getSelection();
       sel.removeAllRanges();
       sel.addRange(range);
-      message("Kopieren nicht möglich – der Schlüssel ist markiert, bitte mit Strg+C kopieren.", false);
+      message("Copying is not possible – the key is selected, please copy it with Ctrl+C.", false);
     }
   });
   onSubmit("f-psk", async (f) => {
     await api("/api/psk", { psk: f.psk.value.trim() });
     f.reset();
-    message("Schlüssel übernommen.", true);
+    message("Key applied.", true);
     refreshStatus(false);
   });
   onSubmit("f-allowed", async (f) => {
     await api("/api/allowed-sender", { ip: f.ip.value.trim() });
-    message(f.ip.value.trim() ? "Absenderfilter gespeichert." : "Absenderfilter aus: alle Absender erlaubt.", true);
+    message(f.ip.value.trim() ? "Sender filter saved." : "Sender filter off: any sender allowed.", true);
     refreshStatus(false);
   });
 
   onSubmit("f-ota", async (f) => {
     const file = f.file.files[0];
-    if (!file) throw new Error("Bitte eine UF2-Datei auswählen.");
-    if (!file.name.toLowerCase().endsWith(".uf2")) throw new Error("Bitte die Datei ps5-hid-bridge.uf2 wählen.");
+    if (!file) throw new Error("Please choose a UF2 file.");
+    if (!file.name.toLowerCase().endsWith(".uf2")) throw new Error("Please choose the file ps5-hid-bridge.uf2.");
     const data = new Uint8Array(await file.arrayBuffer());
     const bar = $("ota-progress");
     bar.hidden = false;
@@ -303,13 +303,13 @@ function init() {
       bar.hidden = true;
     }
     f.reset();
-    waitForReboot("Firmware geschrieben. Das Board startet mit der neuen Version …");
+    waitForReboot("Firmware written. The board starts the new version …");
   });
 
   $("b-reboot").addEventListener("click", async () => {
     try {
       await api("/api/reboot", {});
-      waitForReboot("Das Board startet neu …");
+      waitForReboot("The board is restarting …");
     } catch (e) { message(e.message, false); }
   });
   $("b-reset").addEventListener("click", () => { $("reset-confirm").hidden = false; });
@@ -318,7 +318,7 @@ function init() {
     $("reset-confirm").hidden = true;
     try {
       await api("/api/factory-reset", {});
-      waitForReboot("Werkseinstellungen werden wiederhergestellt, das Board startet neu …");
+      waitForReboot("Restoring factory settings, the board is restarting …");
     } catch (e) { message(e.message, false); }
   });
 

@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! # comment
-//! combo Strg+Alt+P        # press in order, release in reverse
+//! combo Ctrl+Alt+P        # press in order, release in reverse
 //! wait 50                 # milliseconds
 //! key LEFTSHIFT down
 //! tap A
@@ -41,18 +41,18 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
         if line.is_empty() {
             continue;
         }
-        let err = |msg: &str| format!("Zeile {}: {msg}: „{line}“", no + 1);
+        let err = |msg: &str| format!("line {}: {msg}: \"{line}\"", no + 1);
         let words: Vec<&str> = line.split_whitespace().collect();
         let num = |i: usize| -> Result<i32, String> {
             words
                 .get(i)
-                .ok_or_else(|| err("Zahl fehlt"))?
+                .ok_or_else(|| err("number missing"))?
                 .parse()
-                .map_err(|_| err("keine Zahl"))
+                .map_err(|_| err("not a number"))
         };
         let code = |i: usize| -> Result<u16, String> {
-            let name = words.get(i).ok_or_else(|| err("Taste fehlt"))?;
-            keymap::code_by_name(name).ok_or_else(|| err("unbekannte Taste"))
+            let name = words.get(i).ok_or_else(|| err("key missing"))?;
+            keymap::code_by_name(name).ok_or_else(|| err("unknown key"))
         };
         match words[0] {
             "wait" => delay += Duration::from_millis(num(1)?.max(0) as u64),
@@ -60,7 +60,7 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 let down = match words.get(2) {
                     Some(&"down") => true,
                     Some(&"up") => false,
-                    _ => return Err(err("„down“ oder „up“ erwartet")),
+                    _ => return Err(err("expected \"down\" or \"up\"")),
                 };
                 push(&mut delay, Event::Key { code: code(1)?, down });
                 push(&mut delay, Event::Sync);
@@ -113,9 +113,9 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
             "focus" => match words.get(1) {
                 Some(&"on") => push(&mut delay, Event::Focus(true)),
                 Some(&"off") => push(&mut delay, Event::Focus(false)),
-                _ => return Err(err("„on“ oder „off“ erwartet")),
+                _ => return Err(err("expected \"on\" or \"off\"")),
             },
-            _ => return Err(err("unbekannter Befehl")),
+            _ => return Err(err("unknown command")),
         }
     }
     Ok(steps)
@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn parses_all_commands() {
         let s =
-            parse("# test\ncombo Strg+P\nwait 20\ntap A\nmove 3 -4\nwheel 1\nkey LEFTSHIFT down\nfocus on\n")
+            parse("# test\ncombo Ctrl+P\nwait 20\ntap A\nmove 3 -4\nwheel 1\nkey LEFTSHIFT down\nfocus on\n")
                 .unwrap();
         assert_eq!(s[0].event, Event::Key { code: 29, down: true });
         let tap = s
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn errors_name_the_line() {
-        assert!(parse("tap A\nkey Q sideways").unwrap_err().starts_with("Zeile 2"));
+        assert!(parse("tap A\nkey Q sideways").unwrap_err().starts_with("line 2"));
         assert!(parse("jump").is_err());
     }
 }

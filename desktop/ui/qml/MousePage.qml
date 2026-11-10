@@ -5,7 +5,7 @@ import org.kde.kirigami as Kirigami
 import PS5HIDBridge
 
 Kirigami.ScrollablePage {
-    title: "Maus"
+    title: "Mouse"
 
     ColumnLayout {
         spacing: Kirigami.Units.largeSpacing
@@ -13,14 +13,14 @@ Kirigami.ScrollablePage {
         Controls.Label {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
-            text: "Standard sind die rohen Werte der Maus (Empfindlichkeit 1, keine Beschleunigung). Viele Spiele auf der PS5 haben eigene Einstellungen; dort anzupassen ist meist besser."
+            text: "The default is the raw mouse values (sensitivity 1, no acceleration). Many PS5 games have their own settings; adjusting there is usually better."
         }
 
         Kirigami.FormLayout {
             Layout.fillWidth: true
 
             RowLayout {
-                Kirigami.FormData.label: "Empfindlichkeit:"
+                Kirigami.FormData.label: "Sensitivity:"
                 Controls.Slider {
                     id: sens
                     Layout.preferredWidth: Kirigami.Units.gridUnit * 14
@@ -32,7 +32,7 @@ Kirigami.ScrollablePage {
                 Controls.Label { text: sens.value.toFixed(2) + "×" }
             }
             RowLayout {
-                Kirigami.FormData.label: "Beschleunigung:"
+                Kirigami.FormData.label: "Acceleration:"
                 Controls.Slider {
                     id: accel
                     Layout.preferredWidth: Kirigami.Units.gridUnit * 14
@@ -41,7 +41,7 @@ Kirigami.ScrollablePage {
                     stepSize: 0.01
                     value: AppController.accel
                 }
-                Controls.Label { text: accel.value === 0 ? "aus" : accel.value.toFixed(2) }
+                Controls.Label { text: accel.value === 0 ? "off" : accel.value.toFixed(2) }
             }
         }
 
@@ -53,12 +53,12 @@ Kirigami.ScrollablePage {
 
         RowLayout {
             Controls.Button {
-                text: "Übernehmen"
+                text: "Apply"
                 highlighted: true
                 onClicked: AppController.setMouse(sens.value, accel.value)
             }
             Controls.Button {
-                text: "Rohe Werte"
+                text: "Raw values"
                 onClicked: {
                     sens.value = 1;
                     accel.value = 0;

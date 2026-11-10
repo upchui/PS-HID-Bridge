@@ -26,7 +26,7 @@ typedef struct {
     uint8_t mac[6];
     uint8_t ip[4], mask[4], gw[4], dns[4];
     bool link_up;
-    const char *net_state;  // "Kein Link", "DHCP läuft", "Bereit", ...
+    const char *net_state;  // "No link", "DHCP running", "Ready", ...
     uint8_t usb_status;     // PSHB_STATUS_* bits
     bool failsafe;
     uint32_t rx_ok, rx_auth_fail, rx_replay, rx_filtered, rx_malformed;
@@ -44,7 +44,7 @@ typedef struct {
     void (*random)(void *ctx, uint8_t *buf, size_t n);
     uint64_t (*now_us)(void *ctx);
 
-    // Firmware update: the UF2 file is streamed in; errors as German text.
+    // Firmware update: the UF2 file is streamed in; errors as readable text.
     bool (*ota_begin)(void *ctx, uint32_t size, char *err, size_t err_cap);
     bool (*ota_write)(void *ctx, const uint8_t *data, size_t len);
     bool (*ota_finish)(void *ctx, uint32_t crc, char *err, size_t err_cap);

@@ -19,7 +19,7 @@ use crate::trigger::{Action, Combo, KeyAlt, Trigger, TriggerKind};
 pub struct TriggerConfig {
     /// "combo", "hold" or "double-tap"
     pub kind: String,
-    /// e.g. "Strg+Alt+P", "Maus5", "LEFTCTRL"
+    /// e.g. "Ctrl+Alt+P", "Mouse5", "LEFTCTRL"
     pub keys: String,
     /// "toggle", "on", "off", "pause", "release-all"
     pub action: String,
@@ -47,14 +47,14 @@ impl TriggerConfig {
             "double-tap" => {
                 let c = Combo::parse(&self.keys)?;
                 if c.0.len() != 1 {
-                    return Err(format!("Doppeltipp braucht genau eine Taste: „{}“", self.keys));
+                    return Err(format!("Double tap needs exactly one key: \"{}\"", self.keys));
                 }
                 TriggerKind::DoubleTap {
                     key: KeyAlt(c.0[0].0.clone()),
                     window_ms: self.window_ms,
                 }
             }
-            k => return Err(format!("Unbekannte Auslöser-Art „{k}“")),
+            k => return Err(format!("Unknown trigger kind \"{k}\"")),
         };
         Ok(Trigger { kind, action })
     }
@@ -87,8 +87,9 @@ pub struct Config {
     /// Device selectors (path, "vvvv:pppp" or part of the name).
     pub devices: Vec<String>,
     pub triggers: Vec<TriggerConfig>,
-    /// Activate while a window whose class/title contains this text has the
-    /// focus (KDE Plasma); empty = no window rule.
+    /// Window rule (KDE Plasma): activate while a window whose class, title
+    /// or desktop file contains `window_rule` has the focus. Off by default.
+    pub window_rule_enabled: bool,
     pub window_rule: String,
     pub mouse: MouseConfig,
     /// ISO keyboard (German): `#'` key sends HID 0x32.
@@ -103,10 +104,11 @@ impl Default for Config {
             board: String::new(),
             devices: Vec::new(),
             triggers: vec![TriggerConfig {
-                keys: "Strg+Alt+P".into(),
+                keys: "Ctrl+Alt+P".into(),
                 ..Default::default()
             }],
-            window_rule: String::new(),
+            window_rule_enabled: false,
+            window_rule: DEFAULT_WINDOW_RULE.into(),
             mouse: MouseConfig::default(),
             iso_keyboard: true,
             setup_done: false,
@@ -114,12 +116,36 @@ impl Default for Config {
     }
 }
 
+/// Remote Play client the window rule looks for by default.
+pub const DEFAULT_WINDOW_RULE: &str = "chiaki-ng";
+
 impl Config {
+    /// The window rule is switched on and has a non-empty pattern.
+    pub fn window_rule_active(&self) -> bool {
+        self.window_rule_enabled && !self.window_rule.trim().is_empty()
+    }
+
     pub fn load(path: &Path) -> Result<Self, String> {
-        match fs::read_to_string(path) {
-            Ok(text) => toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display())),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(format!("{}: {e}", path.display())),
+        let mut config: Self = match fs::read_to_string(path) {
+            Ok(text) => toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Self::default(),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        config.normalize();
+        Ok(config)
+    }
+
+    /// Rewrite triggers in canonical form, e.g. the German names of earlier
+    /// versions ("Strg+Alt+P" -> "Ctrl+Alt+P"). Entries that do not parse are
+    /// kept as they are, so the error is reported where they are used.
+    fn normalize(&mut self) {
+        for t in &mut self.triggers {
+            if let Ok(combo) = Combo::parse(&t.keys) {
+                t.keys = combo.to_text();
+            }
+            if let Ok(action) = Action::parse(&t.action) {
+                t.action = action.as_str().into();
+            }
         }
     }
 
@@ -135,7 +161,7 @@ impl Config {
                 .iter()
                 .map(TriggerConfig::to_trigger)
                 .collect::<Result<_, _>>()?,
-            window_rule: !self.window_rule.trim().is_empty(),
+            window_rule: self.window_rule_active(),
             keymap: Keymap {
                 iso: self.iso_keyboard,
             },
@@ -190,7 +216,7 @@ pub fn counter_path() -> PathBuf {
 pub fn load_psk(path: &Path) -> Result<[u8; KEY_LEN], String> {
     let text = fs::read_to_string(path).map_err(|e| match e.kind() {
         io::ErrorKind::NotFound => format!(
-            "Kein Schlüssel gespeichert ({}). Mit „pshb-cli config set-psk“ hinterlegen.",
+            "No key stored ({}). Store one with \"pshb-cli config set-psk\".",
             path.display()
         ),
         _ => format!("{}: {e}", path.display()),
@@ -252,25 +278,72 @@ mod tests {
         let ec = back.engine_config().unwrap();
         assert_eq!(ec.triggers.len(), 2);
         assert!(!ec.window_rule);
+        assert_eq!(back.window_rule, "chiaki-ng");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn window_rule_is_off_by_default_and_needs_a_pattern() {
+        let mut c = Config::default();
+        assert!(!c.window_rule_active());
+        c.window_rule_enabled = true;
+        assert!(c.window_rule_active());
+        assert!(c.engine_config().unwrap().window_rule);
+        c.window_rule = "  ".into();
+        assert!(!c.window_rule_active());
+    }
+
+    #[test]
+    fn keyboard_type_roundtrip() {
+        let dir = temp("kbd");
+        let path = dir.join("config.toml");
+        let c = Config {
+            iso_keyboard: false,
+            ..Default::default()
+        };
+        c.save(&path).unwrap();
+        let back = Config::load(&path).unwrap();
+        assert!(!back.iso_keyboard);
+        assert!(!back.engine_config().unwrap().keymap.iso);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn german_trigger_names_are_normalized_on_load() {
+        let dir = temp("norm");
+        let path = dir.join("config.toml");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            &path,
+            "[[triggers]]\nkeys = \"Strg+Alt+P\"\naction = \"umschalten\"\n\n\
+             [[triggers]]\nkind = \"hold\"\nkeys = \"Maus5\"\n\n\
+             [[triggers]]\nkeys = \"Strg+Banana\"\n",
+        )
+        .unwrap();
+        let c = Config::load(&path).unwrap();
+        assert_eq!(c.triggers[0].keys, "Ctrl+Alt+P");
+        assert_eq!(c.triggers[0].action, "toggle");
+        assert_eq!(c.triggers[1].keys, "Mouse5");
+        assert_eq!(c.triggers[2].keys, "Strg+Banana");
         let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn missing_file_gives_defaults() {
         let c = Config::load(Path::new("/nonexistent/pshb.toml")).unwrap();
-        assert_eq!(c.triggers[0].keys, "Strg+Alt+P");
+        assert_eq!(c.triggers[0].keys, "Ctrl+Alt+P");
     }
 
     #[test]
     fn bad_trigger_is_reported() {
         let c = Config {
             triggers: vec![TriggerConfig {
-                keys: "Strg+Banane".into(),
+                keys: "Ctrl+Banana".into(),
                 ..Default::default()
             }],
             ..Default::default()
         };
-        assert!(c.engine_config().unwrap_err().contains("Banane"));
+        assert!(c.engine_config().unwrap_err().contains("Banana"));
     }
 
     #[test]

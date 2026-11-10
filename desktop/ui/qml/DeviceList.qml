@@ -22,7 +22,7 @@ ColumnLayout {
         Layout.fillWidth: true
         wrapMode: Text.WordWrap
         visible: list.groups.length === 0
-        text: "Keine Tastatur und keine Maus gefunden."
+        text: "No keyboard and no mouse found."
     }
 
     Repeater {
@@ -54,13 +54,13 @@ ColumnLayout {
                         opacity: 0.7
                         font: Kirigami.Theme.smallFont
                         text: row.modelData.kind + " · " + row.modelData.id
-                              + (row.modelData.nodes > 1 ? " · " + row.modelData.nodes + " Schnittstellen" : "")
-                              + (row.modelData.accessible ? "" : " · kein Zugriff")
+                              + (row.modelData.nodes > 1 ? " · " + row.modelData.nodes + " interfaces" : "")
+                              + (row.modelData.accessible ? "" : " · no access")
                     }
                 }
                 Controls.Label {
                     visible: row.highlighted
-                    text: "← Eingabe erkannt"
+                    text: "← input detected"
                 }
             }
         }
@@ -69,11 +69,11 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         Controls.Button {
-            text: "Liste aktualisieren"
+            text: "Refresh list"
             onClicked: AppController.refreshDevices()
         }
         Controls.Switch {
-            text: "Taste drücken zum Erkennen"
+            text: "Press a key to identify"
             checked: list.identify
             enabled: list.selectedCount > 0 && list.selectedBlocked === 0
             onToggled: list.identify = checked
@@ -84,10 +84,10 @@ ColumnLayout {
         Layout.fillWidth: true
         type: Kirigami.MessageType.Warning
         visible: list.selectedBlocked > 0
-        text: "Für " + list.selectedBlocked + " gewählte(s) Gerät(e) fehlt die Leseberechtigung. Die App richtet dafür eine udev-Regel ein (Administrator-Passwort nötig)."
+        text: list.selectedBlocked + " selected device(s) without read permission. The app sets up a udev rule for them (administrator password required)."
         actions: [
             Kirigami.Action {
-                text: "Zugriff einrichten"
+                text: "Set up access"
                 onTriggered: list.accessError = AppController.installAccess()
             }
         ]

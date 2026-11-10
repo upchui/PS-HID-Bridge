@@ -39,7 +39,7 @@ Canvas {
 
         ctx.fillStyle = Kirigami.Theme.textColor;
         ctx.font = "11px sans-serif";
-        ctx.fillText("Tempo", w - 44, h - 8);
+        ctx.fillText("speed", w - 40, h - 8);
         ctx.fillText("× " + top.toFixed(1), 2, 12);
         ctx.fillText("1×", 6, y(1) + 4);
 

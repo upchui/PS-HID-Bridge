@@ -63,11 +63,11 @@ pub struct ServiceStatus {
 pub enum ServiceEvent {
     Status(ServiceStatus),
     Notice(Notice),
-    /// Text form of a recorded combination, e.g. "Strg+Alt+P".
+    /// Text form of a recorded combination, e.g. "Ctrl+Alt+P".
     Recorded(String),
     /// A selected device produced a key or button press.
     Identified(PathBuf),
-    /// What the PS5 currently receives, e.g. "Shift + A · Maus: links".
+    /// What the PS5 currently receives, e.g. "Shift + A · mouse: left".
     Live(String),
     Error(String),
 }
@@ -125,14 +125,14 @@ impl Drop for Service {
 /// Human readable form of a key state for the live view.
 pub fn describe_state(s: &KeyState) -> String {
     const MOD_NAMES: [(u8, &str); 8] = [
-        (0x01, "Strg"),
+        (0x01, "Ctrl"),
         (0x02, "Shift"),
         (0x04, "Alt"),
         (0x08, "Super"),
-        (0x10, "Strg rechts"),
-        (0x20, "Shift rechts"),
+        (0x10, "right Ctrl"),
+        (0x20, "right Shift"),
         (0x40, "AltGr"),
-        (0x80, "Super rechts"),
+        (0x80, "right Super"),
     ];
     let mut parts: Vec<String> = MOD_NAMES
         .iter()
@@ -141,29 +141,29 @@ pub fn describe_state(s: &KeyState) -> String {
         .collect();
     for &u in s.keys.iter().filter(|u| **u != 0) {
         parts.push(if u == 0x01 {
-            "zu viele Tasten".into()
+            "too many keys".into()
         } else {
             keymap::usage_name(u)
         });
     }
     let buttons: Vec<&str> = [
-        (0x01, "links"),
-        (0x02, "rechts"),
-        (0x04, "Mitte"),
-        (0x08, "zurück"),
-        (0x10, "vor"),
+        (0x01, "left"),
+        (0x02, "right"),
+        (0x04, "middle"),
+        (0x08, "back"),
+        (0x10, "forward"),
     ]
     .iter()
     .filter(|(b, _)| s.buttons & b != 0)
     .map(|(_, n)| *n)
     .collect();
     let mut text = if parts.is_empty() {
-        "keine Taste".to_string()
+        "no key".to_string()
     } else {
         parts.join(" + ")
     };
     if !buttons.is_empty() {
-        text += &format!(" · Maus: {}", buttons.join(", "));
+        text += &format!(" · mouse: {}", buttons.join(", "));
     }
     text
 }
@@ -224,7 +224,7 @@ impl Runner {
         let list = match input::list_devices() {
             Ok(l) => l,
             Err(e) => {
-                self.emit(ServiceEvent::Error(format!("Geräteliste: {e}")));
+                self.emit(ServiceEvent::Error(format!("Device list: {e}")));
                 return;
             }
         };
@@ -246,7 +246,7 @@ impl Runner {
                 self.open = wanted;
             }
             Err(e) => {
-                self.emit(ServiceEvent::Error(format!("Gerät öffnen: {e}")));
+                self.emit(ServiceEvent::Error(format!("Opening device: {e}")));
                 self.readers = None;
                 self.open.clear();
             }
@@ -384,7 +384,7 @@ impl Runner {
                 Ok(InputMsg::Gone { .. }) => next_rescan = Instant::now(),
                 Ok(InputMsg::GrabFailed { path, error }) => {
                     self.emit(ServiceEvent::Error(format!(
-                        "{} kann nicht exklusiv übernommen werden: {error}",
+                        "{} cannot be grabbed exclusively: {error}",
                         path.display()
                     )));
                     for n in self.ctl.command(Action::Off) {
@@ -403,7 +403,7 @@ impl Runner {
                 self.status();
             }
             if watchdog.take_fired() {
-                self.emit(ServiceEvent::Error("Watchdog: Geräte wurden freigegeben.".into()));
+                self.emit(ServiceEvent::Error("Watchdog: devices were released.".into()));
             }
         }
     }
@@ -420,11 +420,11 @@ pub fn percentile(samples: &[f64], q: f64) -> Option<f64> {
     Some(v[rank - 1])
 }
 
-/// "LEFTCTRL+LEFTALT+P" style names from recording -> "Strg+Alt+P".
+/// "LEFTCTRL+LEFTALT+P" style names from recording -> "Ctrl+Alt+P".
 fn normalize_modifiers(text: &str) -> String {
     text.split('+')
         .map(|p| match p {
-            "LEFTCTRL" | "RIGHTCTRL" => "Strg",
+            "LEFTCTRL" | "RIGHTCTRL" => "Ctrl",
             "LEFTSHIFT" | "RIGHTSHIFT" => "Shift",
             "LEFTMETA" | "RIGHTMETA" => "Super",
             other => other,
@@ -444,8 +444,8 @@ mod tests {
             keys: [0x04, 0, 0, 0, 0, 0],
             buttons: 0x01,
         };
-        assert_eq!(describe_state(&s), "Shift + A · Maus: links");
-        assert_eq!(describe_state(&KeyState::default()), "keine Taste");
+        assert_eq!(describe_state(&s), "Shift + A · mouse: left");
+        assert_eq!(describe_state(&KeyState::default()), "no key");
     }
 
     #[test]
@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn recorded_combo_text() {
-        assert_eq!(normalize_modifiers("LEFTCTRL+Alt+P"), "Strg+Alt+P");
+        assert_eq!(normalize_modifiers("LEFTCTRL+Alt+P"), "Ctrl+Alt+P");
         assert!(Combo::parse(&normalize_modifiers("LEFTCTRL+Alt+P")).is_ok());
     }
 }

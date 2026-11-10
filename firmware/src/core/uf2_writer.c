@@ -99,15 +99,15 @@ uf2_result_t uf2_writer_finish(uf2_writer_t *w, uint32_t expected_crc) {
 const char *uf2_error_text(uf2_result_t r) {
     switch (r) {
     case UF2_OK: return "OK";
-    case UF2_ERR_MAGIC: return "Keine gültige UF2-Datei";
-    case UF2_ERR_FAMILY: return "Die Datei enthält keine Firmware für dieses Board (RP2350 ARM)";
-    case UF2_ERR_ADDRESS: return "Ungültige Adressen in der UF2-Datei";
-    case UF2_ERR_SEQUENCE: return "Blöcke der UF2-Datei sind doppelt oder durcheinander";
-    case UF2_ERR_INCOMPLETE: return "Die UF2-Datei ist unvollständig";
-    case UF2_ERR_TOO_BIG: return "Die Firmware ist zu groß für den Speicherplatz";
-    case UF2_ERR_FLASH: return "Schreiben in den Flash fehlgeschlagen";
-    case UF2_ERR_CRC: return "Prüfsumme stimmt nicht (Übertragungsfehler)";
-    case UF2_ERR_SIZE: return "Die Dateigröße passt nicht zum UF2-Format";
+    case UF2_ERR_MAGIC: return "Not a valid UF2 file";
+    case UF2_ERR_FAMILY: return "The file contains no firmware for this board (RP2350 ARM)";
+    case UF2_ERR_ADDRESS: return "Invalid addresses in the UF2 file";
+    case UF2_ERR_SEQUENCE: return "UF2 blocks are duplicated or out of order";
+    case UF2_ERR_INCOMPLETE: return "The UF2 file is incomplete";
+    case UF2_ERR_TOO_BIG: return "The firmware is too large for the slot";
+    case UF2_ERR_FLASH: return "Writing to flash failed";
+    case UF2_ERR_CRC: return "Checksum mismatch (transfer error)";
+    case UF2_ERR_SIZE: return "The file size does not match the UF2 format";
     }
-    return "Unbekannter Fehler";
+    return "Unknown error";
 }

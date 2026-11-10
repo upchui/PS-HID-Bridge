@@ -56,7 +56,7 @@ fn main() {
         engine
             .as_mut()
             .on_object_creation_failed(|_, url| {
-                eprintln!("QML konnte nicht geladen werden: {url}");
+                eprintln!("Could not load QML: {url}");
                 std::process::exit(1);
             })
             .release();

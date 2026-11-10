@@ -86,7 +86,7 @@ static void respond(web_conn_t *c, int status, const char *type, const uint8_t *
 static void respond_json(web_conn_t *c, int status, json_writer_t *w, const char *extra) {
     size_t n = jw_end(w);
     if (n == 0) {
-        static const char err[] = "{\"error\":\"Antwort zu groß\"}";
+        static const char err[] = "{\"error\":\"Response too large\"}";
         respond(c, 500, "application/json", (const uint8_t *)err, sizeof(err) - 1, false, NULL);
         return;
     }
@@ -158,7 +158,7 @@ static void sessions_clear(web_app_t *app) {
 
 static bool save_apply(web_app_t *app, web_conn_t *c) {
     if (!app->be->save(app->be->ctx, app->settings)) {
-        respond_error(c, 500, "Speichern im Flash fehlgeschlagen");
+        respond_error(c, 500, "Saving to flash failed");
         return false;
     }
     app->be->apply(app->be->ctx, app->settings);
@@ -179,14 +179,14 @@ static void h_login(web_app_t *app, web_conn_t *c) {
     uint64_t t = now(app);
     if (t < app->lockout_until_us) {
         char msg[80];
-        snprintf(msg, sizeof(msg), "Zu viele Fehlversuche. Bitte %u s warten.",
+        snprintf(msg, sizeof(msg), "Too many failed attempts. Please wait %u s.",
                  (unsigned)((app->lockout_until_us - t) / 1000000 + 1));
         respond_error(c, 429, msg);
         return;
     }
     char pw[PSHB_PASSWORD_MAX_LEN + 1];
     if (!jr_str(b, bl, "password", pw, sizeof(pw))) {
-        respond_error(c, 400, "Passwort fehlt");
+        respond_error(c, 400, "Password missing");
         return;
     }
     bool ok = password_verify(app->settings, pw);
@@ -197,7 +197,7 @@ static void h_login(web_app_t *app, web_conn_t *c) {
             uint32_t shift = app->failed_logins - 3 > 6 ? 6 : app->failed_logins - 3;
             app->lockout_until_us = t + (1000000ull << shift);  // 1 s ... 64 s
         }
-        respond_error(c, 401, "Passwort falsch");
+        respond_error(c, 401, "Wrong password");
         return;
     }
     app->failed_logins = 0;
@@ -226,18 +226,18 @@ static void h_password(web_app_t *app, web_conn_t *c) {
     size_t bl = c->req.body_received;
     char old_pw[PSHB_PASSWORD_MAX_LEN + 1], new_pw[PSHB_PASSWORD_MAX_LEN + 2];
     if (!jr_str(b, bl, "old", old_pw, sizeof(old_pw)) || !jr_str(b, bl, "new", new_pw, sizeof(new_pw))) {
-        respond_error(c, 400, "Altes und neues Passwort angeben");
+        respond_error(c, 400, "Enter the current and the new password");
         return;
     }
     size_t n = strlen(new_pw);
     bool old_ok = password_verify(app->settings, old_pw);
     crypto_wipe(old_pw, sizeof(old_pw));
     if (!old_ok) {
-        respond_error(c, 403, "Bisheriges Passwort falsch");
+        respond_error(c, 403, "Current password is wrong");
     } else if (n < PSHB_PASSWORD_MIN_LEN || n > PSHB_PASSWORD_MAX_LEN) {
-        respond_error(c, 400, "Das neue Passwort muss 8 bis 64 Zeichen lang sein");
+        respond_error(c, 400, "The new password must be 8 to 64 characters long");
     } else if (strcmp(new_pw, PSHB_DEFAULT_PASSWORD) == 0) {
-        respond_error(c, 400, "Bitte nicht das Werkspasswort verwenden");
+        respond_error(c, 400, "Please do not use the factory password");
     } else {
         uint8_t salt[16];
         app->be->random(app->be->ctx, salt, sizeof(salt));
@@ -306,11 +306,11 @@ static void h_network(web_app_t *app, web_conn_t *c) {
     long long port;
     pshb_settings_t s = *app->settings;
     if (!jr_str(b, bl, "mode", mode, sizeof(mode)) || !jr_int(b, bl, "udp_port", &port)) {
-        respond_error(c, 400, "Modus und UDP-Port angeben");
+        respond_error(c, 400, "Mode and UDP port are required");
         return;
     }
     if (port < 1 || port > 65535 || port == 80) {
-        respond_error(c, 400, "UDP-Port muss zwischen 1 und 65535 liegen (nicht 80)");
+        respond_error(c, 400, "UDP port must be between 1 and 65535 (not 80)");
         return;
     }
     s.udp_port = (uint16_t)port;
@@ -319,25 +319,25 @@ static void h_network(web_app_t *app, web_conn_t *c) {
     } else if (strcmp(mode, "static") == 0) {
         s.ip_mode = PSHB_IP_STATIC;
         if (!jr_str(b, bl, "ip", ip, sizeof(ip)) || !web_parse_ip(ip, s.ip) || ip_zero(s.ip)) {
-            respond_error(c, 400, "IP-Adresse ungültig");
+            respond_error(c, 400, "Invalid IP address");
             return;
         }
         if (!jr_str(b, bl, "mask", mask, sizeof(mask)) || !web_parse_ip(mask, s.mask) || !mask_valid(s.mask)) {
-            respond_error(c, 400, "Subnetzmaske ungültig");
+            respond_error(c, 400, "Invalid subnet mask");
             return;
         }
         if (!jr_str(b, bl, "gateway", gw, sizeof(gw)) || !(gw[0] == '\0' || web_parse_ip(gw, s.gw))) {
-            respond_error(c, 400, "Gateway ungültig");
+            respond_error(c, 400, "Invalid gateway");
             return;
         }
         if (gw[0] == '\0') memset(s.gw, 0, 4);
         if (!jr_str(b, bl, "dns", dns, sizeof(dns)) || !(dns[0] == '\0' || web_parse_ip(dns, s.dns))) {
-            respond_error(c, 400, "DNS-Server ungültig");
+            respond_error(c, 400, "Invalid DNS server");
             return;
         }
         if (dns[0] == '\0') memset(s.dns, 0, 4);
     } else {
-        respond_error(c, 400, "Modus muss dhcp oder static sein");
+        respond_error(c, 400, "Mode must be dhcp or static");
         return;
     }
     *app->settings = s;
@@ -367,7 +367,7 @@ static void h_psk_set(web_app_t *app, web_conn_t *c) {
     char hex[80];
     uint8_t key[32];
     if (!jr_str(c->req.body, c->req.body_received, "psk", hex, sizeof(hex)) || !hex_decode(hex, key, 32)) {
-        respond_error(c, 400, "Der Schlüssel muss aus 64 Hex-Zeichen bestehen");
+        respond_error(c, 400, "The key must consist of 64 hex digits");
         return;
     }
     memcpy(app->settings->psk, key, 32);
@@ -382,7 +382,7 @@ static void h_allowed_sender(web_app_t *app, web_conn_t *c) {
     uint8_t v[4] = {0};
     if (!jr_str(c->req.body, c->req.body_received, "ip", ip, sizeof(ip)) ||
         !(ip[0] == '\0' || web_parse_ip(ip, v))) {
-        respond_error(c, 400, "IP-Adresse ungültig (leer = alle Absender)");
+        respond_error(c, 400, "Invalid IP address (empty = any sender)");
         return;
     }
     memcpy(app->settings->allowed_ip, v, 4);
@@ -403,12 +403,12 @@ static void handle(web_app_t *app, web_conn_t *c) {
 
     if (strncmp(p, "/api/", 5) != 0) {
         if (r->method != HTTP_GET) {
-            respond_error(c, 405, "Methode nicht erlaubt");
+            respond_error(c, 405, "Method not allowed");
             return;
         }
         const web_asset_t *a = find_asset(p);
         if (!a) {
-            respond_error(c, 404, "Nicht gefunden");
+            respond_error(c, 404, "Not found");
             return;
         }
         respond(c, 200, a->type, a->data, a->len, true, NULL);
@@ -419,7 +419,7 @@ static void handle(web_app_t *app, web_conn_t *c) {
     bool logged_in = session >= 0;
 
     if (r->method == HTTP_POST && !r->csrf_header) {
-        respond_error(c, 403, "Anfrage abgelehnt (X-PSHB-Header fehlt)");
+        respond_error(c, 403, "Request rejected (X-PSHB header missing)");
         return;
     }
     if (strcmp(p, "/api/state") == 0 && r->method == HTTP_GET) {
@@ -431,7 +431,7 @@ static void handle(web_app_t *app, web_conn_t *c) {
         return;
     }
     if (!logged_in) {
-        respond_error(c, 401, "Bitte anmelden");
+        respond_error(c, 401, "Please log in");
         return;
     }
     if (strcmp(p, "/api/logout") == 0 && r->method == HTTP_POST) {
@@ -443,7 +443,7 @@ static void handle(web_app_t *app, web_conn_t *c) {
         return;
     }
     if (!app->settings->pw_set) {
-        respond_error(c, 403, "Bitte zuerst ein eigenes Passwort setzen");
+        respond_error(c, 403, "Please set your own password first");
         return;
     }
     if (r->method == HTTP_GET) {
@@ -480,7 +480,7 @@ static void handle(web_app_t *app, web_conn_t *c) {
             return;
         }
     }
-    respond_error(c, 404, "Nicht gefunden");
+    respond_error(c, 404, "Not found");
 }
 
 // ---------------------------------------------------------------- connection
@@ -520,22 +520,22 @@ static void ota_body(void *ctx, const uint8_t *data, size_t len) {
 static bool ota_start(web_app_t *app, web_conn_t *c) {
     http_req_t *r = &c->req;
     if (!r->csrf_header) {
-        respond_error(c, 403, "Anfrage abgelehnt (X-PSHB-Header fehlt)");
+        respond_error(c, 403, "Request rejected (X-PSHB header missing)");
         return false;
     }
     if (!r->session[0] || session_find(app, r->session) < 0) {
-        respond_error(c, 401, "Bitte anmelden");
+        respond_error(c, 401, "Please log in");
         return false;
     }
     if (!app->settings->pw_set) {
-        respond_error(c, 403, "Bitte zuerst ein eigenes Passwort setzen");
+        respond_error(c, 403, "Please set your own password first");
         return false;
     }
     if (!r->has_crc) {
-        respond_error(c, 400, "Prüfsumme (X-PSHB-CRC32) fehlt");
+        respond_error(c, 400, "Checksum (X-PSHB-CRC32) missing");
         return false;
     }
-    char err[96] = "Update nicht möglich";
+    char err[96] = "Update not possible";
     if (!app->be->ota_begin || !app->be->ota_begin(app->be->ctx, r->content_length, err, sizeof(err))) {
         respond_error(c, 400, err);
         return false;
@@ -546,7 +546,7 @@ static bool ota_start(web_app_t *app, web_conn_t *c) {
 
 static void ota_done(web_app_t *app, web_conn_t *c) {
     // finish() also reports why an earlier write failed (bad file, flash error).
-    char err[96] = "Schreiben in den Flash fehlgeschlagen";
+    char err[96] = "Writing to flash failed";
     bool ok = app->be->ota_finish(app->be->ctx, c->req.crc, err, sizeof(err));
     if (!ok || c->ota_failed) {
         app->be->ota_abort(app->be->ctx);
@@ -585,7 +585,7 @@ void web_conn_input(web_app_t *app, web_conn_t *c, const uint8_t *data, size_t l
     }
     if (c->req.state == HTTP_PARSE_ERROR) {
         if (c->ota) app->be->ota_abort(app->be->ctx);
-        respond_error(c, c->req.error_status ? c->req.error_status : 400, "Ungültige Anfrage");
+        respond_error(c, c->req.error_status ? c->req.error_status : 400, "Invalid request");
     } else if (c->req.state == HTTP_PARSE_DONE) {
         if (c->ota) {
             ota_done(app, c);

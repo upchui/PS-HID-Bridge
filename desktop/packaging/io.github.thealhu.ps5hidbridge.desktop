@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=PS5 HID Bridge
-GenericName=Maus und Tastatur für die PS5
-Comment=Leitet Maus und Tastatur über das Netzwerk an die PS5 weiter
+GenericName=Mouse and keyboard for the PS5
+Comment=Forwards mouse and keyboard to the PS5 over the network
 Exec=ps5-hid-bridge
 Icon=io.github.thealhu.ps5hidbridge
 Terminal=false
 Categories=Utility;
-Keywords=PS5;PlayStation;Remote Play;chiaki;Maus;Tastatur;
+Keywords=PS5;PlayStation;Remote Play;chiaki;mouse;keyboard;
 StartupWMClass=ps5-hid-bridge

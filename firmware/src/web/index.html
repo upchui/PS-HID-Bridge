@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,153 +11,153 @@
 <header class="top">
   <h1>PS5 HID Bridge</h1>
   <span id="pill" class="pill" hidden></span>
-  <button id="logout" class="link" hidden>Abmelden</button>
+  <button id="logout" class="link" hidden>Log out</button>
 </header>
 
 <main>
   <p id="msg" class="msg" role="status" hidden></p>
 
-  <!-- Anmeldung -->
+  <!-- Login -->
   <section id="v-login" class="card narrow" hidden>
-    <h2>Anmelden</h2>
+    <h2>Log in</h2>
     <form id="f-login">
-      <label>Passwort <input type="password" name="password" autocomplete="current-password" required autofocus></label>
-      <button type="submit">Anmelden</button>
+      <label>Password <input type="password" name="password" autocomplete="current-password" required autofocus></label>
+      <button type="submit">Log in</button>
     </form>
-    <p class="hint">Ab Werk lautet das Passwort <code>ps5-hid-bridge</code>. Es muss beim ersten Anmelden geändert werden.</p>
+    <p class="hint">The factory password is <code>ps5-hid-bridge</code>. You have to change it at the first login.</p>
   </section>
 
-  <!-- Erzwungener Passwortwechsel -->
+  <!-- Forced password change -->
   <section id="v-first" class="card narrow" hidden>
-    <h2>Eigenes Passwort festlegen</h2>
-    <p>Das Board nutzt noch das Werkspasswort. Bitte jetzt ein eigenes festlegen (8 bis 64 Zeichen).</p>
+    <h2>Set your own password</h2>
+    <p>The board still uses the factory password. Please choose your own now (8 to 64 characters).</p>
     <form id="f-first">
-      <label>Werkspasswort <input type="password" name="old" autocomplete="current-password" required></label>
-      <label>Neues Passwort <input type="password" name="new" autocomplete="new-password" minlength="8" maxlength="64" required></label>
-      <label>Wiederholen <input type="password" name="new2" autocomplete="new-password" minlength="8" maxlength="64" required></label>
-      <button type="submit">Speichern</button>
+      <label>Factory password <input type="password" name="old" autocomplete="current-password" required></label>
+      <label>New password <input type="password" name="new" autocomplete="new-password" minlength="8" maxlength="64" required></label>
+      <label>Repeat <input type="password" name="new2" autocomplete="new-password" minlength="8" maxlength="64" required></label>
+      <button type="submit">Save</button>
     </form>
   </section>
 
-  <!-- Hauptansicht -->
+  <!-- Main view -->
   <div id="v-main" hidden>
     <nav class="tabs" role="tablist">
       <button class="tab" data-tab="status" aria-selected="true">Status</button>
-      <button class="tab" data-tab="network">Netzwerk</button>
-      <button class="tab" data-tab="security">Sicherheit</button>
+      <button class="tab" data-tab="network">Network</button>
+      <button class="tab" data-tab="security">Security</button>
       <button class="tab" data-tab="system">System</button>
     </nav>
 
     <section id="t-status" class="tabpane">
       <div class="grid">
-        <div class="card"><h3>Eingaben</h3><p class="big" id="s-input">–</p><p class="sub" id="s-usb">–</p></div>
-        <div class="card"><h3>Netzwerk</h3><p class="big" id="s-ip">–</p><p class="sub" id="s-net">–</p></div>
+        <div class="card"><h3>Input</h3><p class="big" id="s-input">–</p><p class="sub" id="s-usb">–</p></div>
+        <div class="card"><h3>Network</h3><p class="big" id="s-ip">–</p><p class="sub" id="s-net">–</p></div>
         <div class="card"><h3>Firmware</h3><p class="big" id="s-fw">–</p><p class="sub" id="s-uptime">–</p></div>
       </div>
       <div class="card">
-        <h3>Pakete</h3>
+        <h3>Packets</h3>
         <table class="kv">
-          <tr><th>Gültig</th><td id="s-ok">–</td></tr>
-          <tr><th>Signatur falsch</th><td id="s-auth">–</td></tr>
-          <tr><th>Wiederholt / falsche Session</th><td id="s-replay">–</td></tr>
-          <tr><th>Fremder Absender</th><td id="s-filtered">–</td></tr>
-          <tr><th>Fehlerhaft</th><td id="s-malformed">–</td></tr>
+          <tr><th>Valid</th><td id="s-ok">–</td></tr>
+          <tr><th>Bad signature</th><td id="s-auth">–</td></tr>
+          <tr><th>Replayed / wrong session</th><td id="s-replay">–</td></tr>
+          <tr><th>Unknown sender</th><td id="s-filtered">–</td></tr>
+          <tr><th>Malformed</th><td id="s-malformed">–</td></tr>
         </table>
       </div>
       <div class="card">
         <h3>Details</h3>
         <table class="kv">
-          <tr><th>MAC-Adresse</th><td id="s-mac">–</td></tr>
+          <tr><th>MAC address</th><td id="s-mac">–</td></tr>
           <tr><th>Gateway / DNS</th><td id="s-gw">–</td></tr>
-          <tr><th>UDP-Port</th><td id="s-port">–</td></tr>
-          <tr><th>Schlüssel</th><td id="s-psk">–</td></tr>
-          <tr><th>Absenderfilter</th><td id="s-allowed">–</td></tr>
+          <tr><th>UDP port</th><td id="s-port">–</td></tr>
+          <tr><th>Key</th><td id="s-psk">–</td></tr>
+          <tr><th>Sender filter</th><td id="s-allowed">–</td></tr>
         </table>
       </div>
     </section>
 
     <section id="t-network" class="tabpane" hidden>
       <div class="card">
-        <h2>Netzwerk</h2>
+        <h2>Network</h2>
         <form id="f-network">
           <fieldset class="radios">
-            <label><input type="radio" name="mode" value="dhcp"> Automatisch (DHCP)</label>
-            <label><input type="radio" name="mode" value="static"> Feste Adresse</label>
+            <label><input type="radio" name="mode" value="dhcp"> Automatic (DHCP)</label>
+            <label><input type="radio" name="mode" value="static"> Static address</label>
           </fieldset>
           <div id="static-fields">
-            <label>IP-Adresse <input name="ip" inputmode="decimal" placeholder="192.168.1.50"></label>
-            <label>Subnetzmaske <input name="mask" inputmode="decimal" placeholder="255.255.255.0"></label>
+            <label>IP address <input name="ip" inputmode="decimal" placeholder="192.168.1.50"></label>
+            <label>Subnet mask <input name="mask" inputmode="decimal" placeholder="255.255.255.0"></label>
             <label>Gateway <input name="gateway" inputmode="decimal" placeholder="192.168.1.1"></label>
-            <label>DNS-Server <input name="dns" inputmode="decimal" placeholder="192.168.1.1"></label>
+            <label>DNS server <input name="dns" inputmode="decimal" placeholder="192.168.1.1"></label>
           </div>
-          <label>UDP-Port für Eingaben <input name="udp_port" type="number" min="1" max="65535" required></label>
-          <p class="hint">Nach dem Speichern startet das Board neu. Bei fester Adresse ist es danach unter der neuen IP erreichbar.</p>
-          <button type="submit">Speichern und neu starten</button>
+          <label>UDP port for input <input name="udp_port" type="number" min="1" max="65535" required></label>
+          <p class="hint">The board restarts after saving. With a static address it is then reachable at the new IP.</p>
+          <button type="submit">Save and restart</button>
         </form>
       </div>
     </section>
 
     <section id="t-security" class="tabpane" hidden>
       <div class="card">
-        <h2>Pre-Shared Key</h2>
-        <p>Mit diesem Schlüssel verschlüsselt die App alle Eingaben. App und Board brauchen denselben Schlüssel.</p>
+        <h2>Pre-shared key</h2>
+        <p>The app encrypts all input with this key. App and board need the same key.</p>
         <p>Status: <strong id="psk-state">–</strong></p>
-        <button id="b-psk-gen">Neuen Schlüssel erzeugen</button>
+        <button id="b-psk-gen">Generate new key</button>
         <div id="psk-show" class="keybox" hidden>
-          <p><strong>Neuer Schlüssel</strong> – wird nur jetzt angezeigt. In der App unter „Board“ einfügen:</p>
+          <p><strong>New key</strong> – shown only now. Paste it into the app under “Board”:</p>
           <code id="psk-value"></code>
-          <button id="b-psk-copy" class="secondary">Kopieren</button>
+          <button id="b-psk-copy" class="secondary">Copy</button>
         </div>
         <details>
-          <summary>Vorhandenen Schlüssel eintragen</summary>
+          <summary>Enter an existing key</summary>
           <form id="f-psk">
-            <label>Schlüssel (64 Hex-Zeichen) <input name="psk" pattern="[0-9a-fA-F]{64}" autocomplete="off" required></label>
-            <button type="submit">Übernehmen</button>
+            <label>Key (64 hex digits) <input name="psk" pattern="[0-9a-fA-F]{64}" autocomplete="off" required></label>
+            <button type="submit">Apply</button>
           </form>
         </details>
       </div>
       <div class="card">
-        <h2>Absenderfilter</h2>
-        <p>Nur Pakete von dieser IP-Adresse annehmen. Leer lassen, um jede Adresse zuzulassen.</p>
+        <h2>Sender filter</h2>
+        <p>Only accept packets from this IP address. Leave empty to accept any address.</p>
         <form id="f-allowed">
-          <label>Erlaubte Absender-IP <input name="ip" inputmode="decimal" placeholder="z. B. 192.168.1.20"></label>
-          <button type="submit">Speichern</button>
+          <label>Allowed sender IP <input name="ip" inputmode="decimal" placeholder="e.g. 192.168.1.20"></label>
+          <button type="submit">Save</button>
         </form>
       </div>
       <div class="card">
-        <h2>Passwort ändern</h2>
+        <h2>Change password</h2>
         <form id="f-password">
-          <label>Bisheriges Passwort <input type="password" name="old" autocomplete="current-password" required></label>
-          <label>Neues Passwort <input type="password" name="new" autocomplete="new-password" minlength="8" maxlength="64" required></label>
-          <label>Wiederholen <input type="password" name="new2" autocomplete="new-password" minlength="8" maxlength="64" required></label>
-          <button type="submit">Passwort ändern</button>
+          <label>Current password <input type="password" name="old" autocomplete="current-password" required></label>
+          <label>New password <input type="password" name="new" autocomplete="new-password" minlength="8" maxlength="64" required></label>
+          <label>Repeat <input type="password" name="new2" autocomplete="new-password" minlength="8" maxlength="64" required></label>
+          <button type="submit">Change password</button>
         </form>
       </div>
     </section>
 
     <section id="t-system" class="tabpane" hidden>
       <div class="card">
-        <h2>Firmware-Update</h2>
-        <p>Aktuell: <strong id="fw-current">–</strong>. Die neue Firmware (<code>ps5-hid-bridge.uf2</code>) wird in den zweiten Speicherplatz geschrieben und erst nach erfolgreichem Start übernommen. Startet sie nicht richtig, kehrt das Board nach einem Neustart zur bisherigen Version zurück.</p>
+        <h2>Firmware update</h2>
+        <p>Current: <strong id="fw-current">–</strong>. The new firmware (<code>ps5-hid-bridge.uf2</code>) is written to the second slot and only kept after it started successfully. If it does not start properly, the board returns to the previous version after a restart.</p>
         <form id="f-ota">
-          <label>UF2-Datei <input type="file" name="file" accept=".uf2" required></label>
+          <label>UF2 file <input type="file" name="file" accept=".uf2" required></label>
           <progress id="ota-progress" max="100" value="0" hidden></progress>
-          <button type="submit">Hochladen und installieren</button>
+          <button type="submit">Upload and install</button>
         </form>
       </div>
       <div class="card">
-        <h2>Neustart</h2>
-        <p>Das Board startet neu. Die Eingaben sind dabei für wenige Sekunden unterbrochen.</p>
-        <button id="b-reboot" class="secondary">Neu starten</button>
+        <h2>Restart</h2>
+        <p>The board restarts. Input is interrupted for a few seconds.</p>
+        <button id="b-reboot" class="secondary">Restart</button>
       </div>
       <div class="card danger">
-        <h2>Werkseinstellungen</h2>
-        <p>Löscht Passwort, Schlüssel und Netzwerkeinstellungen. Danach gilt wieder das Werkspasswort und die App braucht einen neuen Schlüssel. Alternativ: BOOTSEL-Taste am Board 5 Sekunden halten.</p>
-        <button id="b-reset" class="danger">Auf Werkseinstellungen zurücksetzen</button>
+        <h2>Factory reset</h2>
+        <p>Erases password, key and network settings. Afterwards the factory password applies again and the app needs a new key. Alternatively: hold the BOOTSEL button on the board for 5 seconds.</p>
+        <button id="b-reset" class="danger">Reset to factory settings</button>
         <div id="reset-confirm" class="confirm" hidden>
-          <p>Wirklich alles zurücksetzen?</p>
-          <button id="b-reset-yes" class="danger">Ja, zurücksetzen</button>
-          <button id="b-reset-no" class="secondary">Abbrechen</button>
+          <p>Really reset everything?</p>
+          <button id="b-reset-yes" class="danger">Yes, reset</button>
+          <button id="b-reset-no" class="secondary">Cancel</button>
         </div>
       </div>
     </section>

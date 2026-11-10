@@ -59,7 +59,7 @@ impl TxCounter {
             if let Err(e) = self.persist() {
                 // Not fatal: the clock-based counter keeps working; only a
                 // clock going backwards across restarts is no longer covered.
-                eprintln!("Warnung: Zählerstand konnte nicht gespeichert werden: {e}");
+                eprintln!("Warning: could not save the packet counter: {e}");
             }
         }
         c

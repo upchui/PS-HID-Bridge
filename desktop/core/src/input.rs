@@ -95,10 +95,10 @@ impl DeviceInfo {
 
     pub fn kind(&self) -> &'static str {
         match (self.keyboard, self.mouse) {
-            (true, true) => "Tastatur+Maus",
-            (true, false) => "Tastatur",
-            (false, true) => "Maus",
-            (false, false) => "sonstiges",
+            (true, true) => "keyboard + mouse",
+            (true, false) => "keyboard",
+            (false, true) => "mouse",
+            (false, false) => "other",
         }
     }
 

@@ -14,12 +14,12 @@ Kirigami.ScrollablePage {
     readonly property var triggers: JSON.parse(AppController.triggersJson)
 
     function triggerSummary() {
-        const actions = { "toggle": "umschalten", "on": "an", "off": "aus", "pause": "pausieren", "release-all": "alles loslassen" };
-        const kinds = { "combo": "", "hold": " (halten)", "double-tap": " (zweimal tippen)" };
-        let parts = triggers.map(t => t.keys + kinds[t.kind] + ": " + actions[t.action]);
-        if (AppController.windowRule !== "")
-            parts.push("automatisch, wenn „" + AppController.windowRule + "“ aktiv ist");
-        return parts.length ? parts.join(" · ") : "keine Auslöser eingerichtet";
+        const actions = { "toggle": "toggle", "on": "on", "off": "off", "pause": "pause", "release-all": "release all" };
+        const kinds = { "combo": "", "hold": " (hold)", "double-tap": " (double tap)" };
+        let parts = triggers.map(t => t.keys + kinds[t.kind] + (t.kind === "hold" ? "" : ": " + actions[t.action]));
+        if (AppController.windowRuleEnabled && AppController.windowRule !== "")
+            parts.push("automatically while \"" + AppController.windowRule + "\" is active");
+        return parts.length ? parts.join(" · ") : "no triggers set up";
     }
 
     ColumnLayout {
@@ -35,7 +35,7 @@ Kirigami.ScrollablePage {
         Kirigami.InlineMessage {
             Layout.fillWidth: true
             type: Kirigami.MessageType.Warning
-            text: AppController.devicesBlocked + " gewählte Geräteschnittstelle(n) ohne Zugriff. Unter „Geräte“ einrichten."
+            text: AppController.devicesBlocked + " selected device interface(s) without access. Set it up under \"Devices\"."
             visible: AppController.devicesBlocked > 0
         }
 
@@ -61,7 +61,7 @@ Kirigami.ScrollablePage {
                         text: AppController.statusText
                     }
                     Controls.Switch {
-                        text: "Steuerung"
+                        text: "Bridge"
                         enabled: AppController.connected
                         checked: AppController.active || AppController.pending
                         onToggled: AppController.setOn(checked)
@@ -71,14 +71,14 @@ Kirigami.ScrollablePage {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     text: AppController.active
-                          ? "Maus und Tastatur gehen an die PS5. Der Desktop bekommt keine Eingaben."
-                          : "Maus und Tastatur gehören dem Desktop."
+                          ? "Mouse and keyboard go to the PS5. The desktop gets no input."
+                          : "Mouse and keyboard belong to the desktop."
                 }
                 Controls.Label {
                     Layout.fillWidth: true
                     visible: AppController.active
                     font.bold: true
-                    text: "An die PS5: " + (AppController.liveText !== "" ? AppController.liveText : "keine Taste")
+                    text: "To the PS5: " + (AppController.liveText !== "" ? AppController.liveText : "no key")
                 }
             }
         }
@@ -88,27 +88,27 @@ Kirigami.ScrollablePage {
 
             Controls.Label {
                 Kirigami.FormData.label: "Board:"
-                text: AppController.boardAddress === "" ? "nicht eingerichtet (unter „Board“)"
-                      : (AppController.connected ? "verbunden" : "nicht erreichbar") + " (" + AppController.boardAddress + ")"
+                text: AppController.boardAddress === "" ? "not set up (see \"Board\")"
+                      : (AppController.connected ? "connected" : "not reachable") + " (" + AppController.boardAddress + ")"
             }
             Controls.Label {
                 Kirigami.FormData.label: "PS5:"
-                text: AppController.boardUsb !== "" ? AppController.boardUsb : "unbekannt"
+                text: AppController.boardUsb !== "" ? AppController.boardUsb : "unknown"
             }
             Controls.Label {
-                Kirigami.FormData.label: "Laufzeit:"
+                Kirigami.FormData.label: "Latency:"
                 text: AppController.rttMs >= 0
-                      ? AppController.rttMs.toFixed(2) + " ms hin und zurück (Median " + AppController.rttP50.toFixed(2)
-                        + " ms, 95 % unter " + AppController.rttP95.toFixed(2) + " ms)"
+                      ? AppController.rttMs.toFixed(2) + " ms round trip (median " + AppController.rttP50.toFixed(2)
+                        + " ms, 95 % below " + AppController.rttP95.toFixed(2) + " ms)"
                       : "–"
             }
             Controls.Label {
-                Kirigami.FormData.label: "Pakete:"
-                text: AppController.packetsPerSecond + " pro Sekunde"
+                Kirigami.FormData.label: "Packets:"
+                text: AppController.packetsPerSecond + " per second"
             }
             Controls.Label {
-                Kirigami.FormData.label: "Geräte:"
-                text: AppController.devicesOpen + " Schnittstelle(n) aktiv"
+                Kirigami.FormData.label: "Devices:"
+                text: AppController.devicesOpen + " interface(s) open"
             }
             Controls.Label {
                 Kirigami.FormData.label: "Firmware:"
@@ -151,27 +151,27 @@ Kirigami.ScrollablePage {
         Controls.Label {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
-            text: "Umschalten: " + page.triggerSummary()
+            text: "Toggle: " + page.triggerSummary()
         }
         Controls.Label {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
-            text: "Not-Aus (gibt immer alles frei): Strg+Alt+Shift+Esc"
+            text: "Emergency stop (always releases everything): Ctrl+Alt+Shift+Esc"
         }
 
         RowLayout {
             Controls.Button {
-                text: "Alle Tasten loslassen"
+                text: "Release all keys"
                 enabled: AppController.connected
                 onClicked: AppController.releaseAll()
             }
             Controls.Button {
-                text: AppController.paused ? "Fortsetzen" : "Pausieren"
+                text: AppController.paused ? "Resume" : "Pause"
                 enabled: AppController.connected
                 onClicked: AppController.pause()
             }
             Controls.Button {
-                text: "Neu verbinden"
+                text: "Reconnect"
                 onClicked: AppController.reconnect()
             }
         }

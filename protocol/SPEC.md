@@ -1,138 +1,138 @@
-# PS5 HID Bridge – Protokoll v1
+# PS5 HID Bridge – Protocol v1
 
-Dieses Dokument beschreibt die UDP-Pakete zwischen Desktop-App und Board. Es gibt drei Implementierungen:
+This document describes the UDP packets between the desktop app and the board. There are three implementations:
 
-- Firmware in C (`firmware/src/core/`)
-- Desktop-Kern in Rust (`desktop/core/src/protocol.rs`)
-- Python-Referenz (`protocol/tools/pshb_proto.py`)
+- firmware in C (`firmware/src/core/`)
+- desktop core in Rust (`desktop/core/src/protocol.rs`)
+- Python reference (`protocol/tools/pshb_proto.py`)
 
-Alle drei prüfen sich gegen die gemeinsamen Testvektoren in `protocol/vectors/`.
+All three are checked against the shared test vectors in `protocol/vectors/`.
 
-## Überblick
+## Overview
 
-- Transport: UDP, Board lauscht auf Port **45045** (einstellbar).
-- Jedes Paket ist mit **ChaCha20-Poly1305** (RFC 8439) und einem **Pre-Shared Key** (256 Bit) verschlüsselt und signiert.
-- Alle Zahlen sind **Little Endian**.
-- Pakete mit falscher Signatur, alter Sequenznummer, falscher Session oder fremder Absender-IP verwirft das Board stillschweigend und zählt sie nur mit.
+- Transport: UDP; the board listens on port **45045** (configurable).
+- Every packet is encrypted and authenticated with **ChaCha20-Poly1305** (RFC 8439) and a **pre-shared key** (256 bit).
+- All numbers are **little endian**.
+- The board silently drops packets with a bad tag, an old counter, a wrong session or a foreign sender IP, and only counts them.
 
-## Paketaufbau
+## Packet layout
 
-| Offset | Größe | Feld | Inhalt |
+| Offset | Size | Field | Content |
 |---|---|---|---|
-| 0 | 1 | Version | `0x01` |
-| 1 | 1 | Typ | siehe unten |
-| 2 | 8 | Zähler | u64, Sequenznummer des Absenders |
-| 10 | n | Nutzdaten | verschlüsselt, Länge je nach Typ |
-| 10+n | 16 | Tag | Poly1305 |
+| 0 | 1 | version | `0x01` |
+| 1 | 1 | type | see below |
+| 2 | 8 | counter | u64, sender's sequence number |
+| 10 | n | payload | encrypted, length depends on the type |
+| 10+n | 16 | tag | Poly1305 |
 
-Die ersten 10 Bytes (Version, Typ, Zähler) sind unverschlüsselt und gehen als **Associated Data** in die Signatur ein. Sie lassen sich also nicht verändern, ohne dass die Prüfung fehlschlägt.
+The first 10 bytes (version, type, counter) are not encrypted but enter the tag as **associated data**, so they cannot be changed without the check failing.
 
-| Typ | Name | Richtung | Nutzdaten | Paketlänge |
+| Type | Name | Direction | Payload | Packet length |
 |---|---|---|---|---|
-| `0x01` | INPUT | App → Board | 23 B | 49 B |
-| `0x02` | HEARTBEAT | App → Board | 23 B | 49 B |
-| `0x03` | PING | App → Board | 12 B | 38 B |
-| `0x04` | PONG | Board → App | 49 B | 75 B |
+| `0x01` | INPUT | app → board | 23 B | 49 B |
+| `0x02` | HEARTBEAT | app → board | 23 B | 49 B |
+| `0x03` | PING | app → board | 12 B | 38 B |
+| `0x04` | PONG | board → app | 49 B | 75 B |
 
 ### Nonce
 
-Die 12-Byte-Nonce wird aus Richtung und Zähler gebildet:
+The 12-byte nonce is built from the direction and the counter:
 
-| Offset | Größe | Inhalt |
+| Offset | Size | Content |
 |---|---|---|
-| 0 | 4 | Richtung, u32: `1` = App → Board, `2` = Board → App |
-| 4 | 8 | Zähler aus dem Header, u64 |
+| 0 | 4 | direction, u32: `1` = app → board, `2` = board → app |
+| 4 | 8 | counter from the header, u64 |
 
-Beide Richtungen nutzen denselben Schlüssel. Durch die Richtung in der Nonce können sich die Nonces von App und Board nie überschneiden.
+Both directions use the same key. Because the direction is part of the nonce, app and board nonces can never collide.
 
-**Eine Nonce darf mit demselben Schlüssel niemals zweimal verwendet werden.** Deshalb gilt:
+**A nonce must never be used twice with the same key.** Therefore:
 
-- **App:** Zähler = `max(letzter + 1, aktuelle Unix-Zeit in µs, gespeicherte Untergrenze)`. Die Untergrenze wird regelmäßig auf `Zähler + 60 s` gesetzt und gespeichert. So bleibt der Zähler auch nach einem Neustart der App oder einer zurückgestellten Uhr eindeutig.
-- **Board:** Zähler startet bei jedem Booten mit einem Zufallswert aus dem TRNG (auf 62 Bit begrenzt) und zählt dann hoch.
+- **App:** counter = `max(last + 1, current Unix time in µs, stored floor)`. The floor is regularly set to `counter + 60 s` and saved, so the counter stays unique across app restarts and clocks that are set back.
+- **Board:** the counter starts at a random value from the TRNG on every boot (limited to 62 bits) and counts up.
 
-## Nutzdaten
+## Payloads
 
-### INPUT und HEARTBEAT (23 Bytes)
+### INPUT and HEARTBEAT (23 bytes)
 
-| Offset | Größe | Feld | Inhalt |
+| Offset | Size | Field | Content |
 |---|---|---|---|
-| 0 | 8 | session_id | u64, Session des Boards (aus PONG) |
-| 8 | 1 | flags | Bit 0 = RELEASE_ALL: alles loslassen, übrige Felder ignorieren |
-| 9 | 1 | mods | Modifikator-Bits wie im HID-Tastatur-Report (Bit 0 = Strg links … Bit 7 = GUI rechts) |
-| 10 | 6 | keys | bis zu 6 gedrückte Tasten, HID-Usage-Page 0x07, unbenutzt = 0; bei mehr als 6 Tasten alle sechs = `0x01` (ErrorRollOver) |
-| 16 | 1 | buttons | Maustasten: Bit 0 links, 1 rechts, 2 Mitte, 3 zurück, 4 vor |
-| 17 | 2 | dx | i16, relative Mausbewegung |
+| 0 | 8 | session_id | u64, the board's session (from PONG) |
+| 8 | 1 | flags | bit 0 = RELEASE_ALL: release everything, ignore the other fields |
+| 9 | 1 | mods | modifier bits as in the HID keyboard report (bit 0 = left Ctrl … bit 7 = right GUI) |
+| 10 | 6 | keys | up to 6 pressed keys, HID usage page 0x07, unused = 0; with more than 6 keys all six = `0x01` (ErrorRollOver) |
+| 16 | 1 | buttons | mouse buttons: bit 0 left, 1 right, 2 middle, 3 back, 4 forward |
+| 17 | 2 | dx | i16, relative mouse motion |
 | 19 | 2 | dy | i16 |
-| 21 | 1 | wheel | i8, Mausrad vertikal |
-| 22 | 1 | pan | i8, Mausrad horizontal |
+| 21 | 1 | wheel | i8, vertical wheel |
+| 22 | 1 | pan | i8, horizontal wheel |
 
-- Tastatur und Maustasten sind **absoluter Zustand**: Jedes Paket enthält alle gerade gedrückten Tasten. Ein verlorenes Paket korrigiert sich mit dem nächsten.
-- Bewegung und Mausrad sind **relativ**: Das Board addiert sie auf und gibt sie über die USB-Reports aus, ohne etwas zu verlieren.
-- HEARTBEAT hat denselben Aufbau. Die App schickt ihn, solange die Steuerung aktiv ist und gerade nichts anderes gesendet wird (alle 50 ms). Er trägt den vollen Tastenzustand und `dx = dy = wheel = pan = 0`.
+- Keyboard and mouse buttons are **absolute state**: every packet contains all keys currently pressed, so a lost packet is corrected by the next one. Every distinct state is sent (and reported over USB) in order, so even a key tap shorter than a millisecond arrives.
+- Motion and wheels are **relative**: the board adds them up and passes them on through the USB reports without losing anything.
+- HEARTBEAT has the same layout. The app sends it while the bridge is active and nothing else was sent for 50 ms. It carries the full key state and `dx = dy = wheel = pan = 0`.
 
-### PING (12 Bytes)
+### PING (12 bytes)
 
-| Offset | Größe | Feld | Inhalt |
+| Offset | Size | Field | Content |
 |---|---|---|---|
-| 0 | 8 | t_app_us | u64, Sendezeit der App (beliebige monotone Uhr) |
-| 8 | 4 | seq | u32, laufende Nummer |
+| 0 | 8 | t_app_us | u64, app's send time (any monotonic clock) |
+| 8 | 4 | seq | u32, sequence number |
 
-PING braucht keine Session-ID. Die App erfährt die Session erst aus der Antwort.
+PING does not need a session id; the app learns the session from the answer.
 
-### PONG (49 Bytes)
+### PONG (49 bytes)
 
-| Offset | Größe | Feld | Inhalt |
+| Offset | Size | Field | Content |
 |---|---|---|---|
-| 0 | 8 | t_app_us | Echo aus PING (0 bei Session-Hinweis, siehe unten) |
-| 8 | 4 | seq | Echo aus PING |
-| 12 | 8 | session_id | aktuelle Session des Boards |
-| 20 | 4 | fw_version | `0x00MMmmpp` (Major, Minor, Patch) |
-| 24 | 4 | uptime_ms | Laufzeit seit dem Start |
-| 28 | 1 | status | Bit 0 USB verbunden, Bit 1 USB im Ruhemodus, Bit 2 Failsafe aktiv, Bit 7 unverschlüsselte Debug-Firmware |
-| 29 | 4 | rx_ok | gültige Pakete |
-| 33 | 4 | rx_auth_fail | falsche Signatur oder kein Schlüssel gesetzt |
-| 37 | 4 | rx_replay | Zähler nicht größer als der letzte oder falsche Session |
-| 41 | 4 | rx_filtered | fremde Absender-IP |
-| 45 | 4 | rx_malformed | falsche Länge, Version oder unbekannter Typ |
+| 0 | 8 | t_app_us | echo from PING (0 for a session hint, see below) |
+| 8 | 4 | seq | echo from PING |
+| 12 | 8 | session_id | the board's current session |
+| 20 | 4 | fw_version | `0x00MMmmpp` (major, minor, patch) |
+| 24 | 4 | uptime_ms | time since boot |
+| 28 | 1 | status | bit 0 USB connected, bit 1 USB suspended, bit 2 failsafe active, bit 7 unencrypted debug firmware |
+| 29 | 4 | rx_ok | valid packets |
+| 33 | 4 | rx_auth_fail | bad tag or no key set |
+| 37 | 4 | rx_replay | counter not greater than the last one, or wrong session |
+| 41 | 4 | rx_filtered | foreign sender IP |
+| 45 | 4 | rx_malformed | wrong length, version or unknown type |
 
-## Ablauf im Board
+## Processing on the board
 
-Für jedes empfangene Paket prüft das Board in dieser Reihenfolge:
+For every received packet the board checks, in this order:
 
-1. Länge mindestens Header + Tag, Version `0x01`, Typ INPUT, HEARTBEAT oder PING, Länge passt zum Typ. Sonst `rx_malformed`.
-2. Absender-IP erlaubt (falls ein Filter eingestellt ist). Sonst `rx_filtered`.
-3. `Zähler > letzter gültiger Zähler`. Sonst `rx_replay`. Diese Prüfung ist billig und kommt deshalb vor der Kryptografie.
-4. Tag prüfen und entschlüsseln. Sonst `rx_auth_fail`.
-5. Erst jetzt: `letzter gültiger Zähler = Zähler`. Ein gefälschtes Paket kann den Zähler also nicht hochtreiben.
-6. INPUT/HEARTBEAT: `session_id` muss der aktuellen Session entsprechen. Sonst `rx_replay`; das Board schickt höchstens alle 100 ms ein PONG mit `t_app_us = seq = 0` als **Session-Hinweis** zurück, damit die App die neue Session sofort kennt.
-7. PING: PONG an den Absender (IP und Port aus dem empfangenen Paket).
+1. Length at least header + tag, version `0x01`, type INPUT, HEARTBEAT or PING, length matches the type. Otherwise `rx_malformed`.
+2. Sender IP allowed (if a filter is configured). Otherwise `rx_filtered`.
+3. `counter > last valid counter`. Otherwise `rx_replay`. This check is cheap and therefore comes before the cryptography.
+4. Verify the tag and decrypt. Otherwise `rx_auth_fail`.
+5. Only now: `last valid counter = counter`. A forged packet can therefore not push the counter up.
+6. INPUT/HEARTBEAT: `session_id` must match the current session. Otherwise `rx_replay`; at most every 100 ms the board answers with a PONG with `t_app_us = seq = 0` as a **session hint**, so the app learns the new session immediately.
+7. PING: PONG to the sender (IP and port of the received packet).
 
-Die **Session-ID** erzeugt das Board bei jedem Start neu aus dem TRNG. Nach einem Neustart sind dadurch alle früher aufgezeichneten Eingabepakete wertlos, auch wenn der Zählerstand des Boards wieder bei null beginnt.
+The board creates a new **session id** from the TRNG on every boot. After a restart every previously recorded input packet is worthless, even though the board's own counter starts over.
 
 ## Failsafe
 
-- Kommt **250 ms** lang kein gültiges INPUT oder HEARTBEAT, lässt das Board alle Tasten und Maustasten los (Status-Bit 2).
-- Dasselbe passiert, wenn die PS5 den USB-Port trennt oder in den Ruhemodus versetzt.
-- Das nächste gültige Paket setzt den Zustand wieder.
+- If no valid INPUT or HEARTBEAT arrives for **250 ms**, the board releases all keys and mouse buttons (status bit 2).
+- The same happens when the PS5 disconnects the USB port or puts it into rest mode.
+- The next valid packet restores the state.
 
-## Ablauf in der App
+## Behaviour of the app
 
-1. PING senden, bis ein PONG kommt; daraus die `session_id` übernehmen.
-2. Bei jeder Änderung ein INPUT senden, höchstens eines pro Millisekunde. Bewegungen innerhalb dieser Millisekunde werden zusammengefasst; was nicht in i16 passt, geht ins nächste Paket.
-3. Solange die Steuerung aktiv ist: HEARTBEAT, wenn 50 ms lang nichts gesendet wurde.
-4. Jede Sekunde PING (für die Latenzanzeige häufiger). Ändert sich die `session_id` in einem PONG, ab sofort die neue verwenden und den vollen Zustand erneut senden.
-5. Beim Deaktivieren: INPUT mit `RELEASE_ALL`.
+1. Send PING until a PONG arrives; take the `session_id` from it.
+2. Send an INPUT on every change, at most one per millisecond. Motion within that millisecond is summed up; whatever does not fit into i16 goes into the next packet.
+3. While the bridge is active: HEARTBEAT if nothing was sent for 50 ms.
+4. PING every second (more often for the latency view). If the `session_id` in a PONG changes, use the new one from now on and send the full state again.
+5. When deactivating: INPUT with `RELEASE_ALL`.
 
-## Unverschlüsselter Debug-Modus (Version 0)
+## Unencrypted debug mode (version 0)
 
-Nur das Debug-Image `ps5-hid-bridge-plain.uf2` und der Simulator mit `--plaintext` nehmen Pakete mit Version `0x00` an. Sie haben denselben Header und dieselben Nutzdaten, aber keine Verschlüsselung und keinen Tag. Zähler, Session und Absenderfilter werden in diesem Modus nicht geprüft. Antworten kommen ebenfalls als Version 0. Status-Bit 7 zeigt diesen Modus an.
+Only the debug image `ps5-hid-bridge-plain.uf2` and the simulator with `--plaintext` accept packets with version `0x00`. They have the same header and payloads, but no encryption and no tag. Counter, session and sender filter are not checked in this mode. Answers are also sent as version 0. Status bit 7 shows this mode.
 
-## Testvektoren
+## Test vectors
 
-`protocol/vectors/v1.json` erzeugt `protocol/tools/gen_vectors.py` mit festen Schlüsseln und Zählern:
+`protocol/vectors/v1.json` is generated by `protocol/tools/gen_vectors.py` with fixed keys and counters:
 
-- `aead_rfc8439`: der Testvektor aus RFC 8439, Abschnitt 2.8.2. Er beweist, dass die Bibliotheken das Standardverfahren umsetzen.
-- `packets`: gültige Pakete aller Typen und Richtungen, mit den dekodierten Feldern.
-- `invalid`: Pakete, die beim Öffnen scheitern müssen: falscher Tag, falscher Schlüssel, falsche Richtung, veränderter Header, zu kurz.
+- `aead_rfc8439`: the test vector from RFC 8439, section 2.8.2. It proves that the libraries implement the standard construction.
+- `packets`: valid packets of all types and directions, with the decoded fields.
+- `invalid`: packets that must fail to open: wrong tag, wrong key, wrong direction, modified header, too short.
 
-`make test` prüft, dass die eingecheckte Datei dem Generator entspricht und dass C, Rust und Python alle Vektoren identisch verarbeiten.
+`make test` checks that the committed file matches the generator and that C, Rust and Python process all vectors identically.

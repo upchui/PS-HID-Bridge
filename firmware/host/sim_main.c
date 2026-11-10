@@ -227,7 +227,7 @@ static const uf2_flash_t k_slot = {NULL, slot_erase, slot_program};
 static bool be_ota_begin(void *ctx, uint32_t size, char *err, size_t cap) {
     (void)ctx;
     if (size == 0 || size % UF2_BLOCK_SIZE != 0) {
-        snprintf(err, cap, "Das ist keine UF2-Datei.");
+        snprintf(err, cap, "This is not a UF2 file.");
         return false;
     }
     uf2_writer_init(&s_uf2, &k_slot, SIM_SLOT_SIZE, UF2_FAMILY_RP2350_ARM_S);

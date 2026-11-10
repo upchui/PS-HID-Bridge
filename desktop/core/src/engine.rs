@@ -8,7 +8,7 @@
 //!   while a key is down leaves that key stuck on the desktop. Hold triggers
 //!   are the exception (the trigger key is held by definition).
 //! * Deactivation is immediate: release everything, ungrab.
-//! * The emergency combination (Strg+Alt+Shift+Esc) always deactivates and
+//! * The emergency combination (Ctrl+Alt+Shift+Esc) always deactivates and
 //!   cannot be configured away.
 //! * The key that fires a trigger is never forwarded to the PS5.
 
@@ -405,7 +405,7 @@ mod tests {
             }
         }
         fn toggle() -> Self {
-            Self::new(vec![Trigger::combo("Strg+Alt+P", Action::Toggle).unwrap()], false)
+            Self::new(vec![Trigger::combo("Ctrl+Alt+P", Action::Toggle).unwrap()], false)
         }
         fn ev(&mut self, ev: Event) -> Vec<Effect> {
             self.e.handle(ev, self.now)
@@ -543,7 +543,7 @@ mod tests {
 
     #[test]
     fn mouse_button_trigger_is_not_forwarded() {
-        let mut t = T::new(vec![Trigger::combo("Maus5", Action::Toggle).unwrap()], false);
+        let mut t = T::new(vec![Trigger::combo("Mouse5", Action::Toggle).unwrap()], false);
         let fx = t.tap(BTN_EXTRA);
         assert!(fx.contains(&Effect::Grab(true)));
         let fx = t.down(BTN_EXTRA);
@@ -585,7 +585,7 @@ mod tests {
     fn hold_activates_immediately_and_keeps_held_keys_on_desktop() {
         let mut t = T::new(
             vec![Trigger {
-                kind: TriggerKind::Hold(Combo::parse("Maus4").unwrap()),
+                kind: TriggerKind::Hold(Combo::parse("Mouse4").unwrap()),
                 action: Action::On,
             }],
             false,

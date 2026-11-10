@@ -288,8 +288,8 @@ class InteropTests(unittest.TestCase):
     def test_ping(self):
         r = self.cli("ping", "--count", "2")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn(f"Session {SESSION:016x}", r.stdout)
-        self.assertIn("USB verbunden", r.stdout)
+        self.assertIn(f"session {SESSION:016x}", r.stdout)
+        self.assertIn("USB connected", r.stdout)
 
     def test_send_keys_and_motion(self):
         r = self.cli("send", "--keys", "04,1d", "--mods", "02", "--dx", "30", "--dy", "-7", "--hold-ms", "100")
@@ -310,7 +310,7 @@ class InteropTests(unittest.TestCase):
         import tempfile
         script = """
             tap A                 # inactive: must not arrive
-            combo Strg+Alt+P      # activate (after all keys are released)
+            combo Ctrl+Alt+P      # activate (after all keys are released)
             wait 30
             key LEFTSHIFT down
             tap H
@@ -320,7 +320,7 @@ class InteropTests(unittest.TestCase):
             button BTN_LEFT down
             button BTN_LEFT up
             wait 30
-            combo Strg+Alt+P      # deactivate
+            combo Ctrl+Alt+P      # deactivate
             wait 30
             tap B                 # inactive again
         """
@@ -331,8 +331,8 @@ class InteropTests(unittest.TestCase):
         finally:
             os.unlink(f.name)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("Steuerung AN", r.stdout)
-        self.assertIn("Steuerung AUS", r.stdout)
+        self.assertIn("Bridge ON", r.stdout)
+        self.assertIn("Bridge OFF", r.stdout)
         rep = self.sim.reports_all()
         kbd, mouse = rep["KBD"], rep["MOUSE"]
         keys = [k["keys"].split()[0] for k in kbd]
@@ -349,7 +349,7 @@ class InteropTests(unittest.TestCase):
     def test_wrong_key(self):
         r = self.cli("ping", "--count", "1", key=bytes(32))
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("Keine Antwort", r.stderr)
+        self.assertIn("No answer", r.stderr)
 
 
 class FilterTests(unittest.TestCase):
@@ -506,7 +506,7 @@ class WebTests(unittest.TestCase):
             self.assertEqual(self.web.login("falsch")[0], 401)
         status, r, _ = self.web.login("ps5-hid-bridge")
         self.assertEqual(status, 429)
-        self.assertIn("warten", r["error"])
+        self.assertIn("wait", r["error"])
 
     def test_generated_psk_is_used_by_the_input_path(self):
         self.setup_password()
@@ -570,7 +570,7 @@ class WebTests(unittest.TestCase):
         uf2 = make_uf2(10)
         status, r = self.web.upload("/api/ota", uf2, zlib.crc32(uf2) ^ 1)
         self.assertEqual(status, 400)
-        self.assertIn("Prüfsumme", r["error"])
+        self.assertIn("Checksum", r["error"])
         junk = bytes(range(256)) * 4
         status, r = self.web.upload("/api/ota", junk, zlib.crc32(junk))
         self.assertEqual(status, 400)

@@ -6,12 +6,12 @@ import PS5HIDBridge
 
 Kirigami.ScrollablePage {
     id: page
-    title: "Einrichtung – Schritt " + (step + 1) + " von " + titles.length
+    title: "Setup – step " + (step + 1) + " of " + titles.length
 
     signal finished()
 
     property int step: 0
-    readonly property var titles: ["Willkommen", "Board", "Geräte", "Auslöser", "Test"]
+    readonly property var titles: ["Welcome", "Board", "Devices", "Trigger", "Test"]
     property string boardError: ""
 
     footer: Controls.ToolBar {
@@ -23,12 +23,12 @@ Kirigami.ScrollablePage {
                 font.bold: true
             }
             Controls.Button {
-                text: "Zurück"
+                text: "Back"
                 enabled: page.step > 0
                 onClicked: page.step--
             }
             Controls.Button {
-                text: page.step === page.titles.length - 1 ? "Fertig" : "Weiter"
+                text: page.step === page.titles.length - 1 ? "Finish" : "Next"
                 highlighted: true
                 onClicked: {
                     if (page.step === 3 && !triggers.save())
@@ -47,22 +47,22 @@ Kirigami.ScrollablePage {
     StackLayout {
         currentIndex: page.step
 
-        // 0 -- Willkommen
+        // 0 -- Welcome
         ColumnLayout {
             spacing: Kirigami.Units.largeSpacing
-            Kirigami.Heading { text: "PS5 HID Bridge einrichten" }
+            Kirigami.Heading { text: "Set up PS5 HID Bridge" }
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "Mit dieser App steuerst du die PS5 mit Maus und Tastatur dieses Rechners, während das Bild per Remote Play kommt. Dafür brauchst du:"
+                text: "This app lets you control the PS5 with the mouse and keyboard of this computer while the picture comes in via Remote Play. You need:"
             }
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 textFormat: Text.StyledText
-                text: "• das Board mit aktueller Firmware, per USB an der PS5 und per Kabel im Netzwerk<br>"
-                      + "• den Pre-Shared Key aus der Weboberfläche des Boards (Sicherheit → Neuen Schlüssel erzeugen)<br>"
-                      + "• auf der PS5: Tastaturlayout <b>Deutsch</b> und USB-Stromversorgung im Ruhemodus eingeschaltet"
+                text: "• the board with current firmware, connected to the PS5 via USB and to the network via cable<br>"
+                      + "• the pre-shared key from the board's web interface (Security → Generate new key)<br>"
+                      + "• on the PS5: the keyboard language of <b>your keyboard</b> (e.g. German) and USB power in rest mode switched on"
             }
         }
 
@@ -72,27 +72,27 @@ Kirigami.ScrollablePage {
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "Adresse des Boards (steht im Router als ps5-hid-bridge-…) und den Schlüssel aus seiner Weboberfläche eintragen."
+                text: "Enter the board address (your router lists it as ps5-hid-bridge-…) and the key from its web interface."
             }
             Kirigami.FormLayout {
                 Layout.fillWidth: true
                 Controls.TextField {
                     id: address
-                    Kirigami.FormData.label: "Adresse:"
+                    Kirigami.FormData.label: "Address:"
                     Layout.preferredWidth: Kirigami.Units.gridUnit * 16
                     text: AppController.boardAddress
-                    placeholderText: "z. B. 192.168.1.50"
+                    placeholderText: "e.g. 192.168.1.50"
                 }
                 Controls.TextField {
                     id: psk
-                    Kirigami.FormData.label: "Pre-Shared Key:"
+                    Kirigami.FormData.label: "Pre-shared key:"
                     Layout.preferredWidth: Kirigami.Units.gridUnit * 24
                     echoMode: TextInput.Password
-                    placeholderText: AppController.pskSet ? "gespeichert – nur zum Ändern ausfüllen" : "64 Hex-Zeichen"
+                    placeholderText: AppController.pskSet ? "stored – fill in only to change it" : "64 hex digits"
                 }
             }
             Controls.Button {
-                text: "Verbinden"
+                text: "Connect"
                 highlighted: true
                 onClicked: page.boardError = AppController.saveBoard(address.text, psk.text)
             }
@@ -107,31 +107,34 @@ Kirigami.ScrollablePage {
                 visible: page.boardError === "" && AppController.boardAddress !== ""
                 type: AppController.connected ? Kirigami.MessageType.Positive : Kirigami.MessageType.Information
                 text: AppController.connected
-                      ? "Verbunden. " + AppController.boardUsb + ", Firmware " + AppController.boardFirmware + "."
-                      : "Warte auf Antwort vom Board … Stimmen Adresse und Schlüssel?"
+                      ? "Connected. " + AppController.boardUsb + ", firmware " + AppController.boardFirmware + "."
+                      : "Waiting for an answer from the board … Are address and key correct?"
             }
         }
 
-        // 2 -- Geräte
+        // 2 -- Devices
         ColumnLayout {
             spacing: Kirigami.Units.largeSpacing
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "Tastatur und Maus auswählen, die an die PS5 gehen sollen. Danach fragt die App einmal nach dem Administrator-Passwort, um Lesezugriff auf genau diese Geräte einzurichten."
+                text: "Select the keyboard and mouse that should go to the PS5. The app then asks once for the administrator password to set up read access to exactly these devices."
             }
             DeviceList {
                 Layout.fillWidth: true
             }
+            KeyboardTypeChooser {
+                Layout.fillWidth: true
+            }
         }
 
-        // 3 -- Auslöser
+        // 3 -- Trigger
         ColumnLayout {
             spacing: Kirigami.Units.largeSpacing
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "Womit schaltest du zwischen Desktop und PS5 um? Voreingestellt ist Strg+Alt+P. Weitere Arten (Maustaste, Halten, Fensterregel) gibt es später unter „Auslöser“."
+                text: "How do you want to switch between desktop and PS5? The default is Ctrl+Alt+P. More kinds (mouse button, hold, window rule) are available later under \"Triggers\"."
             }
             TriggerEditor {
                 id: triggers
@@ -140,7 +143,7 @@ Kirigami.ScrollablePage {
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "Not-Aus, immer verfügbar: Strg+Alt+Shift+Esc."
+                text: "Emergency stop, always available: Ctrl+Alt+Shift+Esc."
             }
         }
 
@@ -150,7 +153,7 @@ Kirigami.ScrollablePage {
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "Jetzt den Auslöser drücken und wieder loslassen. Wenn die Steuerung an ist, siehst du hier, was bei der PS5 ankommt. Mit dem Auslöser wieder ausschalten."
+                text: "Now press the trigger and release it. While the bridge is on, you see here what reaches the PS5. Press the trigger again to switch it off."
             }
             Kirigami.FormLayout {
                 Layout.fillWidth: true
@@ -160,15 +163,15 @@ Kirigami.ScrollablePage {
                     font.bold: true
                 }
                 Controls.Label {
-                    Kirigami.FormData.label: "An die PS5:"
-                    text: AppController.active ? (AppController.liveText !== "" ? AppController.liveText : "keine Taste") : "–"
+                    Kirigami.FormData.label: "To the PS5:"
+                    text: AppController.active ? (AppController.liveText !== "" ? AppController.liveText : "no key") : "–"
                 }
                 Controls.Label {
                     Kirigami.FormData.label: "PS5:"
                     text: AppController.boardUsb !== "" ? AppController.boardUsb : "–"
                 }
                 Controls.Label {
-                    Kirigami.FormData.label: "Laufzeit:"
+                    Kirigami.FormData.label: "Latency:"
                     text: AppController.rttMs >= 0 ? AppController.rttMs.toFixed(2) + " ms" : "–"
                 }
             }

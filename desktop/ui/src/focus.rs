@@ -91,7 +91,7 @@ impl FocusWatcher {
         let service = conn
             .unique_name()
             .map(|n| n.to_string())
-            .ok_or("keine D-Bus-Adresse")?;
+            .ok_or("no D-Bus address")?;
 
         let dir = std::env::var_os("XDG_RUNTIME_DIR")
             .map(std::path::PathBuf::from)

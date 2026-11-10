@@ -79,17 +79,17 @@ class Client:
 def describe(p: proto.Pong) -> str:
     flags = []
     if p.status & proto.STATUS_USB_MOUNTED:
-        flags.append("USB verbunden")
+        flags.append("USB connected")
     if p.status & proto.STATUS_USB_SUSPENDED:
-        flags.append("USB im Ruhemodus")
+        flags.append("USB suspended")
     if p.status & proto.STATUS_FAILSAFE:
-        flags.append("Failsafe aktiv")
+        flags.append("failsafe active")
     if p.status & proto.STATUS_PLAINTEXT:
-        flags.append("UNVERSCHLÜSSELT")
-    return (f"Firmware {p.fw_version_str}, Laufzeit {p.uptime_ms / 1000:.1f} s, "
-            f"Session {p.session_id:016x}, {', '.join(flags) or 'USB getrennt'}\n"
-            f"  Pakete: ok {p.rx_ok}, Signatur falsch {p.rx_auth_fail}, Replay {p.rx_replay}, "
-            f"gefiltert {p.rx_filtered}, fehlerhaft {p.rx_malformed}")
+        flags.append("UNENCRYPTED")
+    return (f"Firmware {p.fw_version_str}, up {p.uptime_ms / 1000:.1f} s, "
+            f"session {p.session_id:016x}, {', '.join(flags) or 'USB disconnected'}\n"
+            f"  Packets: ok {p.rx_ok}, bad signature {p.rx_auth_fail}, replay {p.rx_replay}, "
+            f"filtered {p.rx_filtered}, malformed {p.rx_malformed}")
 
 
 def cmd_ping(c: Client, args) -> int:
@@ -99,10 +99,10 @@ def cmd_ping(c: Client, args) -> int:
         r = c.ping()
         if r is None:
             lost += 1
-            print("Zeitüberschreitung")
+            print("Timeout")
         else:
             last, rtt = r
-            print(f"Antwort seq={last.seq} Laufzeit={rtt:.2f} ms")
+            print(f"Answer seq={last.seq} rtt={rtt:.2f} ms")
         time.sleep(args.interval)
     if last:
         print(describe(last))
@@ -111,29 +111,29 @@ def cmd_ping(c: Client, args) -> int:
 
 def cmd_pattern(c: Client, args) -> int:
     if c.ping() is None:
-        print("Keine Antwort vom Board.")
+        print("No answer from the board.")
         return 1
-    print("Maus fährt ein Quadrat ...")
+    print("Mouse moves in a square ...")
     for direction in [(1, 0), (0, 1), (-1, 0), (0, -1)]:
         for _ in range(100):
             c.send_input(dx=direction[0] * 3, dy=direction[1] * 3)
             time.sleep(0.005)
-    print("Tippe 'hallo' ...")
-    usages = {"h": 0x0B, "a": 0x04, "l": 0x0F, "o": 0x12}
-    for ch in "hallo":
+    print("Typing 'hello' ...")
+    usages = {"h": 0x0B, "e": 0x08, "l": 0x0F, "o": 0x12}
+    for ch in "hello":
         c.send_input(keys=[usages[ch]])
         time.sleep(0.03)
         c.send_input()
         time.sleep(0.03)
     c.send(proto.TYPE_INPUT, proto.Input(session_id=c.session_id, flags=proto.FLAG_RELEASE_ALL).encode())
-    print("Fertig.")
+    print("Done.")
     return 0
 
 
 def cmd_flood(c: Client, args) -> int:
     before = c.ping()
     if before is None:
-        print("Keine Antwort vom Board.")
+        print("No answer from the board.")
         return 1
     total = int(args.rate * args.seconds)
     interval = 1.0 / args.rate
@@ -148,12 +148,12 @@ def cmd_flood(c: Client, args) -> int:
     time.sleep(0.2)
     after = c.ping()
     if after is None:
-        print("Keine Antwort nach dem Senden.")
+        print("No answer after sending.")
         return 1
     received = after[0].rx_ok - before[0].rx_ok - 1  # minus the second ping
     loss = total - received
-    print(f"{total} Pakete in {elapsed:.2f} s gesendet ({total / elapsed:.0f}/s), "
-          f"{received} angekommen, Verlust {loss} ({100 * loss / total:.2f} %)")
+    print(f"{total} packets sent in {elapsed:.2f} s ({total / elapsed:.0f}/s), "
+          f"{received} arrived, lost {loss} ({100 * loss / total:.2f} %)")
     return 0 if loss == 0 else 1
 
 
@@ -161,9 +161,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("host")
     ap.add_argument("--port", type=int, default=proto.UDP_PORT_DEFAULT)
-    ap.add_argument("--plain", action="store_true", help="unverschlüsselte Debug-Pakete (Debug-Firmware)")
-    ap.add_argument("--psk", help="Pre-Shared Key (64 Hex-Zeichen)")
-    ap.add_argument("--psk-file", help="Datei mit dem Pre-Shared Key")
+    ap.add_argument("--plain", action="store_true", help="unencrypted debug packets (debug firmware)")
+    ap.add_argument("--psk", help="pre-shared key (64 hex digits)")
+    ap.add_argument("--psk-file", help="file with the pre-shared key")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("ping")
     p.add_argument("--count", type=int, default=5)
@@ -178,10 +178,10 @@ def main() -> int:
     if not args.plain:
         text = args.psk or (open(args.psk_file).read() if args.psk_file else None)
         if not text:
-            ap.error("--psk, --psk-file oder --plain angeben")
+            ap.error("pass --psk, --psk-file or --plain")
         key = bytes.fromhex("".join(text.split()))
         if len(key) != proto.KEY_LEN:
-            ap.error("der Schlüssel muss 64 Hex-Zeichen haben")
+            ap.error("the key must have 64 hex digits")
     c = Client(args.host, args.port, key)
     return {"ping": cmd_ping, "pattern": cmd_pattern, "flood": cmd_flood}[args.cmd](c, args)
 

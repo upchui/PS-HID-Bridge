@@ -41,7 +41,7 @@ static const uf2_flash_t k_flash = {NULL, erase_sector, program_page};
 
 bool ota_begin(uint32_t size, char *err, size_t cap) {
     if (size == 0 || size % UF2_BLOCK_SIZE != 0) {
-        snprintf(err, cap, "Das ist keine UF2-Datei.");
+        snprintf(err, cap, "This is not a UF2 file.");
         return false;
     }
     resident_partition_t part;
@@ -49,7 +49,7 @@ bool ota_begin(uint32_t size, char *err, size_t cap) {
     int r = rom_get_uf2_target_partition(s_workarea, sizeof(s_workarea), UF2_FAMILY_RP2350_ARM_S, &part);
     if (r < 0) {
         snprintf(err, cap,
-                 "Keine Partitionstabelle. Bitte einmal ps5-hid-bridge-pt.uf2 per BOOTSEL installieren.");
+                 "No partition table. Install ps5-hid-bridge-pt.uf2 once via BOOTSEL.");
         return false;
     }
     uint32_t first = (part.permissions_and_location & PICOBIN_PARTITION_LOCATION_FIRST_SECTOR_BITS) >>
@@ -72,7 +72,7 @@ bool ota_write(const uint8_t *data, size_t len) {
 
 bool ota_finish(uint32_t crc, char *err, size_t cap) {
     if (!s_running) {
-        snprintf(err, cap, "Kein Update aktiv.");
+        snprintf(err, cap, "No update in progress.");
         return false;
     }
     uf2_result_t r = uf2_writer_finish(&s_uf2, crc);

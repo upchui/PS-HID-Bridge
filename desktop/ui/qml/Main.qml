@@ -54,11 +54,11 @@ Kirigami.ApplicationWindow {
         enabled: AppController.setupDone
         actions: [
             Kirigami.Action { text: "Status"; checked: root.currentPage === "status"; onTriggered: root.show("status") },
-            Kirigami.Action { text: "Geräte"; checked: root.currentPage === "devices"; onTriggered: root.show("devices") },
-            Kirigami.Action { text: "Auslöser"; checked: root.currentPage === "triggers"; onTriggered: root.show("triggers") },
-            Kirigami.Action { text: "Maus"; checked: root.currentPage === "mouse"; onTriggered: root.show("mouse") },
+            Kirigami.Action { text: "Devices"; checked: root.currentPage === "devices"; onTriggered: root.show("devices") },
+            Kirigami.Action { text: "Triggers"; checked: root.currentPage === "triggers"; onTriggered: root.show("triggers") },
+            Kirigami.Action { text: "Mouse"; checked: root.currentPage === "mouse"; onTriggered: root.show("mouse") },
             Kirigami.Action { text: "Board"; checked: root.currentPage === "board"; onTriggered: root.show("board") },
-            Kirigami.Action { text: "Einrichtung wiederholen"; onTriggered: root.show("wizard") }
+            Kirigami.Action { text: "Run setup again"; onTriggered: root.show("wizard") }
         ]
     }
 
