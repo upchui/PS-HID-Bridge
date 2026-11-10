@@ -16,7 +16,7 @@ Das Paketformat steht in [protocol/SPEC.md](protocol/SPEC.md).
 | Teil | Stand |
 |---|---|
 | Repository, Docker-Builds | ✅ |
-| Firmware: USB-HID | – |
+| Firmware: USB-HID | ✅ (Host-Tests; Hardware-Test steht aus) |
 | Firmware: Netzwerk, DHCP, UDP | – |
 | Protokoll mit Verschlüsselung | – |
 | Kommandozeilen-Tool | – |
@@ -59,5 +59,14 @@ Alle Versionen stehen zentral in [versions.env](versions.env). `make check-pins`
 - WIZnet W5500-EVB-Pico2 (RP2350, W5500, RJ45), per USB-C → USB-A an der PS5.
 - Damit das Board im Ruhemodus der PS5 aktiv bleibt, in den Energiespar-Einstellungen der PS5 die USB-Stromversorgung im Ruhemodus einschalten.
 - Die PS5 muss auf **deutsches Tastaturlayout** gestellt sein. Das Board sendet Positionscodes, sonst sind z. B. Z und Y vertauscht.
+
+### Testimages ohne Netzwerk
+
+| Datei | Zweck |
+|---|---|
+| `out/ps5-hid-bridge-hidtest.uf2` | 5 s nach dem Einstecken fährt die Maus langsam ein Quadrat (16-Bit-Maus). |
+| `out/ps5-hid-bridge-hidtest-mouse8.uf2` | dasselbe mit 8-Bit-Mausachsen, falls ein Host den 16-Bit-Deskriptor nicht mag. |
+
+Flashen: BOOTSEL gedrückt halten, Board an den Rechner stecken, UF2 auf das Laufwerk `RP2350` kopieren. Die LED blinkt, solange kein USB-Host das Board eingebunden hat, und leuchtet dauerhaft, sobald es eingebunden ist. Konsole: UART0 (GP0/GP1, 115200 Baud).
 
 Die USB-Kennung `1209:0001` ist die Test-PID von pid.codes und nur für den privaten Gebrauch gedacht.

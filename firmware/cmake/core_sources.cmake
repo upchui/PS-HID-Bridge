@@ -5,6 +5,9 @@ set(PSHB_FW_DIR ${CMAKE_CURRENT_LIST_DIR}/..)
 
 set(PSHB_CORE_SOURCES
     ${PSHB_FW_DIR}/src/core/crc32.c
+    ${PSHB_FW_DIR}/src/core/hid_desc.c
+    ${PSHB_FW_DIR}/src/core/input_state.c
+    ${PSHB_FW_DIR}/src/core/test_pattern.c
 )
 
 set(PSHB_CORE_INCLUDES
