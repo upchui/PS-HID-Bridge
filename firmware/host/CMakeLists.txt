@@ -43,3 +43,7 @@ foreach(name test_hid_desc test_input_state)
     target_link_libraries(${name}_mouse8 PRIVATE pshb_core_mouse8)
     add_test(NAME ${name}_mouse8 COMMAND ${name}_mouse8)
 endforeach()
+
+# Board simulator (step 3): the core behind a UDP socket, see host/sim_main.c.
+add_executable(pshb-sim ${CMAKE_CURRENT_LIST_DIR}/sim_main.c)
+target_link_libraries(pshb-sim PRIVATE pshb_core)

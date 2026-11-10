@@ -37,7 +37,7 @@ DESKTOP_RUN = $(DOCKER_RUN) -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR
 FW_RUN      = $(DOCKER_RUN) $(FW_IMAGE)
 
 .PHONY: help all firmware desktop desktop-cli test test-firmware test-desktop test-appimage \
-        submodules check-pins images image-firmware image-rust image-desktop \
+        test-sim sim udp-test submodules check-pins images image-firmware image-rust image-desktop \
         shell-fw shell-desktop clean distclean dirs
 
 help:
@@ -46,6 +46,8 @@ help:
 	@echo "  make desktop       AppImage (Qt build!)  -> out/PS5-HID-Bridge-x86_64.AppImage"
 	@echo "  make desktop-cli   command line tool     -> out/pshb-cli"
 	@echo "  make test          unit tests, protocol vectors, simulator"
+	@echo "  make sim           board simulator on UDP $(SIM_PORT) (Ctrl+C to stop)"
+	@echo "  make udp-test IP=a.b.c.d ARGS='--plain ping'   test traffic to a board"
 	@echo "  make all           everything above"
 	@echo "  make submodules    fetch firmware libraries (non-recursive)"
 	@echo "  make check-pins    verify submodule tags against versions.env"
@@ -95,12 +97,16 @@ desktop: image-desktop dirs
 	$(DESKTOP_RUN) bash desktop/packaging/build-appimage.sh
 
 # ---------------------------------------------------------------- tests
-test: test-firmware test-desktop
+test: test-firmware test-sim test-desktop
 
 test-firmware: image-firmware dirs
 	$(FW_RUN) bash -c 'cmake -S firmware/host -B $(HOST_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=Debug \
 		&& cmake --build $(HOST_BUILD) --parallel $(JOBS) \
 		&& ctest --test-dir $(HOST_BUILD) --output-on-failure'
+
+# Simulator integration tests (the simulator is built by test-firmware).
+test-sim: test-firmware
+	$(FW_RUN) python3 tools/test_sim.py --sim $(HOST_BUILD)/pshb-sim
 
 test-desktop: image-rust dirs
 	$(RUST_RUN) bash -c 'cd desktop && cargo fmt --all --check \
@@ -110,6 +116,18 @@ test-desktop: image-rust dirs
 # Smoke test of the packaged app: loads all QML offscreen and quits.
 test-appimage: image-desktop dirs
 	$(DESKTOP_RUN) bash -c 'QT_QPA_PLATFORM=offscreen timeout 60 out/PS5-HID-Bridge-x86_64.AppImage --self-test'
+
+# ---------------------------------------------------------------- manual testing
+SIM_PORT ?= 45045
+SIM_ARGS ?= --plaintext
+
+sim: test-firmware
+	$(DOCKER_RUN) -i --network host $(FW_IMAGE) $(HOST_BUILD)/pshb-sim --bind 0.0.0.0 \
+		--port $(SIM_PORT) $(SIM_ARGS)
+
+udp-test: image-firmware
+	@test -n "$(IP)" || (echo "usage: make udp-test IP=a.b.c.d ARGS='--plain ping'"; exit 2)
+	$(DOCKER_RUN) --network host $(FW_IMAGE) python3 tools/udp_test.py $(IP) $(ARGS)
 
 # ---------------------------------------------------------------- misc
 shell-fw: image-firmware dirs

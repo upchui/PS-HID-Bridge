@@ -1,36 +1,94 @@
 // PS5 HID Bridge firmware -- entry point and core 0 loop.
 //
-// Core 0 owns the latency-critical input path: USB device stack and
-// (from step 3) the UDP input socket. It never blocks.
+// Core 0 owns the latency-critical input path: the USB device stack and the
+// UDP input socket. It never blocks. Core 1 runs network management.
 
 #include <stdio.h>
 
+#include "pico/multicore.h"
+#include "pico/rand.h"
 #include "pico/stdlib.h"
 #include "tusb.h"
 
+#include "bridge.h"
+#include "core1.h"
 #include "hid_out.h"
 #include "input_state.h"
+#include "net_shared.h"
 #include "pshb_config.h"
+#include "w5500_port.h"
+#include "wizchip_conf.h"
 #if PSHB_TEST_PATTERN
 #include "test_pattern.h"
 #endif
 
-static input_state_t g_input;
+net_shared_t g_net;
 
-// LED: slow blink = waiting for USB host, solid = mounted.
+static input_state_t g_input;
+static bridge_t g_bridge;
+static bool s_chip_ok;
+
+// ---------------------------------------------------------------- LED
+// USB not mounted: 1 Hz blink. Mounted, no network: 4 Hz blink.
+// Mounted and ready: on, briefly off on received input.
+
+static absolute_time_t s_activity_until;
+
 static void led_service(void) {
     static absolute_time_t next;
     static bool on;
-    if (hid_out_mounted()) {
-        gpio_put(PICO_DEFAULT_LED_PIN, true);
+    bool ready = atomic_load(&g_net.state) == NET_STATE_READY;
+    if (hid_out_mounted() && ready) {
+        gpio_put(PICO_DEFAULT_LED_PIN, !time_reached(s_activity_until) ? false : true);
         return;
     }
     if (time_reached(next)) {
         on = !on;
         gpio_put(PICO_DEFAULT_LED_PIN, on);
-        next = make_timeout_time_ms(500);
+        next = make_timeout_time_ms(hid_out_mounted() ? 125 : 500);
     }
 }
+
+// ---------------------------------------------------------------- network input
+
+static void net_service(void) {
+    static bool active;
+    static absolute_time_t next_poll;
+
+    // Handshake with core 1: only use socket 1 while it is enabled.
+    bool enable = atomic_load(&g_net.udp_enable);
+    if (enable != active) {
+        active = enable;
+        atomic_store(&g_net.udp_active, active);
+    }
+    if (!active) return;
+
+    w5500_udp_tx_poll(W5500_SOCK_UDP);
+
+    // INTn signals new data; a slow poll covers a missed edge.
+    if (!w5500_int_asserted() && !time_reached(next_poll)) return;
+    next_poll = make_timeout_time_ms(1);
+    setSn_IR(W5500_SOCK_UDP, Sn_IR_RECV);
+
+    for (int i = 0; i < 8; i++) {
+        uint8_t pkt[PSHB_MAX_PACKET_LEN];
+        uint8_t ip[4];
+        uint16_t port;
+        int n = w5500_udp_recv(W5500_SOCK_UDP, pkt, sizeof(pkt), ip, &port);
+        if (n == W5500_RX_EMPTY) break;
+        if (n < 0) {
+            g_bridge.stats.rx_malformed++;
+            continue;
+        }
+        uint8_t reply[PSHB_MAX_PACKET_LEN];
+        size_t rlen = bridge_handle_packet(&g_bridge, pkt, (size_t)n, ip_to_u32(ip), time_us_64(),
+                                           reply, sizeof(reply));
+        if (rlen) w5500_udp_send_nb(W5500_SOCK_UDP, reply, (uint16_t)rlen, ip, port);
+        s_activity_until = make_timeout_time_ms(20);
+    }
+}
+
+// ---------------------------------------------------------------- test pattern
 
 #if PSHB_TEST_PATTERN
 // Moves the mouse along a square, starting a few seconds after mounting.
@@ -49,22 +107,46 @@ static void test_pattern_service(void) {
 }
 #endif
 
+// ---------------------------------------------------------------- main
+
+static uint8_t usb_status(void) {
+    uint8_t s = 0;
+    if (hid_out_mounted()) s |= PSHB_STATUS_USB_MOUNTED;
+    if (tud_suspended()) s |= PSHB_STATUS_USB_SUSPENDED;
+    return s;
+}
+
 int main(void) {
     stdio_init_all();
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-    printf("ps5-hid-bridge: boot%s\n", PSHB_TEST_PATTERN ? " (test pattern)" : "");
+    printf("ps5-hid-bridge %d.%d.%d: boot%s%s\n", (PSHB_FW_VERSION >> 16) & 0xFF,
+           (PSHB_FW_VERSION >> 8) & 0xFF, PSHB_FW_VERSION & 0xFF,
+           PSHB_TEST_PATTERN ? " (test pattern)" : "",
+           PSHB_PLAINTEXT_DEBUG ? " (PLAINTEXT DEBUG)" : "");
 
     input_state_init(&g_input);
+    bridge_init(&g_bridge, &g_input, get_rand_64(), time_us_64());
+    g_bridge.allow_plaintext = PSHB_PLAINTEXT_DEBUG;
     hid_out_init(&g_input);
     tud_init(0);
 
+    s_chip_ok = w5500_port_init();
+    if (s_chip_ok) {
+        multicore_launch_core1(core1_main);
+    } else {
+        printf("net: W5500 not responding\n");
+        atomic_store(&g_net.state, NET_STATE_CHIP_ERROR);
+    }
+
     while (true) {
         tud_task();
+        if (s_chip_ok) net_service();
 #if PSHB_TEST_PATTERN
         test_pattern_service();
 #endif
+        g_bridge.usb_status = usb_status();
         hid_out_service();
         led_service();
     }

@@ -17,7 +17,7 @@ Das Paketformat steht in [protocol/SPEC.md](protocol/SPEC.md).
 |---|---|
 | Repository, Docker-Builds | ✅ |
 | Firmware: USB-HID | ✅ (Host-Tests; Hardware-Test steht aus) |
-| Firmware: Netzwerk, DHCP, UDP | – |
+| Firmware: Netzwerk, DHCP, UDP | ✅ (Simulator; Hardware-Test steht aus) |
 | Protokoll mit Verschlüsselung | – |
 | Kommandozeilen-Tool | – |
 | Weboberfläche des Boards | – |
@@ -59,6 +59,26 @@ Alle Versionen stehen zentral in [versions.env](versions.env). `make check-pins`
 - WIZnet W5500-EVB-Pico2 (RP2350, W5500, RJ45), per USB-C → USB-A an der PS5.
 - Damit das Board im Ruhemodus der PS5 aktiv bleibt, in den Energiespar-Einstellungen der PS5 die USB-Stromversorgung im Ruhemodus einschalten.
 - Die PS5 muss auf **deutsches Tastaturlayout** gestellt sein. Das Board sendet Positionscodes, sonst sind z. B. Z und Y vertauscht.
+
+### Netzwerk
+
+Das Board holt sich per DHCP eine Adresse und meldet sich als `ps5-hid-bridge-XXXXXX` (die letzten sechs Stellen der MAC-Adresse). Unter diesem Namen steht es im Router bzw. in UniFi. Eingaben empfängt es auf UDP-Port 45045.
+
+LED: blinkt langsam = kein USB-Host, blinkt schnell = USB da, aber noch keine IP, leuchtet = bereit (flackert kurz bei Eingaben).
+
+### Ohne Board testen
+
+`make sim` startet einen Board-Simulator auf UDP-Port 45045. Er nutzt denselben Kern wie die Firmware und gibt statt USB-Reports Textzeilen aus (`KBD …`, `MOUSE …`). `make test` prüft damit den ganzen Eingabeweg automatisch.
+
+Testverkehr an ein Board oder an den Simulator schicken:
+
+```sh
+make udp-test IP=192.168.1.50 ARGS='--plain ping'
+make udp-test IP=192.168.1.50 ARGS='--plain pattern'        # Maus-Quadrat, tippt „hallo“
+make udp-test IP=192.168.1.50 ARGS='--plain flood --rate 1000 --seconds 5'
+```
+
+`--plain` funktioniert nur mit dem Debug-Image `out/ps5-hid-bridge-plain.uf2`, das unverschlüsselte Pakete annimmt. Dieses Image nur zur Inbetriebnahme verwenden.
 
 ### Testimages ohne Netzwerk
 

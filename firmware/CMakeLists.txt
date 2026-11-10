@@ -19,11 +19,14 @@ pico_sdk_init()
 
 # Portable core shared with the host build (firmware/host).
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/core_sources.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/iolibrary.cmake)
 
 set(PSHB_PICO_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/main.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/pico/core1.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/hid_out.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/usb_descriptors.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/pico/w5500_port.c
 )
 
 # pshb_add_firmware(<name> [DEFINES d1 d2 ...]) -> <name>.uf2
@@ -39,8 +42,13 @@ function(pshb_add_firmware name)
     target_compile_options(${name} PRIVATE -Wall -Wextra)
     target_link_libraries(${name} PRIVATE
         pico_stdlib
+        pico_multicore
+        pico_rand
+        pico_sync
         pico_unique_id
+        hardware_spi
         tinyusb_device
+        iolibrary
     )
     # Run entirely from RAM: flash writes (settings, OTA) and BOOTSEL reads
     # disable XIP, which must never stall the input path on core 0.
@@ -51,5 +59,6 @@ function(pshb_add_firmware name)
 endfunction()
 
 pshb_add_firmware(ps5-hid-bridge)
+pshb_add_firmware(ps5-hid-bridge-plain DEFINES PSHB_PLAINTEXT_DEBUG=1)
 pshb_add_firmware(ps5-hid-bridge-hidtest DEFINES PSHB_TEST_PATTERN=1)
 pshb_add_firmware(ps5-hid-bridge-hidtest-mouse8 DEFINES PSHB_TEST_PATTERN=1 PSHB_MOUSE_8BIT=1)
