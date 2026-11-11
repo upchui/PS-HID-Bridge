@@ -1,5 +1,7 @@
 #include "http.h"
 
+#include "hexutil.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -70,6 +72,9 @@ static void parse_header(http_req_t *r) {
         unsigned long n = strtoul(v, &end, 16);
         r->has_crc = end != v && *end == '\0';
         r->crc = (uint32_t)n;
+    } else if (header_is(r->line, "X-PSHB-OTA-Auth", &v)) {
+        r->has_ota_auth = strlen(v) == 64 && hex_decode(v, r->ota_auth, sizeof(r->ota_auth));
+        if (!r->has_ota_auth) fail(r, 400);
     } else if (header_is(r->line, "Cookie", &v)) {
         const char *p = strstr(v, "pshb_session=");
         while (p && p != v && p[-1] != ' ' && p[-1] != ';') p = strstr(p + 1, "pshb_session=");

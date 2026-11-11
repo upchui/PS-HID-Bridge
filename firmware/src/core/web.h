@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include "http.h"
+#include "monocypher.h"
 #include "settings.h"
 
 #define WEB_SESSIONS 2
@@ -72,6 +73,14 @@ typedef struct {
     uint64_t lockout_until_us;
     // The connection streaming a firmware image (one update at a time).
     const void *ota_owner;
+    // Firmware upload signed with the key (see protocol/SPEC.md): the last
+    // challenge (good for one upload until ota_nonce_until_us, 0 = none),
+    // whether the running upload is signed, its MAC and the hash so far.
+    uint8_t ota_nonce[16];
+    uint64_t ota_nonce_until_us;
+    bool ota_signed;
+    uint8_t ota_mac[32];
+    crypto_blake2b_ctx ota_hash;
 } web_app_t;
 
 typedef enum { WEB_AFTER_NONE, WEB_AFTER_REBOOT, WEB_AFTER_FACTORY_RESET, WEB_AFTER_OTA } web_after_t;

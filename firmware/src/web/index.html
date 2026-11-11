@@ -147,6 +147,7 @@
     <section id="t-system" class="tabpane" hidden>
       <div class="card">
         <h2>Firmware update</h2>
+        <p id="fw-update" class="hint" hidden></p>
         <p>Current: <strong id="fw-current">–</strong>. The new firmware (<code>ps-hid-bridge.uf2</code>) is written to the second slot and only kept after it started successfully. If it does not start properly, the board returns to the previous version after a restart.</p>
         <form id="f-ota">
           <label>UF2 file <input type="file" name="file" accept=".uf2" required></label>

@@ -12,6 +12,11 @@
 
 #define COOKIE_NAME "pshb_session"
 
+// Signed firmware updates (protocol/SPEC.md, "Firmware update with the key").
+#define OTA_KEY_LABEL "pshb-ota-key-v1"
+#define OTA_MAC_LABEL "pshb-ota-v1"
+#define OTA_CHALLENGE_US 60000000ull
+
 // ---------------------------------------------------------------- helpers
 
 bool web_parse_ip(const char *s, uint8_t out[4]) {
@@ -120,7 +125,9 @@ static void respond(web_conn_t *c, int status, const char *type, const uint8_t *
         "X-Content-Type-Options: nosniff\r\n"
         "X-Frame-Options: DENY\r\n"
         "Referrer-Policy: no-referrer\r\n"
-        "Content-Security-Policy: default-src 'self'; frame-ancestors 'none'\r\n"
+        // connect-src: the System page asks GitHub for the newest release.
+        "Content-Security-Policy: default-src 'self'; connect-src 'self' https://api.github.com; "
+        "frame-ancestors 'none'\r\n"
         "Connection: close\r\n"
         "%s"
         "\r\n",
@@ -465,6 +472,28 @@ static void h_allowed_sender(web_app_t *app, web_conn_t *c) {
     if (save_apply(app, c, &next)) respond_ok(c);
 }
 
+// Key for signed firmware uploads, derived from the PSK (which itself is
+// only used for the packet encryption).
+static void ota_key(const uint8_t psk[32], uint8_t out[32]) {
+    crypto_blake2b_keyed(out, 32, psk, 32, (const uint8_t *)OTA_KEY_LABEL, strlen(OTA_KEY_LABEL));
+}
+
+// A fresh random challenge for the next signed upload (replaces the last).
+static void h_ota_challenge(web_app_t *app, web_conn_t *c) {
+    if (!app->settings->psk_set) {
+        respond_error(c, 403, "No key set on the board");
+        return;
+    }
+    app->be->random(app->be->ctx, app->ota_nonce, sizeof(app->ota_nonce));
+    app->ota_nonce_until_us = now(app) + OTA_CHALLENGE_US;
+    char hex[2 * sizeof(app->ota_nonce) + 1];
+    hex_encode(app->ota_nonce, sizeof(app->ota_nonce), hex);
+    json_writer_t w;
+    jw_begin(&w, c->dyn, sizeof(c->dyn));
+    jw_str(&w, "nonce", hex);
+    respond_json(c, 200, &w, NULL);
+}
+
 static const web_asset_t *find_asset(const char *path) {
     if (strcmp(path, "/") == 0) path = "/index.html";
     for (size_t i = 0; i < web_assets_count; i++) {
@@ -504,6 +533,10 @@ static void handle(web_app_t *app, web_conn_t *c) {
     }
     if (strcmp(p, "/api/login") == 0 && r->method == HTTP_POST) {
         h_login(app, c);
+        return;
+    }
+    if (strcmp(p, "/api/ota/challenge") == 0 && r->method == HTTP_GET) {
+        h_ota_challenge(app, c);  // no login: the upload itself proves the key
         return;
     }
     if (!logged_in) {
@@ -588,24 +621,54 @@ typedef struct {
 
 static void ota_body(void *ctx, const uint8_t *data, size_t len) {
     body_ctx_t *b = ctx;
+    if (b->app->ota_signed && b->app->ota_owner == b->conn) crypto_blake2b_update(&b->app->ota_hash, data, len);
     if (!b->conn->ota_failed && !b->app->be->ota_write(b->app->be->ctx, data, len)) b->conn->ota_failed = true;
+}
+
+// Signed upload: the key must be set and the challenge fresh (it is used up
+// here, so a recorded upload cannot be sent again). Starts the MAC.
+static bool ota_signed_start(web_app_t *app, web_conn_t *c) {
+    if (!app->settings->psk_set) {
+        respond_error(c, 403, "No key set on the board");
+        return false;
+    }
+    bool fresh = app->ota_nonce_until_us != 0 && now(app) < app->ota_nonce_until_us;
+    app->ota_nonce_until_us = 0;
+    if (!fresh) {
+        respond_error(c, 403, "Challenge missing or expired (GET /api/ota/challenge first)");
+        return false;
+    }
+    uint8_t key[32];
+    ota_key(app->settings->psk, key);
+    crypto_blake2b_keyed_init(&app->ota_hash, 32, key, sizeof(key));
+    crypto_wipe(key, sizeof(key));
+    uint32_t n = c->req.content_length;
+    const uint8_t len[4] = {(uint8_t)n, (uint8_t)(n >> 8), (uint8_t)(n >> 16), (uint8_t)(n >> 24)};
+    crypto_blake2b_update(&app->ota_hash, (const uint8_t *)OTA_MAC_LABEL, strlen(OTA_MAC_LABEL));
+    crypto_blake2b_update(&app->ota_hash, app->ota_nonce, sizeof(app->ota_nonce));
+    crypto_blake2b_update(&app->ota_hash, len, sizeof(len));
+    memcpy(app->ota_mac, c->req.ota_auth, sizeof(app->ota_mac));
+    return true;
 }
 
 // Headers of POST /api/ota are complete: authorise, then stream the body.
 // Returns false if a response was produced already.
+// Either logged in (web interface) or signed with the key (app, CLI).
 static bool ota_start(web_app_t *app, web_conn_t *c) {
     http_req_t *r = &c->req;
-    if (!r->csrf_header) {
-        respond_error(c, 403, "Request rejected (X-PSHB header missing)");
-        return false;
-    }
-    if (!r->session[0] || session_find(app, r->session) < 0) {
-        respond_error(c, 401, "Please log in");
-        return false;
-    }
-    if (!app->settings->pw_set) {
-        respond_error(c, 403, "Please set your own password first");
-        return false;
+    if (!r->has_ota_auth) {
+        if (!r->csrf_header) {
+            respond_error(c, 403, "Request rejected (X-PSHB header missing)");
+            return false;
+        }
+        if (!r->session[0] || session_find(app, r->session) < 0) {
+            respond_error(c, 401, "Please log in");
+            return false;
+        }
+        if (!app->settings->pw_set) {
+            respond_error(c, 403, "Please set your own password first");
+            return false;
+        }
     }
     if (!r->has_crc) {
         respond_error(c, 400, "Checksum (X-PSHB-CRC32) missing");
@@ -615,6 +678,7 @@ static bool ota_start(web_app_t *app, web_conn_t *c) {
         respond_error(c, 409, "Another firmware update is in progress");
         return false;
     }
+    if (r->has_ota_auth && !ota_signed_start(app, c)) return false;
     char err[96] = "Update not possible";
     if (!app->be->ota_begin || !app->be->ota_begin(app->be->ctx, r->content_length, err, sizeof(err))) {
         respond_error(c, 400, err);
@@ -622,10 +686,21 @@ static bool ota_start(web_app_t *app, web_conn_t *c) {
     }
     c->ota = true;
     app->ota_owner = c;  // until this connection is closed
+    app->ota_signed = r->has_ota_auth;
     return true;
 }
 
 static void ota_done(web_app_t *app, web_conn_t *c) {
+    if (app->ota_signed) {
+        uint8_t mac[32];
+        crypto_blake2b_final(&app->ota_hash, mac);
+        app->ota_signed = false;
+        if (crypto_verify32(mac, app->ota_mac) != 0) {
+            app->be->ota_abort(app->be->ctx);
+            respond_error(c, 403, "Signature does not match (wrong key?)");
+            return;
+        }
+    }
     // finish() also reports why an earlier write failed (bad file, flash error).
     char err[96] = "Writing to flash failed";
     bool ok = app->be->ota_finish(app->be->ctx, c->req.crc, err, sizeof(err));
@@ -704,7 +779,10 @@ void web_conn_sent(web_app_t *app, web_conn_t *c, size_t n) {
 void web_conn_close(web_app_t *app, web_conn_t *c) {
     if (c->ota && !c->responding) app->be->ota_abort(app->be->ctx);
     c->ota = false;
-    if (app->ota_owner == c) app->ota_owner = NULL;
+    if (app->ota_owner == c) {
+        app->ota_owner = NULL;
+        app->ota_signed = false;
+    }
 }
 
 bool web_conn_done(const web_conn_t *c) {

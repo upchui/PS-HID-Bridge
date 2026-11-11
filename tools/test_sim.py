@@ -652,6 +652,61 @@ class WebTests(unittest.TestCase):
         status, r = self.web.upload("/api/ota", uf2, zlib.crc32(uf2))
         self.assertEqual((status, r), (200, {"ok": True, "reboot": True}))
 
+    def signed_upload(self, image: bytes, key: bytes, nonce: bytes | None = None):
+        """POST /api/ota signed with `key` (no login); nonce from a fresh challenge unless given."""
+        import urllib.error
+        import urllib.request
+        import zlib
+        if nonce is None:
+            status, r, _ = Web(self.sim.http_port).req("GET", "/api/ota/challenge")
+            self.assertEqual(status, 200)
+            nonce = bytes.fromhex(r["nonce"])
+        req = urllib.request.Request(f"http://127.0.0.1:{self.sim.http_port}/api/ota", data=image, method="POST")
+        req.add_header("X-PSHB-CRC32", f"{zlib.crc32(image):x}")
+        req.add_header("X-PSHB-OTA-Auth", proto.ota_mac(key, nonce, image).hex())
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, json.loads(resp.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"{}")
+
+    def setup_key(self) -> bytes:
+        self.setup_password()
+        key = bytes(range(32, 64))
+        self.assertEqual(self.web.req("POST", "/api/psk", {"psk": key.hex()})[0], 200)
+        return key
+
+    def test_signed_firmware_upload_needs_no_login(self):
+        key = self.setup_key()
+        uf2 = make_uf2(50)
+        status, r = self.signed_upload(uf2, key)
+        self.assertEqual((status, r), (200, {"ok": True, "reboot": True}))
+        self.assertTrue(self.sim.wait_line("OTA OK 50", timeout=2))
+        self.assertTrue(self.sim.wait_line("REBOOT", timeout=2))
+
+    def test_signed_upload_is_checked(self):
+        key = self.setup_key()
+        uf2 = make_uf2(20)
+        # Wrong key: rejected after the data, nothing activated.
+        status, r = self.signed_upload(uf2, bytes(32))
+        self.assertEqual(status, 403)
+        self.assertIn("Signature", r["error"])
+        self.assertFalse(self.sim.wait_line("OTA OK 20", timeout=0.2))
+        # A challenge works only once: replaying an old upload fails.
+        status, r = Web(self.sim.http_port).req("GET", "/api/ota/challenge")[:2]
+        nonce = bytes.fromhex(r["nonce"])
+        self.assertEqual(self.signed_upload(uf2, key, nonce)[0], 200)
+        self.assertTrue(self.sim.wait_line("OTA OK 20", timeout=2))
+        status, r = self.signed_upload(uf2, key, nonce)
+        self.assertEqual(status, 403)
+        self.assertIn("Challenge", r["error"])
+
+    def test_signed_upload_needs_a_key(self):
+        status, _, _ = Web(self.sim.http_port).req("GET", "/api/ota/challenge")
+        self.assertEqual(status, 403)
+        status, r = self.signed_upload(make_uf2(4), bytes(32), nonce=bytes(16))
+        self.assertEqual(status, 403)
+
     def test_udp_port_rules(self):
         self.setup_password()
         body = {"mode": "dhcp", "udp_port": 68}

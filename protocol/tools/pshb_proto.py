@@ -178,3 +178,26 @@ def open_packet(key: bytes, direction: int, packet: bytes) -> tuple[int, int, by
     except InvalidTag as e:
         raise AuthError("authentication failed") from e
     return ptype, counter, payload
+
+
+# ---------------------------------------------------------------- signed firmware update
+# SPEC.md, "Firmware update with the key": BLAKE2b-256 MACs (hashlib, no
+# extra package needed).
+
+OTA_KEY_LABEL = b"pshb-ota-key-v1"
+OTA_MAC_LABEL = b"pshb-ota-v1"
+
+
+def ota_key(psk: bytes) -> bytes:
+    """Key for signed firmware uploads, derived from the pre-shared key."""
+    import hashlib
+    return hashlib.blake2b(OTA_KEY_LABEL, key=psk, digest_size=32).digest()
+
+
+def ota_mac(psk: bytes, nonce: bytes, image: bytes) -> bytes:
+    """X-PSHB-OTA-Auth for uploading `image` after the board's challenge `nonce`."""
+    import hashlib
+    h = hashlib.blake2b(key=ota_key(psk), digest_size=32)
+    h.update(OTA_MAC_LABEL + nonce + struct.pack("<I", len(image)))
+    h.update(image)
+    return h.digest()

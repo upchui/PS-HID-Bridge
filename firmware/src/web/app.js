@@ -4,6 +4,9 @@
 const $ = (id) => document.getElementById(id);
 let statusTimer = null;
 let lastStatus = null;
+// Newest release on GitHub (asked by this browser, not by the board).
+const RELEASES = "https://api.github.com/repos/upchui/PS-HID-Bridge/releases?per_page=10";
+let updateChecked = false;
 
 async function api(path, body) {
   const opt = { credentials: "same-origin", headers: {} };
@@ -46,6 +49,45 @@ function show(view) {
 function showLogin() {
   show("v-login");
   $("pill").hidden = true;
+}
+
+// "0.9.27" or "v0.9.27" -> [0, 9, 27] (older tags "v0.9.0-build.N" -> [0, 9, 0]).
+function parseVersion(s) {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(s || "");
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+function newer(a, b) {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return false;
+}
+
+// Once per page load, when the System tab is opened: is there a newer
+// firmware? Without internet access the hint simply stays hidden.
+async function checkForUpdate() {
+  if (updateChecked || !lastStatus) return;
+  updateChecked = true;
+  const current = parseVersion(lastStatus.firmware);
+  try {
+    const r = await fetch(RELEASES, { headers: { Accept: "application/vnd.github+json" } });
+    if (!r.ok || !current) return;
+    let best = null;
+    for (const rel of await r.json()) {
+      const v = parseVersion(rel.tag_name);
+      const asset = (rel.assets || []).find((a) => a.name === "ps-hid-bridge.uf2");
+      if (!rel.draft && v && asset && (!best || newer(v, best.v))) best = { v, rel, asset };
+    }
+    if (!best || !newer(best.v, current)) return;
+    const p = $("fw-update");
+    p.textContent = `Version ${best.v.join(".")} is available: `;
+    const a = document.createElement("a");
+    a.href = best.asset.browser_download_url;
+    a.textContent = "download ps-hid-bridge.uf2";
+    p.append(a, " and upload it below, or update from the desktop app (Board page).");
+    p.hidden = false;
+  } catch (e) {
+    /* offline or blocked: no hint */
+  }
 }
 
 function selectTab(name) {
@@ -342,6 +384,7 @@ function init() {
     b.addEventListener("click", () => {
       selectTab(b.dataset.tab);
       if (lastStatus && b.dataset.tab !== "status") fillForms(lastStatus);
+      if (b.dataset.tab === "system") checkForUpdate();
     });
   }
 
