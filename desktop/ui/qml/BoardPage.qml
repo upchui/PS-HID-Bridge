@@ -149,5 +149,33 @@ Kirigami.ScrollablePage {
             text: "Releases come from github.com/upchui/PS-HID-Bridge; every download is checked against the release's checksums. The board firmware is installed over the network, signed with the key"
                   + (AppController.active ? " (switch the bridge off first)." : ".")
         }
+
+        Kirigami.Separator { Layout.fillWidth: true }
+
+        Kirigami.Heading {
+            level: 2
+            text: "Install via USB"
+        }
+        Controls.Label {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            opacity: 0.8
+            text: "For the first installation or for recovery: the board is connected to this PC instead of the network."
+        }
+        // Flashing over USB: loaded on demand (it watches for the board);
+        // always in the self-test, so the page is checked too.
+        Controls.Button {
+            id: usbToggle
+            text: usbToggle.checked ? "Hide USB installation" : "Install via USB …"
+            checkable: true
+            icon.name: "drive-removable-media-usb"
+        }
+        Loader {
+            Layout.fillWidth: true
+            active: usbToggle.checked || Qt.application.arguments.indexOf("--self-test") >= 0
+                    || Qt.application.arguments.indexOf("--screenshot") >= 0
+            visible: active
+            sourceComponent: UsbInstall {}
+        }
     }
 }

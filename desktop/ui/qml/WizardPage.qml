@@ -64,6 +64,21 @@ Kirigami.ScrollablePage {
                       + "• the pre-shared key from the board's web interface (Security → Generate new key)<br>"
                       + "• on the PlayStation: the keyboard language of <b>your keyboard</b> (e.g. German) and USB power in rest mode switched on"
             }
+        // Flashing over USB: loaded on demand (it watches for the board);
+        // always in the self-test, so the page is checked too.
+        Controls.Button {
+            id: usbToggle
+            text: usbToggle.checked ? "Hide USB installation" : "No firmware on the board yet? Install it via USB …"
+            checkable: true
+            icon.name: "drive-removable-media-usb"
+        }
+        Loader {
+            Layout.fillWidth: true
+            active: usbToggle.checked || Qt.application.arguments.indexOf("--self-test") >= 0
+                    || Qt.application.arguments.indexOf("--screenshot") >= 0
+            visible: active
+            sourceComponent: UsbInstall {}
+        }
         }
 
         // 1 -- Board

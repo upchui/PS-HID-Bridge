@@ -2,7 +2,7 @@
 //! service, tray icon, window-focus rule and notifications.
 
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -17,6 +17,7 @@ use pshb_core::protocol::{self, Pong};
 use pshb_core::service::{Service, ServiceCmd, ServiceConfig, ServiceEvent, ServiceStatus};
 use pshb_core::trigger::Action;
 use pshb_core::update::{self, Release, Version};
+use pshb_core::usbflash::{self, Image};
 use serde::Serialize;
 
 use crate::focus::FocusWatcher;
@@ -80,6 +81,9 @@ pub mod qobject {
         #[qproperty(bool, app_updated)]
         #[qproperty(bool, update_busy)]
         #[qproperty(QString, update_status)]
+        #[qproperty(bool, usb_board_found)]
+        #[qproperty(bool, usb_busy)]
+        #[qproperty(QString, usb_status)]
         type AppController = super::AppControllerRust;
 
         /// Switch the bridge on/off (same as the toggle trigger).
@@ -154,6 +158,16 @@ pub mod qobject {
         /// Install the newest firmware on the board (the bridge must be off).
         #[qinvokable]
         fn update_board(self: Pin<&mut AppController>);
+
+        /// Look for the board's USB boot drive (BOOTSEL) every second while on.
+        #[qinvokable]
+        fn usb_watch(self: Pin<&mut AppController>, on: bool);
+        /// Flash over USB: image "first-install", "firmware", "hidtest",
+        /// "hidtest-mouse8" or "erase"; `file` (URL) instead of the newest release.
+        #[qinvokable]
+        fn usb_flash(self: Pin<&mut AppController>, image: &QString, file: &QString);
+        #[qinvokable]
+        fn usb_cancel(self: Pin<&mut AppController>);
         #[qinvokable]
         fn quit_app(self: Pin<&mut AppController>);
     }
@@ -230,6 +244,13 @@ pub struct AppControllerRust {
     /// number of that update, for its timeout).
     board_expected: Option<(Version, u64)>,
     board_updates: u64,
+
+    usb_board_found: bool,
+    usb_busy: bool,
+    usb_status: QString,
+    /// The USB watch thread runs while this is set.
+    usb_watching: Arc<AtomicBool>,
+    usb_cancel: Arc<AtomicBool>,
 }
 
 /// The running service, shared with the threads that (re)start it, so that
@@ -316,6 +337,11 @@ impl Default for AppControllerRust {
             notified: None,
             board_expected: None,
             board_updates: 0,
+            usb_board_found: false,
+            usb_busy: false,
+            usb_status: QString::default(),
+            usb_watching: Arc::default(),
+            usb_cancel: Arc::default(),
         }
     }
 }
@@ -1083,6 +1109,90 @@ impl qobject::AppController {
             });
     }
 
+    // ------------------------------------------------------------ USB
+
+    pub fn usb_watch(self: Pin<&mut Self>, on: bool) {
+        let flag = self.rust().usb_watching.clone();
+        if !on {
+            flag.store(false, Ordering::Relaxed);
+            return;
+        }
+        if flag.swap(true, Ordering::Relaxed) {
+            return; // already watching
+        }
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new()
+            .name("pshb-usb-watch".into())
+            .spawn(move || {
+                let mut last = None;
+                while flag.load(Ordering::Relaxed) {
+                    let found = matches!(usbflash::find_drive(), Ok(Some(_)));
+                    if last != Some(found) {
+                        last = Some(found);
+                        if qt
+                            .queue(move |mut obj| obj.as_mut().set_usb_board_found(found))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    thread::sleep(Duration::from_secs(1));
+                }
+            });
+    }
+
+    pub fn usb_flash(mut self: Pin<&mut Self>, image: &QString, file: &QString) {
+        if *self.usb_busy() {
+            return;
+        }
+        let Some(image) = Image::from_id(&String::from(image)) else {
+            return;
+        };
+        let own = match local_path(&String::from(file)) {
+            None => None,
+            Some(path) => match std::fs::read(&path) {
+                Ok(data) => {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "firmware.uf2".into());
+                    Some((name, data))
+                }
+                Err(e) => {
+                    self.as_mut()
+                        .set_usb_status(QString::from(&format!("{}: {e}", path.display())));
+                    return;
+                }
+            },
+        };
+        let cancel = self.rust().usb_cancel.clone();
+        cancel.store(false, Ordering::Relaxed);
+        self.as_mut().set_usb_busy(true);
+        self.as_mut().set_usb_status(QString::from(image.description()));
+        let progress = self.qt_thread();
+        let done = self.qt_thread();
+        let _ = thread::Builder::new()
+            .name("pshb-usb-flash".into())
+            .spawn(move || {
+                let mut say = |msg: &str| {
+                    let text = msg.to_string();
+                    let _ = progress.queue(move |mut obj| obj.as_mut().set_usb_status(QString::from(&text)));
+                };
+                let result = usbflash::files_for(image, own, &mut say)
+                    .and_then(|files| usbflash::flash(&files, &mut say, &cancel))
+                    .map(|()| image.done_message().to_string());
+                let _ = done.queue(move |mut obj| {
+                    obj.as_mut().set_usb_busy(false);
+                    let text = result.unwrap_or_else(|e| format!("Not installed: {e}"));
+                    obj.as_mut().set_usb_status(QString::from(&text));
+                });
+            });
+    }
+
+    pub fn usb_cancel(self: Pin<&mut Self>) {
+        self.rust().usb_cancel.store(true, Ordering::Relaxed);
+    }
+
     fn board_update_timeout(mut self: Pin<&mut Self>, n: u64) {
         let Some((v, m)) = self.rust().board_expected else {
             return;
@@ -1152,6 +1262,33 @@ const LATENCY_VIEW_PING: Duration = Duration::from_millis(200);
 const BOARD_HTTP_PORT: u16 = 80;
 /// How long the board may take to come back after a firmware update.
 const BOARD_UPDATE_WAIT: Duration = Duration::from_secs(60);
+
+/// Local path of a file chosen in QML ("file:///home/me/x.uf2", percent
+/// encoded), or None for "".
+fn local_path(url: &str) -> Option<std::path::PathBuf> {
+    if url.is_empty() {
+        return None;
+    }
+    let raw = url.strip_prefix("file://").unwrap_or(url).as_bytes();
+    let mut out = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == b'%'
+            && let Some(b) = raw
+                .get(i + 1..i + 3)
+                .and_then(|h| std::str::from_utf8(h).ok())
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        {
+            out.push(b);
+            i += 3;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    use std::os::unix::ffi::OsStringExt;
+    Some(std::ffi::OsString::from_vec(out).into())
+}
 
 /// The running AppImage, if this is one and its folder is writable (the
 /// update writes the new file next to it).
