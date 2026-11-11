@@ -10,7 +10,9 @@
 //! A timer thread sends what has to wait: input held back by the rate limit,
 //! a HEARTBEAT with the full key state when nothing else was sent for 50 ms
 //! while active, and a PING every second. A receiver thread verifies PONGs,
-//! learns the board's session id and measures the round trip time.
+//! learns the board's session id and measures the round trip time. Only a
+//! PONG that answers one of our recent pings counts: a recorded old one
+//! must neither switch the session nor fake a connection.
 
 use std::collections::VecDeque;
 use std::io;
@@ -39,6 +41,10 @@ pub const LATENCY_HISTORY: usize = 1000;
 const TOS_EF: libc::c_int = 0xB8;
 /// SO_PRIORITY 6 is the highest value allowed without CAP_NET_ADMIN.
 const SOCKET_PRIORITY: libc::c_int = 6;
+/// A PONG must answer a ping sent at most this long ago.
+const PONG_MAX_AGE_US: u64 = 2_000_000;
+/// Earliest next ping after a session hint (hints come per input packet).
+const HINT_PING_GAP: Duration = Duration::from_millis(5);
 
 pub struct LinkConfig {
     pub board: SocketAddr,
@@ -87,8 +93,12 @@ pub struct LinkStatus {
     pub rtt_history: VecDeque<f64>,
     pub board: Option<Pong>,
     pub packets_sent: u64,
+    /// Packets the network stack did not take (send buffer full).
+    pub send_failures: u64,
     /// Replies that failed verification (wrong key on one side?).
     pub bad_replies: u64,
+    /// Authentic replies that did not answer a recent ping (replayed?).
+    pub stale_replies: u64,
 }
 
 impl LinkStatus {
@@ -139,9 +149,15 @@ struct Shared {
     session_known: AtomicBool,
     stop: AtomicBool,
     epoch: Instant,
+    /// Random start of our ping clock, so pings of an earlier run (and
+    /// recorded answers to them) never match ours.
+    epoch_offset_us: u64,
     packets_sent: AtomicU64,
+    send_failures: AtomicU64,
     latency: Mutex<VecDeque<u32>>,
     latency_total: AtomicU64,
+    /// Statistics for `latency_total` samples (computed once per change).
+    latency_cache: Mutex<Option<LatencyStats>>,
     timer_realtime: AtomicBool,
 }
 
@@ -153,7 +169,7 @@ impl Shared {
     }
 
     fn micros(&self) -> u64 {
-        self.epoch.elapsed().as_micros() as u64
+        self.epoch_offset_us + self.epoch.elapsed().as_micros() as u64
     }
 
     fn record_latency(&self, event_us: u64) {
@@ -163,7 +179,7 @@ impl Shared {
             l.pop_front();
         }
         l.push_back(us);
-        self.latency_total.fetch_add(1, Ordering::Relaxed);
+        self.latency_total.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -195,6 +211,14 @@ fn set_int_opt(
     }
 }
 
+/// Random 64-bit value from the kernel (0 if that fails).
+fn random_u64() -> u64 {
+    let mut v = 0u64;
+    // SAFETY: writes at most 8 bytes into a valid u64.
+    unsafe { libc::getrandom((&mut v as *mut u64).cast(), 8, 0) };
+    v
+}
+
 /// Mark our packets as low-latency traffic (failures are harmless).
 fn mark_low_latency(sock: &UdpSocket, ipv4: bool) {
     let _ = if ipv4 {
@@ -215,7 +239,8 @@ impl Link {
         let sock = UdpSocket::bind(bind)?;
         mark_low_latency(&sock, cfg.board.is_ipv4());
         sock.connect(cfg.board)?;
-        sock.set_read_timeout(Some(Duration::from_millis(100)))?;
+        // Only a safety net: Drop wakes the receiver by shutting the socket down.
+        sock.set_read_timeout(Some(Duration::from_secs(1)))?;
         let sock = Arc::new(sock);
         let now = Instant::now();
         let tx = Tx {
@@ -237,6 +262,7 @@ impl Link {
             ping_interval: cfg.ping_interval,
             next_ping: now,
             ping_seq: 0,
+            last_ping: now - Duration::from_secs(1),
             timer_due: now,
         };
         let shared = Arc::new(Shared {
@@ -247,9 +273,13 @@ impl Link {
             session_known: AtomicBool::new(false),
             stop: AtomicBool::new(false),
             epoch: now,
+            // Below 2^62: room for centuries of microseconds on top.
+            epoch_offset_us: (random_u64() >> 2).max(1 << 40),
             packets_sent: AtomicU64::new(0),
+            send_failures: AtomicU64::new(0),
             latency: Mutex::new(VecDeque::new()),
             latency_total: AtomicU64::new(0),
+            latency_cache: Mutex::new(None),
             timer_realtime: AtomicBool::new(false),
         });
 
@@ -338,15 +368,41 @@ impl Link {
     }
 
     pub fn status(&self) -> LinkStatus {
-        let mut st = self.shared.status.lock().unwrap().clone();
+        let mut st = self.shared.status.lock().unwrap();
+        if !st.is_connected() && (st.board.is_some() || st.rtt.is_some()) {
+            // The board went away: don't keep showing what it last said.
+            st.board = None;
+            st.rtt = None;
+            st.rtt_history.clear();
+        }
+        let mut st = st.clone();
         st.packets_sent = self.shared.packets_sent.load(Ordering::Relaxed);
+        st.send_failures = self.shared.send_failures.load(Ordering::Relaxed);
         st
+    }
+
+    /// The board answered a ping within the last 3 s (cheaper than `status`).
+    pub fn is_connected(&self) -> bool {
+        self.shared.status.lock().unwrap().is_connected()
     }
 
     /// Input latency over the most recent packets (None: no samples yet).
     pub fn input_latency(&self) -> Option<LatencyStats> {
-        let samples: Vec<u32> = self.shared.latency.lock().unwrap().iter().copied().collect();
-        LatencyStats::from_samples(&samples, self.shared.latency_total.load(Ordering::Relaxed))
+        let total = self.shared.latency_total.load(Ordering::Acquire);
+        let mut cache = self.shared.latency_cache.lock().unwrap();
+        if let Some(c) = *cache
+            && c.total == total
+        {
+            return Some(c);
+        }
+        // Samples and total change together under the latency lock.
+        let (samples, total) = {
+            let l = self.shared.latency.lock().unwrap();
+            let samples: Vec<u32> = l.iter().copied().collect();
+            (samples, self.shared.latency_total.load(Ordering::Acquire))
+        };
+        *cache = LatencyStats::from_samples(&samples, total);
+        *cache
     }
 
     /// The timer thread got real-time priority (only with `realtime`).
@@ -374,8 +430,13 @@ impl Drop for Link {
             let mut tx = self.shared.tx.lock().unwrap();
             tx.clear_input();
             tx.pump_and_plan(&self.shared, true);
+            // Under the lock: the timer thread checks `stop` holding it, so
+            // it cannot miss the wake-up below.
+            self.shared.stop.store(true, Ordering::Release);
+            // Wake the receiver from recv() at once.
+            // SAFETY: plain syscall on our socket.
+            unsafe { libc::shutdown(tx.sock.as_raw_fd(), libc::SHUT_RD) };
         }
-        self.shared.stop.store(true, Ordering::Release);
         self.shared.timer.notify_all();
         for t in self.threads.drain(..) {
             let _ = t.join();
@@ -387,6 +448,7 @@ fn receiver(sock: Arc<UdpSocket>, key: PacketKey, shared: Arc<Shared>) {
     let mut buf = [0u8; 512];
     while !shared.stop.load(Ordering::Acquire) {
         let n = match sock.recv(&mut buf) {
+            Ok(0) => continue, // shut down by Drop (or an empty datagram)
             Ok(n) => n,
             Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => continue,
             Err(_) => {
@@ -404,18 +466,31 @@ fn receiver(sock: Arc<UdpSocket>, key: PacketKey, shared: Arc<Shared>) {
         };
         let now_us = shared.micros();
         let changed = shared.session() != Some(pong.session_id);
+        if pong.is_session_hint() {
+            // The board does not know our session (it restarted?). A hint
+            // answers nothing we sent and could be replayed, so ask the
+            // board directly: the answer to that ping switches the session.
+            if changed {
+                let mut tx = shared.tx.lock().unwrap();
+                tx.ping_soon();
+                tx.pump_and_plan(&shared, false);
+            }
+            continue;
+        }
+        if pong.t_app_us > now_us || now_us - pong.t_app_us > PONG_MAX_AGE_US {
+            shared.status.lock().unwrap().stale_replies += 1;
+            continue;
+        }
         {
             let mut st = shared.status.lock().unwrap();
             st.session_id = Some(pong.session_id);
             st.last_pong = Some(Instant::now());
-            if !pong.is_session_hint() && pong.t_app_us <= now_us {
-                let rtt = Duration::from_micros(now_us - pong.t_app_us);
-                st.rtt = Some(rtt);
-                if st.rtt_history.len() == RTT_HISTORY {
-                    st.rtt_history.pop_front();
-                }
-                st.rtt_history.push_back(rtt.as_secs_f64() * 1000.0);
+            let rtt = Duration::from_micros(now_us - pong.t_app_us);
+            st.rtt = Some(rtt);
+            if st.rtt_history.len() == RTT_HISTORY {
+                st.rtt_history.pop_front();
             }
+            st.rtt_history.push_back(rtt.as_secs_f64() * 1000.0);
             st.board = Some(pong);
         }
         if changed {
@@ -491,11 +566,18 @@ struct Tx {
     ping_interval: Duration,
     next_ping: Instant,
     ping_seq: u32,
+    last_ping: Instant,
     /// When the timer thread wakes up next.
     timer_due: Instant,
 }
 
 impl Tx {
+    /// Ping as soon as possible (but not more often than every few ms).
+    fn ping_soon(&mut self) {
+        let at = (self.last_ping + HINT_PING_GAP).max(Instant::now());
+        self.next_ping = self.next_ping.min(at);
+    }
+
     fn clear_input(&mut self) {
         self.release_pending = true;
         self.current = KeyState::default();
@@ -520,8 +602,22 @@ impl Tx {
     fn send(&mut self, shared: &Shared, ptype: PacketType, payload: &[u8], now: Instant) {
         let counter = self.counter.next_value();
         let pkt = self.key.seal(Direction::AppToBoard, ptype, counter, payload);
-        if self.sock.send(&pkt).is_ok() {
+        // Never block while holding the Tx lock (the input thread waits on
+        // it): a full send buffer drops the packet, the next heartbeat
+        // repeats the state.
+        // SAFETY: valid buffer for the duration of the call.
+        let r = unsafe {
+            libc::send(
+                self.sock.as_raw_fd(),
+                pkt.as_ptr().cast(),
+                pkt.len(),
+                libc::MSG_DONTWAIT,
+            )
+        };
+        if r == pkt.len() as isize {
             shared.packets_sent.fetch_add(1, Ordering::Relaxed);
+        } else if r < 0 && io::Error::last_os_error().kind() == io::ErrorKind::WouldBlock {
+            shared.send_failures.fetch_add(1, Ordering::Relaxed);
         }
         if ptype != PacketType::Ping {
             self.last_send = now;
@@ -618,6 +714,7 @@ impl Tx {
                 seq: self.ping_seq,
             };
             self.send(shared, PacketType::Ping, &ping.encode(), now);
+            self.last_ping = now;
             // Ping faster while we are still looking for the board.
             let interval = if session.is_none() {
                 self.ping_interval.min(Duration::from_millis(250))
@@ -656,6 +753,10 @@ mod tests {
         sock: UdpSocket,
         key: PacketKey,
         counter: u64,
+        /// Current session; input for another one gets a session hint.
+        session: u64,
+        /// Answer pings with this instead of their own timestamp.
+        fake_t_app_us: Option<u64>,
     }
 
     impl FakeBoard {
@@ -666,7 +767,21 @@ mod tests {
                 sock,
                 key: PacketKey::new(&KEY),
                 counter: 1000,
+                session: SESSION,
+                fake_t_app_us: None,
             }
+        }
+
+        fn reply(&mut self, pong: Pong, to: SocketAddr) {
+            self.counter += 1;
+            let pkt = self.key.seal(
+                Direction::BoardToApp,
+                PacketType::Pong,
+                self.counter,
+                &pong.encode(),
+            );
+            assert_eq!(pkt.len(), 10 + PONG_LEN + 16);
+            self.sock.send_to(&pkt, to).unwrap();
         }
 
         fn addr(&self) -> SocketAddr {
@@ -687,23 +802,27 @@ mod tests {
                     PacketType::Ping => {
                         let ping = Ping::decode(&payload);
                         let pong = Pong {
-                            t_app_us: ping.t_app_us,
+                            t_app_us: self.fake_t_app_us.unwrap_or(ping.t_app_us),
                             seq: ping.seq,
-                            session_id: SESSION,
+                            session_id: self.session,
                             status: STATUS_USB_MOUNTED,
                             ..Default::default()
                         };
-                        self.counter += 1;
-                        let pkt = self.key.seal(
-                            Direction::BoardToApp,
-                            PacketType::Pong,
-                            self.counter,
-                            &pong.encode(),
-                        );
-                        assert_eq!(pkt.len(), 10 + PONG_LEN + 16);
-                        self.sock.send_to(&pkt, from).unwrap();
+                        self.reply(pong, from);
                     }
-                    t => got.push((t, InputPayload::decode(&payload), h.counter)),
+                    t => {
+                        let p = InputPayload::decode(&payload);
+                        if p.session_id != self.session {
+                            // Like the board: drop it and tell the app.
+                            let hint = Pong {
+                                session_id: self.session,
+                                ..Default::default()
+                            };
+                            self.reply(hint, from);
+                            continue;
+                        }
+                        got.push((t, p, h.counter));
+                    }
                 }
             }
             got
@@ -896,6 +1015,59 @@ mod tests {
         };
         assert_eq!(r, 0);
         assert_eq!(tos, TOS_EF);
+    }
+
+    #[test]
+    fn answers_to_foreign_pings_are_ignored() {
+        // A recorded PONG answers a ping we never sent (other timestamp).
+        let mut board = FakeBoard::new();
+        board.fake_t_app_us = Some(1_000_000);
+        let link = Link::start(LinkConfig::new(board.addr(), KEY)).unwrap();
+        board.run_for(Duration::from_millis(600));
+        assert!(!link.wait_connected(Duration::from_millis(10)));
+        let st = link.status();
+        assert!(!st.is_connected());
+        assert_eq!(st.session_id, None);
+        assert!(st.stale_replies >= 2, "{}", st.stale_replies);
+    }
+
+    #[test]
+    fn session_hint_leads_to_the_new_session_via_a_ping() {
+        let mut board = FakeBoard::new();
+        let link = Link::start(LinkConfig::new(board.addr(), KEY)).unwrap();
+        board.run_for(Duration::from_millis(50));
+        assert!(link.wait_connected(Duration::from_millis(500)));
+        link.set_active(true);
+        board.run_for(Duration::from_millis(20));
+        // The board restarts with a new session.
+        board.session = SESSION + 1;
+        let started = Instant::now();
+        link.set_state(
+            KeyState {
+                keys: [0x04, 0, 0, 0, 0, 0],
+                ..Default::default()
+            },
+            None,
+        );
+        let got = board.run_for(Duration::from_millis(60));
+        // Hint -> ping -> PONG with the new session -> state sent again.
+        assert!(
+            got.iter()
+                .any(|(t, p, _)| *t == PacketType::Input && p.keys[0] == 0x04),
+            "state did not reach the new session"
+        );
+        assert_eq!(link.status().session_id, Some(SESSION + 1));
+        assert!(started.elapsed() < Duration::from_millis(200));
+    }
+
+    #[test]
+    fn dropping_the_link_is_quick() {
+        let mut board = FakeBoard::new();
+        let link = Link::start(LinkConfig::new(board.addr(), KEY)).unwrap();
+        board.run_for(Duration::from_millis(50));
+        let t = Instant::now();
+        drop(link);
+        assert!(t.elapsed() < Duration::from_millis(50), "{:?}", t.elapsed());
     }
 
     #[test]

@@ -410,7 +410,7 @@ fn cmd_run(
         }
     };
 
-    let mut connected = link.status().is_connected();
+    let mut connected = link.is_connected();
     let mut result = Ok(());
     let mut msgs = Vec::new();
     let mut next_stats = Instant::now() + Duration::from_secs(5);
@@ -444,7 +444,7 @@ fn cmd_run(
             }
             apply_grab(&mut ctl, &mut inputs);
         }
-        let now_connected = link.status().is_connected();
+        let now_connected = link.is_connected();
         if now_connected != connected {
             connected = now_connected;
             println!(
