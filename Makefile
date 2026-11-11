@@ -48,12 +48,19 @@ HOST_BUILD := .cache/build/host
 PSHB_VERSION := $(shell tools/version.sh)
 PSHB_DATE    := $(shell git log -1 --format=%cs 2>/dev/null)
 
-DOCKER_RUN = docker run --rm $(TTY) -u $(UID):$(GID) -v $(CURDIR):/work -w /work \
+# Fails (only when a container is started) if the version is unknown.
+DOCKER_RUN = $(if $(PSHB_VERSION),,$(error tools/version.sh failed, see above)) \
+             docker run --rm $(TTY) -u $(UID):$(GID) -v $(CURDIR):/work -w /work \
              -e HOME=/work/.cache/home -e JOBS=$(JOBS) \
-             -e PSHB_VERSION=$(PSHB_VERSION) -e PSHB_DATE=$(PSHB_DATE) $(DOCKER_EXTRA)
-RUST_RUN    = $(DOCKER_RUN) -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR=/work/.cache/target/rust $(RUST_IMAGE)
-DESKTOP_RUN = $(DOCKER_RUN) -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR=/work/.cache/target/desktop \
-              -e APPIMAGE_EXTRACT_AND_RUN=1 $(DESKTOP_IMAGE)
+             -e PSHB_VERSION=$(PSHB_VERSION) -e PSHB_DATE=$(PSHB_DATE) \
+             $(if $(CARGO_INCREMENTAL),-e CARGO_INCREMENTAL=$(CARGO_INCREMENTAL)) $(DOCKER_EXTRA)
+# CLI, tests and AppImage share one target directory, so pshb-core and its
+# dependencies are built once. The same RUSTFLAGS everywhere is part of
+# that (lld for the GUI comes from desktop/ui/build.rs instead).
+CARGO_ENV   = -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR=/work/.cache/target/cargo \
+              -e CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=
+RUST_RUN    = $(DOCKER_RUN) $(CARGO_ENV) $(RUST_IMAGE)
+DESKTOP_RUN = $(DOCKER_RUN) $(CARGO_ENV) -e APPIMAGE_EXTRACT_AND_RUN=1 $(DESKTOP_IMAGE)
 FW_RUN      = $(DOCKER_RUN) $(FW_IMAGE)
 
 .PHONY: help all firmware desktop desktop-cli test test-firmware test-desktop test-appimage \
@@ -77,7 +84,9 @@ help:
 	@echo "  make shell-fw | shell-desktop   interactive build shell"
 	@echo "  make clean | distclean"
 
-all: firmware desktop-cli desktop test test-uf2 test-appimage
+# Tests (format, lint, unit, simulator) come first, so a mistake shows up
+# before the long AppImage build. Parallel builds work too (make -j2 -O).
+all: test firmware desktop-cli test-uf2 desktop test-appimage
 
 dirs:
 	@mkdir -p out .cache/home .cache/cargo
@@ -120,12 +129,12 @@ print-version:
 
 # Release tag, e.g. v0.9.16: every commit on main gets a higher one.
 print-release-tag:
-	@echo "v$$(tools/version.sh)"
+	@v=$$(tools/version.sh) && echo "v$$v"
 
 # ---------------------------------------------------------------- firmware
 firmware: image-firmware check-pins dirs
 	$(FW_RUN) bash -c 'cmake -S firmware -B $(FW_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=Release \
-		-DPSHB_DEV_PSK=$(DEV_PSK) $(FW_CMAKE_ARGS) \
+		-DPSHB_DEV_PSK=$(DEV_PSK) -DPSHB_W5500_FAST_RX=ON $(FW_CMAKE_ARGS) \
 		&& cmake --build $(FW_BUILD) --parallel $(JOBS)'
 	cp $(FW_BUILD)/*.uf2 out/
 	cp $(FW_BUILD)/ps5-hid-bridge.elf out/
@@ -134,7 +143,7 @@ firmware: image-firmware check-pins dirs
 # ---------------------------------------------------------------- desktop
 desktop-cli: image-rust dirs
 	$(RUST_RUN) bash -c 'cd desktop && cargo build --release --locked -p pshb-core --bin pshb-cli'
-	cp .cache/target/rust/release/pshb-cli out/
+	cp .cache/target/cargo/release/pshb-cli out/
 
 desktop: image-desktop dirs
 	$(DESKTOP_RUN) bash desktop/packaging/build-appimage.sh
@@ -145,7 +154,7 @@ test: check-version test-protocol test-firmware test-sim test-desktop
 test-firmware: image-firmware dirs
 	$(FW_RUN) bash -c 'cmake -S firmware/host -B $(HOST_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=Debug \
 		&& cmake --build $(HOST_BUILD) --parallel $(JOBS) \
-		&& ctest --test-dir $(HOST_BUILD) --output-on-failure'
+		&& ctest --test-dir $(HOST_BUILD) --output-on-failure --timeout 60'
 
 # The real firmware UF2 goes through the network-update writer unchanged.
 test-uf2: firmware test-firmware
@@ -171,7 +180,7 @@ fmt: image-rust dirs
 
 # Smoke test of the packaged app on a system without Qt: loads every page
 # offscreen (warnings are fatal) and quits.
-test-appimage: image-apptest dirs
+test-appimage: desktop image-apptest dirs
 	$(DOCKER_RUN) -e APPIMAGE_EXTRACT_AND_RUN=1 -e TMPDIR=/tmp -e LANG=C.UTF-8 $(APPTEST_IMAGE) \
 		bash -c 'timeout 120 out/PS5-HID-Bridge-x86_64.AppImage --self-test'
 
@@ -196,8 +205,7 @@ shell-fw: image-firmware dirs
 	$(DOCKER_RUN) -i $(FW_IMAGE) bash
 
 shell-desktop: image-desktop dirs
-	$(DOCKER_RUN) -i -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR=/work/.cache/target/desktop \
-		$(DESKTOP_IMAGE) bash
+	$(DOCKER_RUN) -i $(CARGO_ENV) $(DESKTOP_IMAGE) bash
 
 clean:
 	rm -rf out .cache/build .cache/target

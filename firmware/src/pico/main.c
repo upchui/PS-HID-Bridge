@@ -23,6 +23,7 @@
 #include "net_shared.h"
 #include "ota.h"
 #include "pshb_config.h"
+#include "pshb_version.h"
 #include "w5500_port.h"
 #include "wizchip_conf.h"
 #if PSHB_TEST_PATTERN
@@ -207,7 +208,7 @@ int main(void) {
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-    printf("ps5-hid-bridge %d.%d.%d: boot%s%s\n", (PSHB_FW_VERSION >> 24) & 0xFF,
+    printf("ps5-hid-bridge %u.%u.%u: boot%s%s\n", (PSHB_FW_VERSION >> 24) & 0xFF,
            (PSHB_FW_VERSION >> 16) & 0xFF, PSHB_FW_VERSION & 0xFFFF,
            PSHB_TEST_PATTERN ? " (test pattern)" : "",
            PSHB_PLAINTEXT_DEBUG ? " (PLAINTEXT DEBUG)" : "");

@@ -20,6 +20,8 @@ permissions:
 
 jobs:
   prepare:
+    # Releases come from main only (also when started by hand).
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -41,11 +43,15 @@ jobs:
           build=false
           for image in firmware rust desktop apptest; do
             ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pshb-$image:$tag"
-            if docker manifest inspect "$ref" >/dev/null 2>&1; then
+            if out=$(docker manifest inspect "$ref" 2>&1); then
               echo "found   $ref"
-            else
+            elif grep -qiE "manifest unknown|not found" <<<"$out"; then
               echo "missing $ref"
               build=true
+            else
+              # Registry trouble is not a reason for a rebuild of several hours.
+              echo "::error::$ref: $out"
+              exit 1
             fi
           done
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -71,18 +77,28 @@ jobs:
     permissions:
       contents: write
       packages: read
+    env:
+      # Only the cached dependencies matter; incremental data would bloat the cache.
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # version = commit count; release notes need the tags
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
-
       - name: Fetch submodules
         run: make submodules
+
+      # Rust dependencies (registry and compiled crates). Saved once per
+      # Cargo.lock and toolchain; our own crates are rebuilt every time.
+      - name: Cache Rust dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cache/cargo/registry
+            .cache/cargo/git
+            .cache/target/cargo
+          key: cargo-${{ needs.prepare.outputs.tag }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: cargo-${{ needs.prepare.outputs.tag }}-
 
       - name: Pull toolchain images
         env:
@@ -91,14 +107,24 @@ jobs:
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           prefix="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pshb"
-          for pair in FW_IMAGE:firmware RUST_IMAGE:rust DESKTOP_IMAGE:desktop APPTEST_IMAGE:apptest; do
-            ref="$prefix-${pair#*:}:$TAG"
-            docker pull --quiet "$ref"
-            echo "${pair%%:*}=$ref" >> "$GITHUB_ENV"
+          # In parallel; the desktop image contains the same Rust toolchain
+          # as the rust image, so that one is not needed here.
+          pids=()
+          for image in firmware desktop apptest; do
+            docker pull --quiet "$prefix-$image:$TAG" &
+            pids+=($!)
           done
+          for p in "${pids[@]}"; do wait "$p"; done
+          {
+            echo "FW_IMAGE=$prefix-firmware:$TAG"
+            echo "RUST_IMAGE=$prefix-desktop:$TAG"
+            echo "DESKTOP_IMAGE=$prefix-desktop:$TAG"
+            echo "APPTEST_IMAGE=$prefix-apptest:$TAG"
+          } >> "$GITHUB_ENV"
+          df -h /
 
       - name: Build and test
-        run: make PREBUILT=1 all
+        run: make -j2 -O PREBUILT=1 all
 
       - name: Collect release files
         run: |
@@ -112,6 +138,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=$(make -s print-release-tag)
+          # The number repeats after a force-push or rebase: never move an
+          # existing release to another commit.
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            tagged=$(git rev-list -n 1 "$tag")
+            if [ "$tagged" != "$GITHUB_SHA" ]; then
+              echo "::error::$tag already exists for commit $tagged (this is $GITHUB_SHA)"
+              exit 1
+            fi
+          fi
           tools/release-notes.sh "$tag" > notes.md
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "$tag exists already, replacing its files"

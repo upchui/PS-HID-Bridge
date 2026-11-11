@@ -12,6 +12,16 @@ if ! [[ $base =~ ^[0-9]+\.[0-9]+$ ]]; then
     echo "VERSION must be MAJOR.MINOR (e.g. 0.9), found '$base'" >&2
     exit 1
 fi
-# Without git history (e.g. a source tarball) the last part is 0.
-build=$(git rev-list --count HEAD 2>/dev/null || echo 0)
+if [ -e .git ]; then
+    # A shallow clone or a git error would give a wrong (smaller) number:
+    # fail instead of producing a version that is not higher.
+    shallow=$(git rev-parse --is-shallow-repository)
+    if [ "$shallow" != false ]; then
+        echo "Shallow clone: the commit count is unknown (git fetch --unshallow)" >&2
+        exit 1
+    fi
+    build=$(git rev-list --count HEAD)
+else
+    build=0 # not a git checkout (e.g. a source tarball)
+fi
 echo "$base.$build"

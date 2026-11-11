@@ -25,8 +25,9 @@ import pshb_proto as proto  # noqa: E402
 SIM = None
 CLI = None
 SESSION = 0x1122334455667788
-# The version the simulator must report: MAJOR.MINOR.<commit count>.
-VERSION = subprocess.run(
+# The version the simulator must report: MAJOR.MINOR.<commit count> (from
+# make, or computed the same way).
+VERSION = os.environ.get("PSHB_VERSION") or subprocess.run(
     ["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)), "version.sh")],
     check=True, capture_output=True, text=True).stdout.strip()
 

@@ -37,4 +37,15 @@ check firmware/lib/tinyusb          "$TINYUSB_TAG"
 check firmware/lib/ioLibrary_Driver "$IOLIBRARY_TAG"
 check firmware/lib/monocypher       "$MONOCYPHER_TAG"
 
+# rustup reads desktop/rust-toolchain.toml; the images install RUST_VERSION.
+# If they differ, cargo tries to install another toolchain into the
+# read-only image.
+toolchain=$(sed -nE 's/^channel = "([^"]+)"/\1/p' desktop/rust-toolchain.toml)
+if [ "$toolchain" != "$RUST_VERSION" ]; then
+    echo "MISMATCH desktop/rust-toolchain.toml channel $toolchain, versions.env RUST_VERSION $RUST_VERSION"
+    fail=1
+else
+    echo "ok       desktop/rust-toolchain.toml  $toolchain"
+fi
+
 exit $fail

@@ -15,6 +15,7 @@
 #include "ota.h"
 #include "protocol.h"
 #include "pshb_config.h"
+#include "pshb_version.h"
 #include "socket.h"
 #include "w5500_port.h"
 #include "web.h"

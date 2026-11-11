@@ -2,12 +2,8 @@
 #ifndef PSHB_CONFIG_H
 #define PSHB_CONFIG_H
 
-// Firmware version reported in PONG and the web interface: 0xMMmmpppp
-// (major u8, minor u8, patch u16). Set by CMake (cmake/version.cmake) from
-// the file VERSION and the commit count, which is the patch.
-#ifndef PSHB_FW_VERSION
-#define PSHB_FW_VERSION 0
-#endif
+// The firmware version (PSHB_FW_VERSION, 0xMMmmpppp) is in the generated
+// pshb_version.h (cmake/version.cmake).
 
 // Accept unencrypted protocol version 0 (debug/bring-up builds only).
 #ifndef PSHB_PLAINTEXT_DEBUG

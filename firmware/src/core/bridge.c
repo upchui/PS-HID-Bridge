@@ -5,6 +5,7 @@
 #include "monocypher.h"
 #include "proto.h"
 #include "pshb_config.h"
+#include "pshb_version.h"
 
 void bridge_init(bridge_t *b, input_state_t *input, uint64_t session_id, uint64_t tx_counter_start,
                  uint64_t now_us) {

@@ -24,6 +24,7 @@ pico_sdk_init()
 
 # Portable core shared with the host build (firmware/host).
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/core_sources.cmake)
+list(APPEND PSHB_CORE_INCLUDES ${PSHB_VERSION_DIR})
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/iolibrary.cmake)
 
 set(PSHB_PICO_SOURCES
@@ -50,9 +51,7 @@ function(pshb_add_firmware name)
         ${PSHB_CORE_INCLUDES}
         ${CMAKE_CURRENT_LIST_DIR}/src/pico
     )
-    target_compile_definitions(${name} PRIVATE ${ARG_DEFINES}
-        PSHB_FW_VERSION=${PSHB_FW_VERSION_HEX}
-    )
+    target_compile_definitions(${name} PRIVATE ${ARG_DEFINES})
     target_compile_options(${name} PRIVATE -Wall -Wextra)
     target_link_libraries(${name} PRIVATE
         pico_stdlib

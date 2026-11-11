@@ -206,12 +206,13 @@ make firmware          # -> out/*.uf2
 make desktop-cli       # -> out/pshb-cli
 make desktop           # -> out/PS5-HID-Bridge-x86_64.AppImage
 make test              # unit tests, test vectors, simulator, Rust tests
-make all               # everything, including the AppImage self-test
+make all               # everything, including the AppImage self-test (tests first)
+make -j2 -O all        # the same, two steps at a time (faster)
 ```
 
 The first `make desktop` builds Qt 6.12 and Kirigami from source and therefore takes long (1–3 hours depending on the machine). After that everything is in the Docker cache. The number of parallel Qt jobs can be set with `make desktop QT_JOBS=4`; qtdeclarative needs about 2 GB of RAM per job.
 
-All versions are kept in [versions.env](versions.env); downloads are checked by SHA-256. `make check-pins` checks that the submodules are at the tags listed there.
+All versions are kept in [versions.env](versions.env); downloads are checked by SHA-256. `make check-pins` checks that the submodules are at the tags listed there (and that `desktop/rust-toolchain.toml` matches `RUST_VERSION`).
 
 For development builds without the web interface a key can be compiled in: `make firmware DEV_PSK=<64 hex digits>`. It only applies as long as no key is set in the web interface.
 
@@ -219,8 +220,8 @@ For development builds without the web interface a key can be compiled in: `make
 
 GitHub Actions builds on GitHub-hosted runners with the same Makefile:
 
-- [`release.yml`](.github/workflows/release.yml) runs on every push to `main`: `make all` (firmware, CLI, AppImage, every test, AppImage self-test), then it publishes the pre-release `v<major>.<minor>.<commit count>`.
-- The toolchain images are stored in the GitHub Container Registry (`ghcr.io/<owner>/pshb-*`), tagged with a hash of `versions.env` and `docker/` (`make print-toolchain-tag`). Only when that hash changes does [`toolchain.yml`](.github/workflows/toolchain.yml) rebuild them; with Qt this takes a few hours, a normal release run takes about 20 minutes.
+- [`release.yml`](.github/workflows/release.yml) runs on every push to `main`: `make -j2 -O all` (every test, firmware, CLI, AppImage, AppImage self-test), then it publishes the pre-release `v<major>.<minor>.<commit count>`. Compiled Rust dependencies are cached per `Cargo.lock`. A release whose tag already exists for another commit (after a force-push) is refused.
+- The toolchain images are stored in the GitHub Container Registry (`ghcr.io/<owner>/pshb-*`), tagged with a hash of `versions.env` and `docker/` (`make print-toolchain-tag`). Only when that hash changes does [`toolchain.yml`](.github/workflows/toolchain.yml) rebuild them; with Qt this takes a few hours, a normal release run takes a few minutes.
 - `make PREBUILT=1 FW_IMAGE=… RUST_IMAGE=… DESKTOP_IMAGE=… APPTEST_IMAGE=… all` is what CI runs: the image targets only check that the pulled images exist.
 - The version is `MAJOR.MINOR` from the file [`VERSION`](VERSION) plus the number of commits ([`tools/version.sh`](tools/version.sh), `make print-version`). Firmware, app, CLI and metainfo get it at build time; for a bigger step (e.g. `1.0`) only `VERSION` is edited.
 

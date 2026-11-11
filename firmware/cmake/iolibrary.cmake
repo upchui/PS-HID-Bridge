@@ -14,7 +14,10 @@ if(PSHB_DHCP_POS EQUAL -1)
     message(FATAL_ERROR "ioLibrary dhcp.c changed: HOST_NAME definition not found")
 endif()
 string(REPLACE "${PSHB_DHCP_FROM}" "${PSHB_DHCP_TO}" PSHB_DHCP_SRC "${PSHB_DHCP_SRC}")
-file(WRITE ${CMAKE_BINARY_DIR}/gen/iolibrary/dhcp.c "${PSHB_DHCP_SRC}")
+# Written via a temporary file: configure_file leaves dhcp.c (and with it
+# the object and all images) untouched when nothing changed.
+file(WRITE ${CMAKE_BINARY_DIR}/gen/iolibrary/dhcp.c.new "${PSHB_DHCP_SRC}")
+configure_file(${CMAKE_BINARY_DIR}/gen/iolibrary/dhcp.c.new ${CMAKE_BINARY_DIR}/gen/iolibrary/dhcp.c COPYONLY)
 
 add_library(iolibrary STATIC
     ${PSHB_IOLIB}/Ethernet/wizchip_conf.c
