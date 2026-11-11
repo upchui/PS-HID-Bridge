@@ -1,4 +1,4 @@
-use cxx_qt_build::{CxxQtBuilder, QmlFile, QmlModule};
+use cxx_qt_build::{CxxQtBuilder, QResource, QResources, QmlFile, QmlModule};
 
 fn main() {
     // Link with lld: cxx-qt would otherwise get GNU gold, which emits two
@@ -41,8 +41,23 @@ fn main() {
             "qml/UsbInstall.qml",
         ]);
 
+    // The app icon (also in the AppImage's .desktop entry), for the windows:
+    // qrc:/ps-hid-bridge/app-icon.svg, see src/window_icon.h.
+    // (QResourceFile, needed for the alias, is not re-exported: take it from a QResource.)
+    let icon_file = QResource::new()
+        .file("../packaging/icons/io.github.thealhu.pshidbridge.svg")
+        .get_files()
+        .next()
+        .unwrap()
+        .clone()
+        .alias("app-icon.svg");
+    let app_icon = QResources::new().resource(QResource::new().prefix("/ps-hid-bridge").file(icon_file));
+    println!("cargo:rerun-if-changed=src/window_icon.h");
+
     CxxQtBuilder::new_qml_module(module)
-        .files(["src/controller.rs"])
+        .qrc_resources(app_icon)
+        .include_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))
+        .files(["src/controller.rs", "src/window_icon.rs"])
         .qt_module("Quick")
         .qt_module("QuickControls2")
         .build();

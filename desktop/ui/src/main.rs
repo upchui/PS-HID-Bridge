@@ -8,6 +8,7 @@ mod controller;
 mod focus;
 mod notify;
 mod tray;
+mod window_icon;
 
 use cxx_qt_lib::{QByteArray, QGuiApplication, QQmlApplicationEngine, QString, QUrl};
 
@@ -83,6 +84,7 @@ fn main() {
             .set_organization_name(&QString::from("ps-hid-bridge"));
     }
     QGuiApplication::set_desktop_file_name(&QString::from("io.github.thealhu.pshidbridge"));
+    window_icon::set_window_icon();
 
     if let Some(mut engine) = engine.as_mut() {
         engine
