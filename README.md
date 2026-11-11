@@ -103,6 +103,7 @@ pshb-cli config set-psk <64 hex digits>            # store the key
 pshb-cli config show                               # current settings
 pshb-cli ping                                      # connection and board status
 pshb-cli run                                       # forward; toggle with Ctrl+Alt+P
+pshb-cli run --stats                               # also print the input latency every 5 s
 ```
 
 Key names in combinations follow the **position on a US keyboard** (`Z` is the `Y` key on a German keyboard). Modifiers: `Ctrl`, `Alt`, `AltGr`, `Shift`, `Super`; mouse buttons: `Mouse4`, `Mouse5`, `MouseMiddle`. The German names of earlier versions (`Strg`, `Umschalt`, `Maus4` …) are still accepted.
@@ -167,6 +168,20 @@ This needs the partition table from the first installation (`ps5-hid-bridge-pt.u
 
 Console: UART0 (GP0/GP1, 115200 baud). The USB ID `1209:0001` is the pid.codes test PID and meant for private use only.
 
+## Latency
+
+The input path takes about 1–2 ms from a key press or mouse movement to the PS5; the video path (PS5 encoder → network → chiaki-ng → display) takes tens of milliseconds. The input path is built to stay short even when the PC is busy:
+
+- **App:** one thread waits on all selected devices, runs the trigger logic and sends the packet itself, without handing the event to another thread. It runs with real-time priority (through rtkit, which desktops with PipeWire usually have, or directly if the user may use `SCHED_FIFO`, e.g. via a `realtime` group). If neither works, the status page says "normal priority".
+- **Network:** packets are marked DSCP EF, so Wi-Fi sends them in the voice queue. A cable is still better: connect the PC and the PS5 by cable and the board to the same switch.
+- **Board:** core 0 handles nothing but USB and the input socket; network management and the web interface run on core 1 and use the SPI bus as little as possible.
+
+Measuring:
+
+- App, status page: "Input → network" (kernel time of the event until the packet is sent), median, 95 % and maximum. On the command line: `pshb-cli run --stats`.
+- Board, web interface (Status): "Latency" with the time from a packet to the report fetched by the PS5, the receive and decrypt time, and how often mouse motion had to wait for the previous report.
+- `tools/latency_bench.py --cli out/pshb-cli [--load 16]` measures the app from outside: it creates a virtual mouse via `/dev/uinput`, plays the board and reports percentiles, optionally with busy processes on every core. It needs write access to `/dev/uinput` and read access to the virtual device (`--vendor`/`--product` of a device that your udev rule covers). Typical on a desktop with real-time priority: median about 0.1 ms, 99 % below 0.3 ms, also with every core busy.
+
 ## Bring-up on real hardware
 
 These points cannot be checked without a board. The order is chosen so that each step builds on the previous one:
@@ -174,11 +189,12 @@ These points cannot be checked without a board. The order is chosen so that each
 1. `picotool info -a` (BOOTSEL mode): RP2350A, 2 MB flash.
 2. `ps5-hid-bridge-hidtest.uf2` on the PC: `lsusb -v` (1209:0001, two HID interfaces), `evtest` (the mouse moves in a square), polling rate 1000 Hz (`usbhid-dump` / usbmon).
 3. The same image on the PS5: mouse in the menu and in a game with mouse support, also during a running Remote Play session (Aimlabs). If the mouse does not react: try `-hidtest-mouse8.uf2`.
-4. Partition table + `ps5-hid-bridge-plain.uf2`: DHCP, host name in the router, `make udp-test IP=… ARGS='--plain flood --rate 1000 --seconds 10'` without losses; test SPI clock 37.5 MHz (`PSHB_W5500_SPI_HZ`).
-5. Waiting time on core 0 while the web interface loads (GPIO pulse + logic analyser): should stay below 0.5 ms.
+4. Partition table + `ps5-hid-bridge-plain.uf2`: DHCP, host name in the router, `make udp-test IP=… ARGS='--plain flood --rate 1000 --seconds 10'` without losses; test SPI clock 37.5 MHz (`PSHB_W5500_SPI_HZ`, i.e. clk_peri / 4).
+5. Waiting time on core 0 while the web interface loads (GPIO pulse + logic analyser, or the maximum of "Receive and decrypt" on the Latency card): should stay below 0.5 ms.
 6. Normal firmware, key via the web interface, connect the app; check the failsafe (pull the network cable while a key is pressed → released after 250 ms).
 7. Update over the network with `ps5-hid-bridge.uf2` (slot changes from A to B), then with `ps5-hid-bridge-rollbacktest.uf2`: this image deliberately never confirms itself; after about 17 seconds the board must restart by itself with the previous version (check slot and firmware in the web interface).
 8. Settings survive several updates (they live outside the firmware slots).
+9. Latency card in the web interface while moving the mouse in a game: "Receive and decrypt" should stay well below 0.1 ms; "Packet → report fetched" around 0.5–1 ms. Compare with a build using `make firmware FW_CMAKE_ARGS=-DPSHB_W5500_FAST_RX=OFF` (plain ioLibrary receive). Note "Fetch time within the USB frame" and "Mouse motion that had to wait": they decide whether reports should be filled right before the PS5 fetches them (filled at the start of the frame instead of as early as possible) — that can save up to 1 ms with continuous motion.
 
 ## Building
 
@@ -232,5 +248,5 @@ make udp-test IP=192.168.1.50 ARGS='--psk-file psk.txt flood --rate 1000 --secon
 | `desktop/ui/` | Kirigami user interface (QML, cxx-qt), tray, window rule |
 | `protocol/` | packet format and shared test vectors |
 | `docker/` | build environments |
-| `tools/` | test tools (UDP test, simulator integration tests), version and release helpers |
+| `tools/` | test tools (UDP test, simulator integration tests, latency benchmark), version and release helpers |
 | `.github/workflows/` | CI: toolchain images and automatic releases |
