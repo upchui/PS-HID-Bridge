@@ -68,6 +68,25 @@ pub struct MouseConfig {
     pub threshold: f64,
 }
 
+impl MouseConfig {
+    /// Sensitivity must be positive, acceleration and threshold not
+    /// negative (0 or NaN would leave the mouse dead).
+    pub fn validate(&self) -> Result<(), String> {
+        let ok =
+            |v: f64, min_exclusive: bool| v.is_finite() && if min_exclusive { v > 0.0 } else { v >= 0.0 };
+        if !ok(self.sensitivity, true) {
+            return Err(format!(
+                "Mouse sensitivity must be above 0 (is {})",
+                self.sensitivity
+            ));
+        }
+        if !ok(self.accel, false) || !ok(self.threshold, false) {
+            return Err("Mouse acceleration and threshold must not be negative".into());
+        }
+        Ok(())
+    }
+}
+
 impl Default for MouseConfig {
     fn default() -> Self {
         let c = MouseCurve::default();
@@ -126,12 +145,28 @@ impl Config {
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
-        let mut config: Self = match fs::read_to_string(path) {
-            Ok(text) => toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?,
+        let mut config = match fs::read_to_string(path) {
+            Ok(text) => Self::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => Self::default(),
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
         config.normalize();
+        Ok(config)
+    }
+
+    fn parse(text: &str) -> Result<Self, String> {
+        let mut config: Self = toml::from_str(text).map_err(|e| e.to_string())?;
+        // Settings from before the window rule had its own switch: a
+        // pattern that was set meant the rule was on.
+        let table: toml::Table = toml::from_str(text).map_err(|e| e.to_string())?;
+        if !table.contains_key("window_rule_enabled")
+            && table
+                .get("window_rule")
+                .and_then(|v| v.as_str())
+                .is_some_and(|r| !r.trim().is_empty())
+        {
+            config.window_rule_enabled = true;
+        }
         Ok(config)
     }
 
@@ -155,6 +190,7 @@ impl Config {
     }
 
     pub fn engine_config(&self) -> Result<EngineConfig, String> {
+        self.mouse.validate()?;
         Ok(EngineConfig {
             triggers: self
                 .triggers
@@ -291,6 +327,32 @@ mod tests {
         assert!(c.engine_config().unwrap().window_rule);
         c.window_rule = "  ".into();
         assert!(!c.window_rule_active());
+    }
+
+    #[test]
+    fn window_rule_of_older_settings_stays_on() {
+        // Before the switch existed, a pattern meant "on".
+        let c = Config::parse("window_rule = \"chiaki\"\n").unwrap();
+        assert!(c.window_rule_active());
+        let c = Config::parse("window_rule = \"\"\n").unwrap();
+        assert!(!c.window_rule_enabled);
+        let c = Config::parse("window_rule_enabled = false\nwindow_rule = \"chiaki\"\n").unwrap();
+        assert!(!c.window_rule_enabled);
+        assert!(!Config::parse("").unwrap().window_rule_enabled);
+    }
+
+    #[test]
+    fn mouse_values_are_checked() {
+        let mut c = Config::default();
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            c.mouse.sensitivity = bad;
+            assert!(c.engine_config().is_err(), "{bad}");
+        }
+        c.mouse.sensitivity = 1.5;
+        c.mouse.accel = -0.1;
+        assert!(c.engine_config().is_err());
+        c.mouse.accel = 0.0;
+        assert!(c.engine_config().is_ok());
     }
 
     #[test]

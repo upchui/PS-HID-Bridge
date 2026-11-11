@@ -85,6 +85,9 @@ pub struct Engine {
     manual: bool,
     paused: bool,
     hold: bool,
+    /// A hold trigger was overridden (emergency stop, Off) while held: it
+    /// stays ineffective until its keys are released.
+    hold_blocked: bool,
     focus: bool,
     active: bool,
     pending: bool,
@@ -106,6 +109,7 @@ impl Engine {
             manual: false,
             paused: false,
             hold: false,
+            hold_blocked: false,
             focus: false,
             active: false,
             pending: false,
@@ -181,7 +185,7 @@ impl Engine {
 
         if self.emergency.contains(code) && self.emergency.satisfied(&self.pressed) {
             self.manual = false;
-            self.hold = false;
+            self.block_hold();
             self.paused = self.cfg.window_rule;
             self.suppressed.insert(code);
             fx.push(Effect::ReleaseAll);
@@ -265,10 +269,22 @@ impl Engine {
     }
 
     fn update_hold(&mut self) {
-        self.hold = self.cfg.triggers.iter().any(|t| match &t.kind {
+        let held = self.cfg.triggers.iter().any(|t| match &t.kind {
             TriggerKind::Hold(c) => c.satisfied(&self.pressed),
             _ => false,
         });
+        if !held {
+            self.hold_blocked = false;
+        }
+        self.hold = held && !self.hold_blocked;
+    }
+
+    /// End an active hold until its keys have been released.
+    fn block_hold(&mut self) {
+        if self.hold {
+            self.hold_blocked = true;
+            self.hold = false;
+        }
     }
 
     fn desired(&self) -> bool {
@@ -283,6 +299,7 @@ impl Engine {
             }
             Action::Off => {
                 self.manual = false;
+                self.block_hold();
                 // Also overrides an active window rule until the focus changes.
                 self.paused = self.cfg.window_rule && self.focus;
             }
@@ -598,6 +615,58 @@ mod tests {
         assert_eq!(states(&fx)[0].keys, [0x04, 0, 0, 0, 0, 0]);
         let fx = t.up(crate::keymap::BTN_SIDE);
         assert!(fx.contains(&Effect::SetActive(false)));
+    }
+
+    fn hold_mouse4() -> T {
+        T::new(
+            vec![Trigger {
+                kind: TriggerKind::Hold(Combo::parse("Mouse4").unwrap()),
+                action: Action::On,
+            }],
+            false,
+        )
+    }
+
+    #[test]
+    fn emergency_stop_beats_a_held_hold_trigger() {
+        let mut t = hold_mouse4();
+        assert!(t.down(crate::keymap::BTN_SIDE).contains(&Effect::Grab(true)));
+        t.down(KEY_LEFTCTRL);
+        t.down(KEY_LEFTALT);
+        t.down(KEY_LEFTSHIFT);
+        let fx = t.down(ESC);
+        assert!(fx.contains(&Effect::Grab(false)));
+        // Releasing the combo while Mouse4 is still held must not grab again.
+        for k in [ESC, KEY_LEFTSHIFT, KEY_LEFTALT, KEY_LEFTCTRL] {
+            assert!(!t.up(k).contains(&Effect::Grab(true)));
+        }
+        assert!(!t.down(A).contains(&Effect::Grab(true)));
+        t.up(A);
+        assert!(!t.e.is_active());
+        // Released and pressed again: the hold works as before.
+        t.up(crate::keymap::BTN_SIDE);
+        assert!(t.down(crate::keymap::BTN_SIDE).contains(&Effect::Grab(true)));
+    }
+
+    #[test]
+    fn off_beats_a_held_hold_trigger() {
+        let mut t = hold_mouse4();
+        t.down(crate::keymap::BTN_SIDE);
+        assert!(t.e.is_active());
+        let fx = t.e.command(Action::Off);
+        assert!(fx.contains(&Effect::Grab(false)));
+        assert!(!t.down(A).contains(&Effect::Grab(true)));
+        assert!(!t.e.is_active());
+        t.up(A);
+        t.up(crate::keymap::BTN_SIDE);
+        assert!(t.down(crate::keymap::BTN_SIDE).contains(&Effect::Grab(true)));
+    }
+
+    #[test]
+    fn off_without_hold_does_not_block_the_next_hold() {
+        let mut t = hold_mouse4();
+        t.e.command(Action::Off);
+        assert!(t.down(crate::keymap::BTN_SIDE).contains(&Effect::Grab(true)));
     }
 
     #[test]

@@ -237,9 +237,14 @@ pub fn is_button(code: u16) -> bool {
     (0x100..0x160).contains(&code)
 }
 
-/// Code for a key name: "A", "KEY_A", "f12", "BTN_SIDE" (case-insensitive).
+/// Code for a key name: "A", "KEY_A", "f12", "BTN_SIDE" (case-insensitive),
+/// or "#164" for a key without a name (as [`name_of`] writes it).
 pub fn code_by_name(name: &str) -> Option<u16> {
     let upper = name.trim().to_ascii_uppercase();
+    if let Some(num) = upper.strip_prefix('#') {
+        // KEY_MAX = 0x2ff
+        return num.parse::<u16>().ok().filter(|c| (1..=0x2ff).contains(c));
+    }
     if let Some((c, _)) = BUTTON_NAMES.iter().find(|(_, n)| *n == upper) {
         return Some(*c);
     }
@@ -314,5 +319,11 @@ mod tests {
         assert_eq!(code_by_name("nope"), None);
         assert_eq!(name_of(29), "LEFTCTRL");
         assert_eq!(name_of(BTN_EXTRA), "BTN_EXTRA");
+        // Keys without a name round-trip through their number.
+        assert_eq!(name_of(164), "#164");
+        assert_eq!(code_by_name(&name_of(164)), Some(164));
+        assert_eq!(code_by_name("#0"), None);
+        assert_eq!(code_by_name("#99999"), None);
+        assert_eq!(code_by_name("#x"), None);
     }
 }

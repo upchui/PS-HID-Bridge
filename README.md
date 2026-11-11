@@ -50,7 +50,7 @@ Every commit on `main` is built and tested automatically and published as a pre-
 - **Tray icon:** grey = board not reachable, blue = ready, green = bridge on. A click toggles. A Plasma notification appears when the bridge switches.
 - **Emergency stop:** `Ctrl+Alt+Shift+Esc` always releases mouse and keyboard at once and lets go of everything on the PS5. This combination cannot be switched off.
 
-The bridge only switches on once all keys are released: if the devices were grabbed while a key is down, that key would stay stuck on the desktop. If the app hangs, a watchdog releases the devices after one second.
+The bridge only switches on once all keys are released: if the devices were grabbed while a key is down, that key would stay stuck on the desktop. *Hold* triggers are the exception, because their key is down by definition: the desktop does not see that key (or any other key held at that moment) being released, so it considers it pressed until it is pressed again. A mouse button (`Mouse4`) is therefore a better hold key than a keyboard key. The emergency stop and "Switch off" end a hold until its key is released. If the app hangs, a watchdog releases the devices after one second.
 
 Settings: `~/.config/ps5-hid-bridge/config.toml`, key: `~/.config/ps5-hid-bridge/psk` (readable by the user only).
 
