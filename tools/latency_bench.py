@@ -14,7 +14,7 @@ event node (e.g. a udev rule for the chosen --vendor/--product), Python
 package "cryptography".
 
 Usage:
-  tools/latency_bench.py --cli out/pshb-cli [--count 2000] [--load 16]
+  tools/latency_bench.py --cli out/pshb-cli --vendor VVVV --product PPPP [--count 2000] [--load 16]
 """
 
 import argparse
@@ -134,8 +134,9 @@ def main():
     ap.add_argument("--cli", required=True, help="pshb-cli binary to measure")
     ap.add_argument("--count", type=int, default=2000)
     ap.add_argument("--load", type=int, default=0, help="busy processes running during the measurement")
-    ap.add_argument("--vendor", type=lambda s: int(s, 16), default=0xFEED)
-    ap.add_argument("--product", type=lambda s: int(s, 16), default=0x6536)
+    ap.add_argument("--vendor", type=lambda s: int(s, 16), required=True,
+                    help="USB vendor id (hex) for the virtual mouse; pick one your udev rule grants access to")
+    ap.add_argument("--product", type=lambda s: int(s, 16), required=True, help="USB product id (hex)")
     ap.add_argument("--gap-ms", type=float, default=3.0, help="mean pause between movements")
     args = ap.parse_args()
 

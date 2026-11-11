@@ -180,7 +180,7 @@ Measuring:
 
 - App, status page: "Input → network" (kernel time of the event until the packet is sent), median, 95 % and maximum. On the command line: `pshb-cli run --stats`.
 - Board, web interface (Status): "Latency" with the time from a packet to the report fetched by the PS5, the receive and decrypt time, and how often mouse motion had to wait for the previous report.
-- `tools/latency_bench.py --cli out/pshb-cli [--load 16]` measures the app from outside: it creates a virtual mouse via `/dev/uinput`, plays the board and reports percentiles, optionally with busy processes on every core. It needs write access to `/dev/uinput` and read access to the virtual device (`--vendor`/`--product` of a device that your udev rule covers). Typical on a desktop with real-time priority: median about 0.1 ms, 99 % below 0.3 ms, also with every core busy.
+- `tools/latency_bench.py --cli out/pshb-cli --vendor VVVV --product PPPP [--load 16]` measures the app from outside: it creates a virtual mouse via `/dev/uinput`, plays the board and reports percentiles, optionally with busy processes on every core. It needs write access to `/dev/uinput` and read access to the virtual device (`--vendor`/`--product` of a device that your udev rule covers). Typical on a desktop with real-time priority: median about 0.1 ms, 99 % below 0.3 ms, also with every core busy.
 
 ## Bring-up on real hardware
 
