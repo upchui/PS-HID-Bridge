@@ -74,7 +74,14 @@ function(pshb_add_firmware name)
         target_compile_definitions(${name} PRIVATE PICO_CRT0_IMAGE_TYPE_TBYB=1)
         target_link_libraries(${name} PRIVATE boot_picobin_headers boot_picoboot_headers)
         pico_hash_binary(${name})
-        pico_set_binary_version(${name} MAJOR ${PROJECT_VERSION_MAJOR} MINOR ${PSHB_BUILD})
+        # What pico_set_binary_version(MAJOR .. MINOR ..) does, but only for
+        # assembler sources: crt0.S embeds the version, and a define on every
+        # C file would rebuild the whole image on each commit.
+        if(PSHB_BUILD GREATER 0)
+            target_compile_definitions(${name} PRIVATE
+                $<$<COMPILE_LANGUAGE:ASM>:PICO_CRT0_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}>
+                $<$<COMPILE_LANGUAGE:ASM>:PICO_CRT0_VERSION_MINOR=${PSHB_BUILD}>)
+        endif()
     endif()
     pico_add_extra_outputs(${name})
 endfunction()
