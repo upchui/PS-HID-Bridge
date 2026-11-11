@@ -42,7 +42,7 @@ static critical_section_t s_cfg_lock;
 static struct {
     uint8_t key[32];
     bool key_set;
-    uint32_t allowed_ip;
+    uint32_t allowed_net, allowed_mask;
 } s_cfg;
 static volatile bool s_cfg_dirty;
 
@@ -50,7 +50,7 @@ void input_cfg_post(const pshb_settings_t *s) {
     critical_section_enter_blocking(&s_cfg_lock);
     memcpy(s_cfg.key, s->psk, 32);
     s_cfg.key_set = s->psk_set;
-    s_cfg.allowed_ip = ip_to_u32(s->allowed_ip);
+    settings_sender_filter(s, &s_cfg.allowed_net, &s_cfg.allowed_mask);
     s_cfg_dirty = true;
     critical_section_exit(&s_cfg_lock);
 }
@@ -59,7 +59,8 @@ void input_cfg_poll(bridge_t *b) {
     if (!s_cfg_dirty) return;
     critical_section_enter_blocking(&s_cfg_lock);
     bridge_set_key(b, s_cfg.key_set ? s_cfg.key : NULL);
-    b->allowed_ip = s_cfg.allowed_ip;
+    b->allowed_net = s_cfg.allowed_net;
+    b->allowed_mask = s_cfg.allowed_mask;
     s_cfg_dirty = false;
     critical_section_exit(&s_cfg_lock);
 }
@@ -179,7 +180,7 @@ static void load_settings(void) {
     }
 #endif
     bridge_set_key(&g_bridge, g_settings.psk_set ? g_settings.psk : NULL);
-    g_bridge.allowed_ip = ip_to_u32(g_settings.allowed_ip);
+    settings_sender_filter(&g_settings, &g_bridge.allowed_net, &g_bridge.allowed_mask);
     if (!g_settings.psk_set) printf("security: no key set yet -- create one in the web interface\n");
 }
 

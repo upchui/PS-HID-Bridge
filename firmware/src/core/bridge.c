@@ -117,7 +117,7 @@ static size_t handle_plain(bridge_t *b, const uint8_t *pkt, size_t len, uint64_t
 size_t bridge_handle_packet(bridge_t *b, const uint8_t *pkt, size_t len, uint32_t src_ip,
                             uint64_t now_us, uint8_t *reply, size_t reply_cap) {
     if (len >= PSHB_HDR_LEN && pkt[0] == PSHB_PROTO_VERSION_PLAIN && b->allow_plaintext) {
-        if (b->allowed_ip != 0 && src_ip != b->allowed_ip) {
+        if (!bridge_sender_allowed(b, src_ip)) {
             b->stats.rx_filtered++;
             return 0;
         }
@@ -131,7 +131,7 @@ size_t bridge_handle_packet(bridge_t *b, const uint8_t *pkt, size_t len, uint32_
         return 0;
     }
     // 2. sender filter
-    if (b->allowed_ip != 0 && src_ip != b->allowed_ip) {
+    if (!bridge_sender_allowed(b, src_ip)) {
         b->stats.rx_filtered++;
         return 0;
     }

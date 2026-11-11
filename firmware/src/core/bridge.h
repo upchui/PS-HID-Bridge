@@ -36,7 +36,10 @@ typedef struct {
     // configuration
     uint8_t key[32];
     bool key_set;
-    uint32_t allowed_ip;      // sender filter, a.b.c.d as 0xaabbccdd; 0 = any
+    // sender filter (a.b.c.d as 0xaabbccdd): allowed if ((ip ^ net) & mask) == 0;
+    // mask 0 = any sender
+    uint32_t allowed_net;
+    uint32_t allowed_mask;
     bool allow_plaintext;     // accept version 0 packets (debug builds only)
     uint32_t failsafe_us;
 
@@ -66,6 +69,11 @@ void bridge_set_key(bridge_t *b, const uint8_t key[32]);
 // `reply` (0 = nothing to send back to the sender).
 size_t bridge_handle_packet(bridge_t *b, const uint8_t *pkt, size_t len, uint32_t src_ip,
                             uint64_t now_us, uint8_t *reply, size_t reply_cap);
+
+// Does the sender filter let `src_ip` through?
+static inline bool bridge_sender_allowed(const bridge_t *b, uint32_t src_ip) {
+    return ((src_ip ^ b->allowed_net) & b->allowed_mask) == 0;
+}
 
 // Periodic work (failsafe). Call at least every few milliseconds.
 void bridge_tick(bridge_t *b, uint64_t now_us);

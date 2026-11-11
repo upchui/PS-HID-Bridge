@@ -25,12 +25,54 @@ bool web_parse_ip(const char *s, uint8_t out[4]) {
     return true;
 }
 
+bool web_parse_cidr(const char *s, uint8_t ip[4], uint8_t *prefix) {
+    char addr[16];
+    const char *slash = strchr(s, '/');
+    size_t n = slash ? (size_t)(slash - s) : strlen(s);
+    if (n >= sizeof(addr)) return false;
+    memcpy(addr, s, n);
+    addr[n] = '\0';
+    if (!web_parse_ip(addr, ip)) return false;
+
+    unsigned p = 32;
+    if (slash) {
+        const char *d = slash + 1;
+        size_t len = strlen(d);
+        if (len < 1 || len > 2) return false;
+        p = 0;
+        for (size_t i = 0; i < len; i++) {
+            if (d[i] < '0' || d[i] > '9') return false;
+            p = p * 10 + (unsigned)(d[i] - '0');
+        }
+        if (p > 32) return false;
+    }
+    uint32_t mask = settings_prefix_mask(p);
+    for (int i = 0; i < 4; i++) ip[i] &= (uint8_t)(mask >> (24 - 8 * i));
+    *prefix = (uint8_t)p;
+    return true;
+}
+
 static void ip_str(const uint8_t ip[4], char out[16]) {
     snprintf(out, 16, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
 }
 
 static bool ip_zero(const uint8_t ip[4]) {
     return !(ip[0] | ip[1] | ip[2] | ip[3]);
+}
+
+// "" (any sender), "a.b.c.d" (one address) or "a.b.c.d/N" (subnet).
+static void sender_filter_str(const pshb_settings_t *s, char out[WEB_CIDR_STR_LEN + 1]) {
+    uint32_t net, mask;
+    settings_sender_filter(s, &net, &mask);
+    if (mask == 0) {
+        out[0] = '\0';
+        return;
+    }
+    int len = snprintf(out, WEB_CIDR_STR_LEN + 1, "%u.%u.%u.%u", (unsigned)(net >> 24), (unsigned)(net >> 16) & 0xFF,
+                       (unsigned)(net >> 8) & 0xFF, (unsigned)net & 0xFF);
+    if (mask != 0xFFFFFFFFu) {
+        snprintf(out + len, (size_t)(WEB_CIDR_STR_LEN + 1 - len), "/%u", 32u - s->allowed_host_bits);
+    }
 }
 
 static bool mask_valid(const uint8_t m[4]) {
@@ -252,12 +294,12 @@ static void h_status(web_app_t *app, web_conn_t *c) {
     memset(&st, 0, sizeof(st));
     app->be->status(app->be->ctx, &st);
     const pshb_settings_t *s = app->settings;
-    char ip[16], mask[16], gw[16], dns[16], allowed[16], mac[18], fw[16];
+    char ip[16], mask[16], gw[16], dns[16], allowed[WEB_CIDR_STR_LEN + 1], mac[18], fw[16];
     ip_str(st.ip, ip);
     ip_str(st.mask, mask);
     ip_str(st.gw, gw);
     ip_str(st.dns, dns);
-    ip_str(s->allowed_ip, allowed);
+    sender_filter_str(s, allowed);
     snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", st.mac[0], st.mac[1], st.mac[2], st.mac[3],
              st.mac[4], st.mac[5]);
     snprintf(fw, sizeof(fw), "%u.%u.%u", (unsigned)(st.fw_version >> 16) & 0xFF,
@@ -287,7 +329,7 @@ static void h_status(web_app_t *app, web_conn_t *c) {
     jw_str(&w, "static_dns", cfg_dns);
     jw_int(&w, "udp_port", s->udp_port);
     jw_bool(&w, "psk_set", s->psk_set);
-    jw_str(&w, "allowed_sender", ip_zero(s->allowed_ip) ? "" : allowed);
+    jw_str(&w, "allowed_sender", allowed);
     jw_bool(&w, "usb_mounted", st.usb_status & PSHB_STATUS_USB_MOUNTED);
     jw_bool(&w, "usb_suspended", st.usb_status & PSHB_STATUS_USB_SUSPENDED);
     jw_bool(&w, "input_active", !st.failsafe);
@@ -378,14 +420,22 @@ static void h_psk_set(web_app_t *app, web_conn_t *c) {
 }
 
 static void h_allowed_sender(web_app_t *app, web_conn_t *c) {
-    char ip[16];
+    char text[WEB_CIDR_STR_LEN + 1];
     uint8_t v[4] = {0};
-    if (!jr_str(c->req.body, c->req.body_received, "ip", ip, sizeof(ip)) ||
-        !(ip[0] == '\0' || web_parse_ip(ip, v))) {
-        respond_error(c, 400, "Invalid IP address (empty = any sender)");
+    uint8_t prefix = 0;  // empty = any sender
+    if (!jr_str(c->req.body, c->req.body_received, "ip", text, sizeof(text)) ||
+        !(text[0] == '\0' || web_parse_cidr(text, v, &prefix))) {
+        respond_error(c, 400, "Invalid IP address or subnet (e.g. 192.168.1.20 or 192.168.1.0/24; empty = any sender)");
         return;
     }
+    if (prefix > 0 && ip_zero(v)) {
+        // e.g. "0.0.0.0/8": would be stored as "any sender", which is not what was asked for.
+        respond_error(c, 400, "Invalid subnet: the network address must not be 0.0.0.0 (empty = any sender)");
+        return;
+    }
+    if (prefix == 0) memset(v, 0, sizeof(v));  // "/0" = any sender
     memcpy(app->settings->allowed_ip, v, 4);
+    app->settings->allowed_host_bits = prefix ? (uint8_t)(32 - prefix) : 0;
     if (save_apply(app, c)) respond_ok(c);
 }
 

@@ -73,7 +73,8 @@ typedef struct {
     bool plaintext, usb_mounted, have_session, have_key_override;
     uint64_t session;
     uint8_t key_override[32];
-    uint32_t allowed_override;
+    bool have_allowed_override;
+    uint32_t allowed_net, allowed_mask;
     unsigned failsafe_ms;
     const char *settings_file;
 
@@ -126,10 +127,12 @@ static void apply_settings(const pshb_settings_t *s) {
     } else {
         bridge_set_key(&S.bridge, s->psk_set ? s->psk : NULL);
     }
-    S.bridge.allowed_ip = S.allowed_override
-                              ? S.allowed_override
-                              : ((uint32_t)s->allowed_ip[0] << 24) | ((uint32_t)s->allowed_ip[1] << 16) |
-                                    ((uint32_t)s->allowed_ip[2] << 8) | s->allowed_ip[3];
+    if (S.have_allowed_override) {
+        S.bridge.allowed_net = S.allowed_net;
+        S.bridge.allowed_mask = S.allowed_mask;
+    } else {
+        settings_sender_filter(s, &S.bridge.allowed_net, &S.bridge.allowed_mask);
+    }
 }
 
 // Power-on: load settings, new session, empty input state.
@@ -299,7 +302,7 @@ static void usage(const char *argv0) {
             "  --psk-file PATH   read the pre-shared key from a file\n"
             "  --failsafe-ms N   failsafe timeout (default 250)\n"
             "  --session HEX     fixed session id (default: random per boot)\n"
-            "  --allow IP        only accept packets from this sender\n"
+            "  --allow IP[/N]    only accept packets from this sender or subnet\n"
             "  --usb-unmounted   simulate a board that is not plugged in\n",
             argv0, PSHB_UDP_PORT_DEFAULT);
 }
@@ -433,12 +436,15 @@ int main(int argc, char **argv) {
             S.have_session = true;
             break;
         case 'a': {
-            struct in_addr a;
-            if (inet_pton(AF_INET, optarg, &a) != 1) {
-                fprintf(stderr, "sim: bad IP %s\n", optarg);
+            uint8_t ip[4], prefix;
+            if (!web_parse_cidr(optarg, ip, &prefix)) {
+                fprintf(stderr, "sim: bad IP or subnet %s\n", optarg);
                 return 2;
             }
-            S.allowed_override = ntohl(a.s_addr);
+            S.allowed_mask = settings_prefix_mask(prefix);
+            S.allowed_net = (((uint32_t)ip[0] << 24) | ((uint32_t)ip[1] << 16) | ((uint32_t)ip[2] << 8) | ip[3]) &
+                            S.allowed_mask;
+            S.have_allowed_override = true;
             break;
         }
         case 'u': S.usb_mounted = false; break;

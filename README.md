@@ -130,7 +130,7 @@ At `http://<board IP>/`:
 - **Login:** factory password `ps5-hid-bridge`. On the first login you must set your own password (8–64 characters). After three failed attempts the waiting time grows up to 64 seconds.
 - **Status:** connection to the PS5, network, firmware and slot, packet counters.
 - **Network:** DHCP or static address, UDP port. Saving restarts the board.
-- **Security:** generate a pre-shared key (shown exactly once) or enter an existing one, sender filter, change the password.
+- **Security:** generate a pre-shared key (shown exactly once) or enter an existing one, sender filter (one address such as `192.168.1.20` or a subnet such as `192.168.1.0/24`), change the password.
 - **System:** firmware update, restart, factory reset.
 
 The web interface uses unencrypted HTTP in the local network. The password protects against accidental changes and against other devices in the network, not against someone who can capture the network traffic. The input itself is always encrypted.

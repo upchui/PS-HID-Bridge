@@ -106,4 +106,11 @@ void web_conn_close(web_app_t *app, web_conn_t *c);
 // Parse "a.b.c.d"; false on anything else.
 bool web_parse_ip(const char *s, uint8_t out[4]);
 
+// Parse "a.b.c.d" (prefix 32) or "a.b.c.d/N" with N = 0..32. Host bits are
+// cleared, so "192.168.1.20/24" gives 192.168.1.0 and prefix 24.
+bool web_parse_cidr(const char *s, uint8_t ip[4], uint8_t *prefix);
+
+// Longest text form of a sender filter: "255.255.255.255/32".
+#define WEB_CIDR_STR_LEN 19
+
 #endif

@@ -1,5 +1,6 @@
 // Scenario tests of the input path state machine (encrypted protocol v1).
 #include "bridge.h"
+#include "settings.h"
 #include "mini_test.h"
 #include "proto.h"
 
@@ -156,17 +157,45 @@ TEST(wrong_session_gets_rate_limited_hint) {
     CHECK_EQ_U(f.b.stats.rx_replay, 3);
 }
 
+static void set_filter(fixture_t *f, uint32_t net, unsigned prefix) {
+    f->b.allowed_mask = settings_prefix_mask(prefix);
+    f->b.allowed_net = net & f->b.allowed_mask;
+}
+
 TEST(sender_filter) {
     fixture_t f;
     setup(&f);
-    f.b.allowed_ip = 0x0A000001;  // 10.0.0.1
     uint8_t pkt[PSHB_MAX_PACKET_LEN];
-    feed(&f, pkt, make_ping(pkt, KEY, 1, 0, 0), T0);
-    CHECK_EQ_U(f.reply_len, 0);
-    CHECK_EQ_U(f.b.stats.rx_filtered, 1);
-    f.b.allowed_ip = APP_IP;
-    feed(&f, pkt, make_ping(pkt, KEY, 2, 0, 0), T0);
-    CHECK(f.reply_len > 0);
+    uint64_t ctr = 1;
+    // APP_IP is 192.168.1.100
+    static const struct {
+        uint32_t net;
+        unsigned prefix;
+        bool pass;
+    } cases[] = {
+        {0x0A000001u, 32, false},  // 10.0.0.1
+        {APP_IP, 32, true},
+        {0x0A000000u, 8, false},   // 10.0.0.0/8
+        {0xC0A80100u, 24, true},   // 192.168.1.0/24
+        {0xC0A80200u, 24, false},  // 192.168.2.0/24
+        {0xC0A80000u, 16, true},   // 192.168.0.0/16
+        {0xC0A80166u, 31, false},  // 192.168.1.102/31: .102 and .103
+        {0xC0A80165u, 31, true},   // .101 with host bit cleared: .100 and .101
+        {0, 0, true},              // any sender
+    };
+    uint32_t filtered = 0;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        set_filter(&f, cases[i].net, cases[i].prefix);
+        f.reply_len = 0;
+        feed(&f, pkt, make_ping(pkt, KEY, ctr++, 0, 0), T0);
+        if (cases[i].pass) {
+            CHECK(f.reply_len > 0);
+        } else {
+            CHECK_EQ_U(f.reply_len, 0);
+            filtered++;
+        }
+        CHECK_EQ_U(f.b.stats.rx_filtered, filtered);
+    }
 }
 
 TEST(malformed_and_plaintext_rejected) {

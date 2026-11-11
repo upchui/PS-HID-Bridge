@@ -100,7 +100,7 @@ PING does not need a session id; the app learns the session from the answer.
 For every received packet the board checks, in this order:
 
 1. Length at least header + tag, version `0x01`, type INPUT, HEARTBEAT or PING, length matches the type. Otherwise `rx_malformed`.
-2. Sender IP allowed (if a filter is configured). Otherwise `rx_filtered`.
+2. Sender IP inside the allowed address or subnet (if a sender filter is configured, e.g. `192.168.1.20` or `192.168.1.0/24`). Otherwise `rx_filtered`.
 3. `counter > last valid counter`. Otherwise `rx_replay`. This check is cheap and therefore comes before the cryptography.
 4. Verify the tag and decrypt. Otherwise `rx_auth_fail`.
 5. Only now: `last valid counter = counter`. A forged packet can therefore not push the counter up.
@@ -125,7 +125,7 @@ The board creates a new **session id** from the TRNG on every boot. After a rest
 
 ## Unencrypted debug mode (version 0)
 
-Only the debug image `ps5-hid-bridge-plain.uf2` and the simulator with `--plaintext` accept packets with version `0x00`. They have the same header and payloads, but no encryption and no tag. Counter, session and sender filter are not checked in this mode. Answers are also sent as version 0. Status bit 7 shows this mode.
+Only the debug image `ps5-hid-bridge-plain.uf2` and the simulator with `--plaintext` accept packets with version `0x00`. They have the same header and payloads, but no encryption and no tag. Counter and session are not checked in this mode (the sender filter is). Answers are also sent as version 0. Status bit 7 shows this mode.
 
 ## Test vectors
 

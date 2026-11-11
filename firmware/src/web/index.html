@@ -118,9 +118,9 @@
       </div>
       <div class="card">
         <h2>Sender filter</h2>
-        <p>Only accept packets from this IP address. Leave empty to accept any address.</p>
+        <p>Only accept packets from this IP address or subnet (e.g. <code>192.168.1.0/24</code> for 192.168.1.0 – 192.168.1.255). Leave empty to accept any address.</p>
         <form id="f-allowed">
-          <label>Allowed sender IP <input name="ip" inputmode="decimal" placeholder="e.g. 192.168.1.20"></label>
+          <label>Allowed sender (IP or subnet) <input name="ip" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="e.g. 192.168.1.20 or 192.168.1.0/24"></label>
           <button type="submit">Save</button>
         </form>
       </div>

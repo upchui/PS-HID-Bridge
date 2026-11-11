@@ -285,7 +285,10 @@ function init() {
   onSubmit("f-allowed", async (f) => {
     await api("/api/allowed-sender", { ip: f.ip.value.trim() });
     message(f.ip.value.trim() ? "Sender filter saved." : "Sender filter off: any sender allowed.", true);
-    refreshStatus(false);
+    // Show the stored form, e.g. "192.168.1.20/24" is saved as "192.168.1.0/24".
+    const st = await api("/api/status");
+    renderStatus(st);
+    f.ip.value = st.allowed_sender;
   });
 
   onSubmit("f-ota", async (f) => {

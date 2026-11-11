@@ -23,6 +23,24 @@ bool settings_valid(const pshb_settings_t *s) {
            s->size == sizeof(*s) && s->crc == settings_crc(s) && s->udp_port != 0;
 }
 
+uint32_t settings_prefix_mask(unsigned prefix) {
+    if (prefix == 0) return 0;
+    if (prefix >= 32) return 0xFFFFFFFFu;
+    return 0xFFFFFFFFu << (32 - prefix);
+}
+
+void settings_sender_filter(const pshb_settings_t *s, uint32_t *net, uint32_t *mask) {
+    uint32_t ip = ((uint32_t)s->allowed_ip[0] << 24) | ((uint32_t)s->allowed_ip[1] << 16) |
+                  ((uint32_t)s->allowed_ip[2] << 8) | s->allowed_ip[3];
+    if (ip == 0 || s->allowed_host_bits >= 32) {
+        *net = 0;
+        *mask = 0;
+        return;
+    }
+    *mask = settings_prefix_mask(32u - s->allowed_host_bits);
+    *net = ip & *mask;
+}
+
 // Newer in sequence-number order (wrap-safe).
 static bool newer(uint32_t a, uint32_t b) {
     return (int32_t)(a - b) > 0;

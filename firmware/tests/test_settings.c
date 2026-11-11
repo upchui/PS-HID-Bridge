@@ -1,5 +1,6 @@
 // Settings storage: A/B slots, CRC, interrupted writes.
 #include <stddef.h>
+#include <string.h>
 
 #include "crc32.h"
 #include "mini_test.h"
@@ -140,6 +141,48 @@ TEST(erase_resets) {
     CHECK_EQ_U(l.psk_set, 0);
 }
 
+static void filter_of(const char ip[4], uint8_t host_bits, uint32_t *net, uint32_t *mask) {
+    pshb_settings_t s;
+    settings_defaults(&s);
+    memcpy(s.allowed_ip, ip, 4);
+    s.allowed_host_bits = host_bits;
+    settings_sender_filter(&s, net, mask);
+}
+
+TEST(sender_filter_from_settings) {
+    uint32_t net, mask;
+    // Settings stored before the subnet field existed have 0 there: one address.
+    filter_of("\xC0\xA8\x01\x14", 0, &net, &mask);
+    CHECK_EQ_U(net, 0xC0A80114u);
+    CHECK_EQ_U(mask, 0xFFFFFFFFu);
+    // 192.168.1.20 with 8 host bits = 192.168.1.0/24
+    filter_of("\xC0\xA8\x01\x14", 8, &net, &mask);
+    CHECK_EQ_U(net, 0xC0A80100u);
+    CHECK_EQ_U(mask, 0xFFFFFF00u);
+    // 0.0.0.0 = any sender, whatever the prefix
+    filter_of("\0\0\0\0", 0, &net, &mask);
+    CHECK_EQ_U(mask, 0);
+    CHECK_EQ_U(net, 0);
+    filter_of("\x0A\0\0\0", 32, &net, &mask);
+    CHECK_EQ_U(mask, 0);
+    CHECK_EQ_U(settings_prefix_mask(0), 0);
+    CHECK_EQ_U(settings_prefix_mask(1), 0x80000000u);
+    CHECK_EQ_U(settings_prefix_mask(24), 0xFFFFFF00u);
+    CHECK_EQ_U(settings_prefix_mask(32), 0xFFFFFFFFu);
+}
+
+TEST(subnet_survives_save_and_load) {
+    blank();
+    pshb_settings_t s;
+    settings_defaults(&s);
+    memcpy(s.allowed_ip, "\x0A\x01\0\0", 4);
+    s.allowed_host_bits = 16;
+    CHECK(settings_save(&F, &s));
+    pshb_settings_t l;
+    CHECK(settings_load(&F, &l));
+    CHECK_EQ_U(l.allowed_host_bits, 16);
+}
+
 int main(void) {
     RUN(empty_flash_gives_defaults);
     RUN(save_and_load_alternate_slots);
@@ -147,5 +190,7 @@ int main(void) {
     RUN(corrupted_copy_is_ignored);
     RUN(sequence_wraps);
     RUN(erase_resets);
+    RUN(sender_filter_from_settings);
+    RUN(subnet_survives_save_and_load);
     return TEST_SUMMARY();
 }

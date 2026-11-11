@@ -26,12 +26,17 @@ typedef struct {
     uint8_t psk_set;
     uint16_t udp_port;
     uint8_t psk[32];
-    uint8_t allowed_ip[4];     // 0.0.0.0 = any sender
+    uint8_t allowed_ip[4];     // sender filter address or network; 0.0.0.0 = any sender
     uint8_t pw_set;            // 0 = factory default password, must be changed
     uint8_t pw_salt[16];
     uint8_t pw_hash[32];
+    // Sender filter subnet as 32 - prefix length: 0 = the single address
+    // allowed_ip (/32), 8 = allowed_ip/24, ... Taken from the formerly
+    // reserved (zero) bytes, so settings stored before it existed keep
+    // meaning "exactly this address".
+    uint8_t allowed_host_bits;
 
-    uint8_t reserved[PSHB_SETTINGS_SIZE - 4 - 2 - 2 - 4 - 1 - 16 - 1 - 2 - 32 - 4 - 1 - 16 - 32 - 4];
+    uint8_t reserved[PSHB_SETTINGS_SIZE - 4 - 2 - 2 - 4 - 1 - 16 - 1 - 2 - 32 - 4 - 1 - 16 - 32 - 1 - 4];
     uint32_t crc;              // CRC-32 of all bytes before this field
 } pshb_settings_t;
 
@@ -58,5 +63,12 @@ bool settings_save(const pshb_flash_t *f, pshb_settings_t *s);
 bool settings_erase(const pshb_flash_t *f);
 
 bool settings_valid(const pshb_settings_t *s);
+
+// Sender filter as network and mask (a.b.c.d as 0xaabbccdd): a sender is
+// allowed if ((ip ^ net) & mask) == 0. Mask 0 = any sender.
+void settings_sender_filter(const pshb_settings_t *s, uint32_t *net, uint32_t *mask);
+
+// Mask for a prefix length 0..32 (0 -> 0, 24 -> 0xffffff00, 32 -> 0xffffffff).
+uint32_t settings_prefix_mask(unsigned prefix);
 
 #endif

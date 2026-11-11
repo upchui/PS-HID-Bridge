@@ -362,6 +362,18 @@ class FilterTests(unittest.TestCase):
         finally:
             sim.close()
 
+    def test_allowed_subnet_option(self):
+        sim = Sim("--plaintext", "--allow", "127.0.0.0/8")
+        try:
+            self.assertIsNotNone(sim.ping())
+        finally:
+            sim.close()
+        sim = Sim("--plaintext", "--allow", "10.0.0.0/8")
+        try:
+            self.assertIsNone(sim.ping())
+        finally:
+            sim.close()
+
     def test_plaintext_rejected_by_default(self):
         sim = Sim()
         try:
@@ -529,6 +541,26 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "127.0.0.1"})[0], 200)
         self.assertIsNotNone(self.sim.ping())
         self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "999.1.1.1"})[0], 400)
+        self.assertEqual(self.web.req("GET", "/api/status")[1]["allowed_sender"], "127.0.0.1")
+
+    def test_allowed_subnet(self):
+        self.setup_password()
+        self.web.req("POST", "/api/psk", {"psk": KEY.hex()})
+        self.sim.key = KEY
+        for bad in ("10.0.0.0/33", "10.0.0.0/", "10.0.0.0/8x", "10.0.0.0/-1", "10.0.0.0/8/8", "0.0.0.0/8"):
+            self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": bad})[0], 400, bad)
+        self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "10.0.0.0/8"})[0], 200)
+        self.assertIsNone(self.sim.ping())
+        # Host bits are cleared: 127.0.0.9/8 is stored as 127.0.0.0/8.
+        self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "127.0.0.9/8"})[0], 200)
+        self.assertEqual(self.web.req("GET", "/api/status")[1]["allowed_sender"], "127.0.0.0/8")
+        self.assertIsNotNone(self.sim.ping())
+        # /32 is a single address, /0 means any sender.
+        self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "127.0.0.1/32"})[0], 200)
+        self.assertEqual(self.web.req("GET", "/api/status")[1]["allowed_sender"], "127.0.0.1")
+        self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "10.1.2.3/0"})[0], 200)
+        self.assertEqual(self.web.req("GET", "/api/status")[1]["allowed_sender"], "")
+        self.assertIsNotNone(self.sim.ping())
 
     def test_network_settings_validation_and_reboot(self):
         self.setup_password()
