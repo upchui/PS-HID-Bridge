@@ -104,7 +104,7 @@ class Pong:
     @property
     def fw_version_str(self) -> str:
         v = self.fw_version
-        return f"{(v >> 16) & 0xFF}.{(v >> 8) & 0xFF}.{v & 0xFF}"
+        return f"{(v >> 24) & 0xFF}.{(v >> 16) & 0xFF}.{v & 0xFFFF}"  # 0xMMmmpppp
 
 
 def header(version: int, ptype: int, counter: int) -> bytes:

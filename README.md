@@ -26,7 +26,7 @@ All parts are implemented and tested automatically: unit tests, shared protocol 
 
 ## Download
 
-Every commit on `main` is built and tested automatically and published as a pre-release on the [releases page](https://github.com/upchui/PS-HID-Bridge/releases), named `v<version>-build.<number>`. Each release contains the AppImage, the command line tool (`pshb-cli-x86_64-linux`), all firmware images and `SHA256SUMS`. The build number is the same one the firmware reports as its version, so a higher number is always newer.
+Every commit on `main` is built and tested automatically and published as a pre-release on the [releases page](https://github.com/upchui/PS-HID-Bridge/releases), named after its version, e.g. `v0.9.16`. Each release contains the AppImage, the command line tool (`pshb-cli-x86_64-linux`), all firmware images and `SHA256SUMS`. The last part of the version is the number of commits, so every commit has a higher version than the one before; the app, `pshb-cli --version` and the firmware (web interface, "Status" page of the app) all show the same version.
 
 ## Quick start
 
@@ -144,7 +144,7 @@ LED: blinks slowly = no USB host, blinks fast = USB present but no IP yet, stead
 
 ### Firmware update over the network
 
-Web interface → System → upload `ps5-hid-bridge.uf2`. The board writes the new firmware into the second slot (A/B), checks checksum and content and starts it "on trial". Only when it has started by itself and reaches the network chip is it accepted permanently. If it does not start properly, the board returns to the previous version after a restart. Every new firmware carries a higher build number (number of commits); the boot ROM always starts the newer one.
+Web interface → System → upload `ps5-hid-bridge.uf2`. The board writes the new firmware into the second slot (A/B), checks checksum and content and starts it "on trial". Only when it has started by itself and reaches the network chip is it accepted permanently. If it does not start properly, the board returns to the previous version after a restart. Every new firmware carries a higher version (its last part is the number of commits); the boot ROM always starts the newer one.
 
 This needs the partition table from the first installation (`ps5-hid-bridge-pt.uf2`).
 
@@ -219,10 +219,10 @@ For development builds without the web interface a key can be compiled in: `make
 
 GitHub Actions builds on GitHub-hosted runners with the same Makefile:
 
-- [`release.yml`](.github/workflows/release.yml) runs on every push to `main`: `make all` (firmware, CLI, AppImage, every test, AppImage self-test), then it publishes the pre-release `v<version>-build.<commit count>`.
+- [`release.yml`](.github/workflows/release.yml) runs on every push to `main`: `make all` (firmware, CLI, AppImage, every test, AppImage self-test), then it publishes the pre-release `v<major>.<minor>.<commit count>`.
 - The toolchain images are stored in the GitHub Container Registry (`ghcr.io/<owner>/pshb-*`), tagged with a hash of `versions.env` and `docker/` (`make print-toolchain-tag`). Only when that hash changes does [`toolchain.yml`](.github/workflows/toolchain.yml) rebuild them; with Qt this takes a few hours, a normal release run takes about 20 minutes.
 - `make PREBUILT=1 FW_IMAGE=… RUST_IMAGE=… DESKTOP_IMAGE=… APPTEST_IMAGE=… all` is what CI runs: the image targets only check that the pulled images exist.
-- The version in `firmware/CMakeLists.txt`, `desktop/Cargo.toml` and the metainfo file must match (`make check-version`, part of `make test`).
+- The version is `MAJOR.MINOR` from the file [`VERSION`](VERSION) plus the number of commits ([`tools/version.sh`](tools/version.sh), `make print-version`). Firmware, app, CLI and metainfo get it at build time; for a bigger step (e.g. `1.0`) only `VERSION` is edited.
 
 ## Testing without a board
 

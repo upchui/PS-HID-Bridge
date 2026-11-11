@@ -8,13 +8,17 @@ APP_ID=io.github.thealhu.ps5hidbridge
 APPDIR=$ROOT/.cache/build/AppDir
 OUTPUT=$ROOT/out/PS5-HID-Bridge-x86_64.AppImage
 TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/desktop/target}
+# Set by the Makefile: version (tools/version.sh) and commit date.
+: "${PSHB_VERSION:?PSHB_VERSION not set (build with make desktop)}"
+PSHB_DATE=${PSHB_DATE:-$(date -u +%F)}
 
 cd "$ROOT/desktop"
 cargo build --release --locked -p ps5-hid-bridge
 
 rm -rf "$APPDIR"
 mkdir -p "$ROOT/out" "$APPDIR/usr/share/metainfo"
-cp "$ROOT/desktop/packaging/$APP_ID.metainfo.xml" "$APPDIR/usr/share/metainfo/"
+sed -e "s/@VERSION@/$PSHB_VERSION/" -e "s/@DATE@/$PSHB_DATE/" \
+    "$ROOT/desktop/packaging/$APP_ID.metainfo.xml" > "$APPDIR/usr/share/metainfo/$APP_ID.metainfo.xml"
 
 export QMAKE=/opt/qt6/bin/qmake
 export QML_SOURCES_PATHS=$ROOT/desktop/ui/qml

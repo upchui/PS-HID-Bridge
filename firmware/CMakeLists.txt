@@ -12,23 +12,13 @@ set(PICO_PLATFORM rp2350-arm-s)
 
 include(${PICO_SDK_PATH}/pico_sdk_init.cmake)
 
-project(ps5_hid_bridge VERSION 0.9.0 LANGUAGES C CXX ASM)
-set(CMAKE_C_STANDARD 11)
+# Version MAJOR.MINOR.<commit count>; the commit count (PSHB_BUILD) is also
+# the binary version of the OTA images.
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/version.cmake)
 
-# Build number = number of commits; it is the image's binary version, which
-# the bootrom uses to choose between firmware slots A and B (newer wins).
-execute_process(
-    COMMAND git rev-list --count HEAD
-    WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
-    OUTPUT_VARIABLE PSHB_BUILD
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-if(NOT PSHB_BUILD)
-    set(PSHB_BUILD 0)
-endif()
-math(EXPR PSHB_FW_VERSION_HEX "(${PROJECT_VERSION_MAJOR} << 16) | (${PROJECT_VERSION_MINOR} << 8) | ${PROJECT_VERSION_PATCH}" OUTPUT_FORMAT HEXADECIMAL)
-message(STATUS "PS5 HID Bridge firmware ${PROJECT_VERSION}, build ${PSHB_BUILD}")
+project(ps5_hid_bridge VERSION ${PSHB_VERSION} LANGUAGES C CXX ASM)
+set(CMAKE_C_STANDARD 11)
+message(STATUS "PS5 HID Bridge firmware ${PROJECT_VERSION}")
 
 pico_sdk_init()
 
@@ -62,7 +52,6 @@ function(pshb_add_firmware name)
     )
     target_compile_definitions(${name} PRIVATE ${ARG_DEFINES}
         PSHB_FW_VERSION=${PSHB_FW_VERSION_HEX}
-        PSHB_FW_BUILD=${PSHB_BUILD}
     )
     target_compile_options(${name} PRIVATE -Wall -Wextra)
     target_link_libraries(${name} PRIVATE

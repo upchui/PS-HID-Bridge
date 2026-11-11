@@ -25,6 +25,10 @@ import pshb_proto as proto  # noqa: E402
 SIM = None
 CLI = None
 SESSION = 0x1122334455667788
+# The version the simulator must report: MAJOR.MINOR.<commit count>.
+VERSION = subprocess.run(
+    ["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)), "version.sh")],
+    check=True, capture_output=True, text=True).stdout.strip()
 
 REPORT_RE = {
     "KBD": re.compile(r"KBD mods=(?P<mods>[0-9a-f]{2}) keys=(?P<keys>(?:[0-9a-f]{2} ){5}[0-9a-f]{2})"),
@@ -167,6 +171,7 @@ class PlaintextTests(unittest.TestCase):
         self.assertTrue(pong.status & proto.STATUS_USB_MOUNTED)
         self.assertTrue(pong.status & proto.STATUS_PLAINTEXT)
         self.assertEqual(pong.rx_ok, 1)
+        self.assertEqual(pong.fw_version_str, VERSION)
 
     def test_keyboard_state(self):
         self.sim.send_input(mods=0x02, keys=[0x04, 0x1D])
@@ -507,6 +512,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(st["psk_set"])
         self.assertEqual(st["udp_port"], 45045)
+        self.assertEqual(st["firmware"], VERSION)
         # Latency diagnostics are part of the status (the simulator has no USB timing).
         for k in ("lat_usb_count", "lat_usb_p50_us", "lat_usb_p95_us", "lat_usb_max_us", "lat_poll_offset_us",
                   "lat_rx_p50_us", "lat_rx_max_us", "mouse_waits"):

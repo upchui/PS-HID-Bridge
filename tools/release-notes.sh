@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 
 tag=${1:?usage: tools/release-notes.sh TAG}
 repo=${GITHUB_REPOSITORY:-upchui/PS-HID-Bridge}
-prev=$(git describe --tags --abbrev=0 --match 'v*-build.*' HEAD~1 2>/dev/null || true)
+prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD~1 2>/dev/null || true)
 
 echo "Automatic build of commit $(git rev-parse --short HEAD) on \`main\`."
 echo "Pre-releases are built from every commit and have only been tested automatically."

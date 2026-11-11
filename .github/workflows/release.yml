@@ -1,5 +1,6 @@
 # Every commit on main: build firmware, CLI and AppImage, run every test and
-# publish the result as a GitHub pre-release "v<version>-build.<commit count>".
+# publish the result as a GitHub pre-release "v<major.minor>.<commit count>"
+# (tools/version.sh), so every release has a higher version.
 
 name: Release
 
@@ -73,7 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # build number = commit count; release notes need the tags
+          fetch-depth: 0 # version = commit count; release notes need the tags
 
       - name: Free disk space
         run: |

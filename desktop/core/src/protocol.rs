@@ -212,10 +212,10 @@ impl Pong {
         }
     }
 
-    /// "major.minor.patch"
+    /// "major.minor.patch" from 0xMMmmpppp (patch = commit count).
     pub fn fw_version_string(&self) -> String {
         let v = self.fw_version;
-        format!("{}.{}.{}", (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF)
+        format!("{}.{}.{}", v >> 24, (v >> 16) & 0xFF, v & 0xFFFF)
     }
 
     /// A PONG with seq = t_app_us = 0 is the board's answer to an input
@@ -260,7 +260,7 @@ mod tests {
             t_app_us: 1,
             seq: 2,
             session_id: 3,
-            fw_version: 0x000102,
+            fw_version: 0x0109_0123,
             uptime_ms: 5,
             status: STATUS_USB_MOUNTED,
             rx_ok: 7,
@@ -270,6 +270,6 @@ mod tests {
             rx_malformed: 11,
         };
         assert_eq!(Pong::decode(&p.encode()), p);
-        assert_eq!(p.fw_version_string(), "0.1.2");
+        assert_eq!(p.fw_version_string(), "1.9.291");
     }
 }

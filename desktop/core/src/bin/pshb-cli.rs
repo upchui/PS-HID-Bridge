@@ -22,7 +22,7 @@ use pshb_core::transport::{KeyState, Link, LinkConfig};
 use pshb_core::trigger::{Action, Trigger};
 
 #[derive(Parser)]
-#[command(name = "pshb-cli", version, about = "PS5 HID Bridge – command line")]
+#[command(name = "pshb-cli", version = pshb_core::VERSION, about = "PS5 HID Bridge – command line")]
 struct Cli {
     /// Settings file (default: ~/.config/ps5-hid-bridge/config.toml)
     #[arg(long, global = true)]

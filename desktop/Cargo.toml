@@ -6,7 +6,9 @@ members = ["core", "ui"]
 default-members = ["core"]
 
 [workspace.package]
-version = "0.9.0"
+# Not the release version: that is MAJOR.MINOR from the file VERSION plus the
+# commit count (tools/version.sh), passed in as PSHB_VERSION by the Makefile.
+version = "0.0.0"
 edition = "2024"
 rust-version = "1.99"
 publish = false

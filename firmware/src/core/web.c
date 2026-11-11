@@ -302,8 +302,8 @@ static void h_status(web_app_t *app, web_conn_t *c) {
     sender_filter_str(s, allowed);
     snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", st.mac[0], st.mac[1], st.mac[2], st.mac[3],
              st.mac[4], st.mac[5]);
-    snprintf(fw, sizeof(fw), "%u.%u.%u", (unsigned)(st.fw_version >> 16) & 0xFF,
-             (unsigned)(st.fw_version >> 8) & 0xFF, (unsigned)st.fw_version & 0xFF);
+    snprintf(fw, sizeof(fw), "%u.%u.%u", (unsigned)(st.fw_version >> 24) & 0xFF,
+             (unsigned)(st.fw_version >> 16) & 0xFF, (unsigned)st.fw_version & 0xFFFF);
 
     json_writer_t w;
     jw_begin(&w, c->dyn, sizeof(c->dyn));

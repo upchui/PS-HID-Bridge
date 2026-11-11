@@ -43,8 +43,14 @@ endif
 FW_BUILD   := .cache/build/firmware
 HOST_BUILD := .cache/build/host
 
+# Version MAJOR.MINOR.<commit count> (tools/version.sh) and the commit date,
+# passed to every build container (desktop version, AppStream metainfo).
+PSHB_VERSION := $(shell tools/version.sh)
+PSHB_DATE    := $(shell git log -1 --format=%cs 2>/dev/null)
+
 DOCKER_RUN = docker run --rm $(TTY) -u $(UID):$(GID) -v $(CURDIR):/work -w /work \
-             -e HOME=/work/.cache/home -e JOBS=$(JOBS) $(DOCKER_EXTRA)
+             -e HOME=/work/.cache/home -e JOBS=$(JOBS) \
+             -e PSHB_VERSION=$(PSHB_VERSION) -e PSHB_DATE=$(PSHB_DATE) $(DOCKER_EXTRA)
 RUST_RUN    = $(DOCKER_RUN) -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR=/work/.cache/target/rust $(RUST_IMAGE)
 DESKTOP_RUN = $(DOCKER_RUN) -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR=/work/.cache/target/desktop \
               -e APPIMAGE_EXTRACT_AND_RUN=1 $(DESKTOP_IMAGE)
@@ -52,7 +58,8 @@ FW_RUN      = $(DOCKER_RUN) $(FW_IMAGE)
 
 .PHONY: help all firmware desktop desktop-cli test test-firmware test-desktop test-appimage \
         test-sim test-protocol test-uf2 sim udp-test fmt submodules check-pins check-version images \
-        image-firmware image-rust image-desktop image-apptest print-release-tag print-toolchain-tag \
+        image-firmware image-rust image-desktop image-apptest print-version print-release-tag \
+        print-toolchain-tag \
         shell-fw shell-desktop clean distclean dirs
 
 help:
@@ -104,14 +111,16 @@ submodules:
 check-pins:
 	@tools/check-pins.sh
 
-# Firmware, desktop app and metainfo carry the same version.
+# The file VERSION holds MAJOR.MINOR; the last part is the commit count.
 check-version:
 	@tools/version.sh >/dev/null
 
-# Release tag: version plus build number (= commit count, the same number the
-# firmware carries as its binary version).
+print-version:
+	@tools/version.sh
+
+# Release tag, e.g. v0.9.16: every commit on main gets a higher one.
 print-release-tag:
-	@echo "v$$(tools/version.sh)-build.$$(git rev-list --count HEAD)"
+	@echo "v$$(tools/version.sh)"
 
 # ---------------------------------------------------------------- firmware
 firmware: image-firmware check-pins dirs

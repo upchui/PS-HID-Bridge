@@ -21,8 +21,13 @@ pub mod service;
 pub mod transport;
 pub mod trigger;
 
-/// Version of the desktop software (shared by the CLI and the GUI).
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Version of the desktop software (shared by the CLI and the GUI):
+/// MAJOR.MINOR.<commit count>, passed in by the Makefile as PSHB_VERSION
+/// (tools/version.sh). A plain `cargo build` marks itself as a dev build.
+pub const VERSION: &str = match option_env!("PSHB_VERSION") {
+    Some(v) if !v.is_empty() => v,
+    _ => concat!(env!("CARGO_PKG_VERSION"), "-dev"),
+};
 
 #[cfg(test)]
 mod tests {

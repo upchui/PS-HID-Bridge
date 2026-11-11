@@ -14,6 +14,10 @@ endif()
 
 add_compile_options(-Wall -Wextra -Werror)
 
+# The simulator reports the same version as the board images.
+include(${CMAKE_CURRENT_LIST_DIR}/../cmake/version.cmake)
+add_compile_definitions(PSHB_FW_VERSION=${PSHB_FW_VERSION_HEX})
+
 include(${CMAKE_CURRENT_LIST_DIR}/../cmake/core_sources.cmake)
 
 # Core library variants: default (16-bit mouse) and the 8-bit fallback.

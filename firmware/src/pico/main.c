@@ -203,8 +203,8 @@ int main(void) {
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-    printf("ps5-hid-bridge %d.%d.%d build %d: boot%s%s\n", (PSHB_FW_VERSION >> 16) & 0xFF,
-           (PSHB_FW_VERSION >> 8) & 0xFF, PSHB_FW_VERSION & 0xFF, PSHB_FW_BUILD,
+    printf("ps5-hid-bridge %d.%d.%d: boot%s%s\n", (PSHB_FW_VERSION >> 24) & 0xFF,
+           (PSHB_FW_VERSION >> 16) & 0xFF, PSHB_FW_VERSION & 0xFFFF,
            PSHB_TEST_PATTERN ? " (test pattern)" : "",
            PSHB_PLAINTEXT_DEBUG ? " (PLAINTEXT DEBUG)" : "");
 

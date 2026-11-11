@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-hid-bridge"
-version = "0.9.0"
+version = "0.0.0"
 dependencies = [
  "cxx",
  "cxx-qt",
@@ -1060,7 +1060,7 @@ dependencies = [
 
 [[package]]
 name = "pshb-core"
-version = "0.9.0"
+version = "0.0.0"
 dependencies = [
  "chacha20poly1305",
  "clap",
