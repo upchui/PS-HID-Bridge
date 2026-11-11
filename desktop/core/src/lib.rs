@@ -5,6 +5,7 @@
 //! over UDP to the W5500-EVB-Pico2 board (see `protocol/SPEC.md`).
 
 pub mod access;
+pub mod clock;
 pub mod config;
 pub mod controller;
 pub mod counter;
@@ -14,6 +15,7 @@ pub mod input;
 pub mod keymap;
 pub mod mouse;
 pub mod protocol;
+pub mod rt;
 pub mod script;
 pub mod service;
 pub mod transport;

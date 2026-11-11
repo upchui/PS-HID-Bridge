@@ -103,6 +103,17 @@ Kirigami.ScrollablePage {
                       : "–"
             }
             Controls.Label {
+                Kirigami.FormData.label: "Input → network:"
+                text: (AppController.inputP50 >= 0
+                       ? AppController.inputP50.toFixed(2) + " ms median, 95 % below " + AppController.inputP95.toFixed(2)
+                         + " ms, max " + AppController.inputMax.toFixed(2) + " ms"
+                       : "– (measured while the bridge is on)")
+                      + (AppController.connected && !AppController.realtime
+                         ? " · normal priority (real-time not available, see README)" : "")
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+            Controls.Label {
                 Kirigami.FormData.label: "Packets:"
                 text: AppController.packetsPerSecond + " per second"
             }

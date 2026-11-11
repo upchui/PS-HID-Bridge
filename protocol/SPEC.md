@@ -118,7 +118,7 @@ The board creates a new **session id** from the TRNG on every boot. After a rest
 ## Behaviour of the app
 
 1. Send PING until a PONG arrives; take the `session_id` from it.
-2. Send an INPUT on every change, at most one per millisecond. Motion within that millisecond is summed up; whatever does not fit into i16 goes into the next packet.
+2. Send an INPUT on every change, on average at most one per millisecond (two in a row are allowed, so a 1000 Hz mouse whose reports jitter a little is never held back). Motion that has to wait is summed up; whatever does not fit into i16 goes into the next packet.
 3. While the bridge is active: HEARTBEAT if nothing was sent for 50 ms.
 4. PING every second (more often for the latency view). If the `session_id` in a PONG changes, use the new one from now on and send the full state again.
 5. When deactivating: INPUT with `RELEASE_ALL`.

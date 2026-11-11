@@ -1,5 +1,5 @@
 //! Glue between the engine (decisions), the link (board) and the input
-//! readers (grab). Shared by the CLI and the GUI.
+//! devices (grab). Shared by the CLI and the GUI.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -7,23 +7,23 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::engine::{Effect, Engine, Event, Notice};
+use crate::input::GrabGuard;
 use crate::transport::{KeyState, Link};
 use crate::trigger::Action;
 
 pub struct Controller {
     pub engine: Engine,
     link: Arc<Link>,
-    grab: Option<Arc<AtomicBool>>,
+    grab_request: Option<bool>,
     last_state: Option<KeyState>,
 }
 
 impl Controller {
-    /// `grab`: the readers' grab flag (None when replaying a script).
-    pub fn new(engine: Engine, link: Arc<Link>, grab: Option<Arc<AtomicBool>>) -> Self {
+    pub fn new(engine: Engine, link: Arc<Link>) -> Self {
         Self {
             engine,
             link,
-            grab,
+            grab_request: None,
             last_state: None,
         }
     }
@@ -41,31 +41,34 @@ impl Controller {
         &self.link
     }
 
-    pub fn handle(&mut self, ev: Event, now: Instant) -> Vec<Notice> {
+    /// The devices should be grabbed (true) or released: the owner of the
+    /// devices applies this after every call to `handle`/`command`.
+    pub fn take_grab_request(&mut self) -> Option<bool> {
+        self.grab_request.take()
+    }
+
+    /// `ts_us`: kernel timestamp of the event (for the latency statistics).
+    pub fn handle(&mut self, ev: Event, now: Instant, ts_us: Option<u64>) -> Vec<Notice> {
         let fx = self.engine.handle(ev, now);
-        self.apply(fx)
+        self.apply(fx, ts_us)
     }
 
     pub fn command(&mut self, action: Action) -> Vec<Notice> {
         let fx = self.engine.command(action);
-        self.apply(fx)
+        self.apply(fx, None)
     }
 
-    fn apply(&mut self, fx: Vec<Effect>) -> Vec<Notice> {
+    fn apply(&mut self, fx: Vec<Effect>, ts_us: Option<u64>) -> Vec<Notice> {
         let mut notices = Vec::new();
         for e in fx {
             match e {
-                Effect::Grab(on) => {
-                    if let Some(g) = &self.grab {
-                        g.store(on, Ordering::Release);
-                    }
-                }
+                Effect::Grab(on) => self.grab_request = Some(on),
                 Effect::SetActive(a) => self.link.set_active(a),
                 Effect::State(s) => {
                     self.last_state = Some(s);
-                    self.link.set_state(s);
+                    self.link.set_state(s, ts_us);
                 }
-                Effect::Motion(dx, dy, w, p) => self.link.add_motion(dx, dy, w, p),
+                Effect::Motion(dx, dy, w, p) => self.link.add_motion(dx, dy, w, p, ts_us),
                 Effect::ReleaseAll => self.link.release_all(),
                 Effect::Notice(n) => notices.push(n),
             }
@@ -73,13 +76,12 @@ impl Controller {
         notices
     }
 
-    /// Leave a clean state: everything released, devices free.
+    /// Leave a clean state: everything released, devices free (the caller
+    /// releases the grab, see [`take_grab_request`](Self::take_grab_request)).
     pub fn shutdown(&mut self) {
         self.command(Action::Off);
         self.link.set_active(false);
-        if let Some(g) = &self.grab {
-            g.store(false, Ordering::Release);
-        }
+        self.grab_request = Some(false);
     }
 }
 
@@ -94,7 +96,7 @@ pub struct Watchdog {
 }
 
 impl Watchdog {
-    pub fn start(link: Arc<Link>, grab: Arc<AtomicBool>, timeout: Duration) -> Self {
+    pub fn start(link: Arc<Link>, grab: GrabGuard, timeout: Duration) -> Self {
         let alive_ms = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let fired = Arc::new(AtomicBool::new(false));
@@ -108,10 +110,8 @@ impl Watchdog {
                         thread::sleep(Duration::from_millis(100));
                         let now = epoch.elapsed().as_millis() as u64;
                         let last = alive_ms.load(Ordering::Acquire);
-                        if now.saturating_sub(last) > timeout.as_millis() as u64
-                            && grab.load(Ordering::Acquire)
-                        {
-                            grab.store(false, Ordering::Release);
+                        if now.saturating_sub(last) > timeout.as_millis() as u64 && grab.is_grabbed() {
+                            grab.release();
                             link.set_active(false);
                             fired.store(true, Ordering::Release);
                         }

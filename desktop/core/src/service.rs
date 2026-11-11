@@ -9,18 +9,19 @@ use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::controller::{Controller, Watchdog};
 use crate::engine::{Engine, Event, Notice};
-use crate::input::{self, DeviceInfo, InputMsg, Readers};
+use crate::input::{self, DeviceInfo, GrabGuard, InputMsg, InputSet, Waker};
 use crate::keymap;
 use crate::mouse::MouseCurve;
 use crate::protocol::{KEY_LEN, Pong};
-use crate::transport::{KeyState, Link, LinkConfig};
+use crate::rt;
+use crate::transport::{KeyState, LatencyStats, Link, LinkConfig};
 use crate::trigger::{Action, Combo, KeyAlt};
 
 const RESCAN: Duration = Duration::from_secs(2);
@@ -54,6 +55,10 @@ pub struct ServiceStatus {
     pub pending: bool,
     pub paused: bool,
     pub packets_per_second: u32,
+    /// Input event -> packet sent, over the most recent packets.
+    pub input_latency: Option<LatencyStats>,
+    /// The input path runs with real-time priority.
+    pub realtime: bool,
     /// Selected devices that are open / that exist but cannot be opened.
     pub devices_open: usize,
     pub devices_blocked: usize,
@@ -83,6 +88,7 @@ pub type Sink = Box<dyn Fn(ServiceEvent) + Send>;
 
 pub struct Service {
     tx: Sender<ServiceCmd>,
+    waker: Arc<Waker>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -91,31 +97,32 @@ impl Service {
         let engine_cfg = cfg.config.engine_config()?;
         let mut link_cfg = LinkConfig::new(cfg.board, cfg.key);
         link_cfg.counter_store = cfg.counter_store;
+        link_cfg.realtime = true;
         let link = Arc::new(Link::start(link_cfg).map_err(|e| format!("UDP: {e}"))?);
+        let waker = Arc::new(Waker::new().map_err(|e| e.to_string())?);
         let (tx, rx) = mpsc::channel();
         let devices = cfg.config.devices.clone();
+        let w = waker.clone();
         let thread = thread::Builder::new()
             .name("pshb-service".into())
-            .spawn(move || Runner::new(Engine::new(engine_cfg), link, devices, sink).run(rx))
+            .spawn(move || Runner::new(Engine::new(engine_cfg), link, devices, sink, w).run(rx))
             .map_err(|e| e.to_string())?;
         Ok(Self {
             tx,
+            waker,
             thread: Some(thread),
         })
     }
 
     pub fn send(&self, cmd: ServiceCmd) {
         let _ = self.tx.send(cmd);
-    }
-
-    pub fn sender(&self) -> Sender<ServiceCmd> {
-        self.tx.clone()
+        self.waker.wake();
     }
 }
 
 impl Drop for Service {
     fn drop(&mut self) {
-        let _ = self.tx.send(ServiceCmd::Shutdown);
+        self.send(ServiceCmd::Shutdown);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -173,43 +180,44 @@ struct Runner {
     link: Arc<Link>,
     specs: Vec<String>,
     sink: Sink,
-    readers: Option<Readers>,
+    waker: Arc<Waker>,
+    guard: GrabGuard,
+    inputs: Option<InputSet>,
+    /// Grab state the engine asked for (re-applied after a rescan).
+    want_grab: bool,
+    realtime: bool,
     open: Vec<DeviceInfo>,
     blocked: usize,
-    input_tx: Sender<InputMsg>,
-    input_rx: Receiver<InputMsg>,
-    grab: Arc<std::sync::atomic::AtomicBool>,
     recording: Option<BTreeSet<u16>>,
     record_pressed: BTreeSet<u16>,
     identify: bool,
     last_identify: Option<Instant>,
     last_status: ServiceStatus,
-    last_live: String,
+    last_live: Option<KeyState>,
     last_sent: u64,
     last_sent_at: Instant,
 }
 
 impl Runner {
-    fn new(engine: Engine, link: Arc<Link>, specs: Vec<String>, sink: Sink) -> Self {
-        let (input_tx, input_rx) = mpsc::channel();
-        let grab = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    fn new(engine: Engine, link: Arc<Link>, specs: Vec<String>, sink: Sink, waker: Arc<Waker>) -> Self {
         Self {
-            ctl: Controller::new(engine, link.clone(), Some(grab.clone())),
+            ctl: Controller::new(engine, link.clone()),
             link,
             specs,
             sink,
-            readers: None,
+            waker,
+            guard: GrabGuard::default(),
+            inputs: None,
+            want_grab: false,
+            realtime: false,
             open: Vec::new(),
             blocked: 0,
-            input_tx,
-            input_rx,
-            grab,
             recording: None,
             record_pressed: BTreeSet::new(),
             identify: false,
             last_identify: None,
             last_status: ServiceStatus::default(),
-            last_live: String::new(),
+            last_live: None,
             last_sent: 0,
             last_sent_at: Instant::now(),
         }
@@ -217,6 +225,40 @@ impl Runner {
 
     fn emit(&self, e: ServiceEvent) {
         (self.sink)(e);
+    }
+
+    fn notices(&self, notices: Vec<Notice>) {
+        for n in notices {
+            self.emit(ServiceEvent::Notice(n));
+        }
+    }
+
+    /// Apply what the engine asked for: grab or release the devices. A
+    /// device that cannot be grabbed switches the bridge off again.
+    fn apply_grab(&mut self) {
+        while let Some(on) = self.ctl.take_grab_request() {
+            self.want_grab = on;
+            let failed = match &mut self.inputs {
+                Some(i) => i.set_grab(on),
+                None => Vec::new(),
+            };
+            for f in failed {
+                if let InputMsg::GrabFailed { path, error } = f {
+                    self.emit(ServiceEvent::Error(format!(
+                        "{} cannot be grabbed exclusively: {error}",
+                        path.display()
+                    )));
+                }
+                let n = self.ctl.command(Action::Off);
+                self.notices(n);
+            }
+        }
+    }
+
+    fn command(&mut self, action: Action) {
+        let n = self.ctl.command(action);
+        self.notices(n);
+        self.apply_grab();
     }
 
     /// (Re)open the selected devices if the set of available ones changed.
@@ -232,22 +274,36 @@ impl Runner {
         let wanted: Vec<DeviceInfo> = selected.iter().filter(|d| d.accessible).cloned().collect();
         self.blocked = selected.len() - wanted.len();
         let paths = |v: &[DeviceInfo]| v.iter().map(|d| d.path.clone()).collect::<Vec<_>>();
-        if paths(&wanted) == paths(&self.open) && self.readers.is_some() {
+        let complete = self.inputs.as_ref().is_some_and(|i| i.len() == self.open.len());
+        if paths(&wanted) == paths(&self.open) && complete {
             return;
         }
-        // Stop the old readers first (they release their grab).
-        self.readers = None;
-        while self.input_rx.try_recv().is_ok() {}
-        // One grab flag for the whole service: controller, watchdog and every
-        // generation of readers share it.
-        match Readers::start(&wanted, self.input_tx.clone(), self.grab.clone()) {
-            Ok(r) => {
-                self.readers = Some(r);
+        // Close the old set first (it releases its grab).
+        self.inputs = None;
+        match InputSet::open(&wanted, self.waker.clone(), self.guard.clone()) {
+            Ok(mut set) => {
+                // The bridge may be on while a device comes back: grab it too.
+                let failed = if self.want_grab {
+                    set.set_grab(true)
+                } else {
+                    Vec::new()
+                };
+                self.inputs = Some(set);
                 self.open = wanted;
+                for f in &failed {
+                    if let InputMsg::GrabFailed { path, error } = f {
+                        self.emit(ServiceEvent::Error(format!(
+                            "{} cannot be grabbed exclusively: {error}",
+                            path.display()
+                        )));
+                    }
+                }
+                if !failed.is_empty() {
+                    self.command(Action::Off);
+                }
             }
             Err(e) => {
                 self.emit(ServiceEvent::Error(format!("Opening device: {e}")));
-                self.readers = None;
                 self.open.clear();
             }
         }
@@ -276,6 +332,8 @@ impl Runner {
             pending: self.ctl.engine.is_pending(),
             paused: self.ctl.engine.is_paused(),
             packets_per_second: pps,
+            input_latency: self.link.input_latency(),
+            realtime: self.realtime && self.link.timer_is_realtime(),
             devices_open: self.open.len(),
             devices_blocked: self.blocked,
         };
@@ -285,7 +343,7 @@ impl Runner {
         }
     }
 
-    fn handle_input(&mut self, dev: usize, event: Event) {
+    fn handle_input(&mut self, dev: usize, event: Event, ts_us: Option<u64>) {
         if let Some(rec) = &mut self.recording {
             if let Event::Key { code, down } = event {
                 if down {
@@ -306,6 +364,10 @@ impl Runner {
             }
             return;
         }
+        // Forward first; everything below is for the GUI and may wait.
+        let notices = self.ctl.handle(event, Instant::now(), ts_us);
+        self.apply_grab();
+        self.notices(notices);
         if self.identify
             && let Event::Key { down: true, .. } = event
             && self
@@ -316,51 +378,49 @@ impl Runner {
             self.last_identify = Some(Instant::now());
             self.emit(ServiceEvent::Identified(d.path.clone()));
         }
-        for n in self.ctl.handle(event, Instant::now()) {
-            self.emit(ServiceEvent::Notice(n));
-        }
-        if let Some(s) = self.ctl.last_state() {
-            let text = describe_state(&s);
-            if text != self.last_live {
-                self.last_live = text.clone();
-                self.emit(ServiceEvent::Live(text));
+        let live = self.ctl.last_state();
+        if live != self.last_live {
+            self.last_live = live;
+            if let Some(s) = live {
+                self.emit(ServiceEvent::Live(describe_state(&s)));
             }
         }
     }
 
+    fn shutdown(&mut self) {
+        self.ctl.shutdown();
+        self.apply_grab();
+        self.inputs = None;
+    }
+
     fn run(mut self, rx: Receiver<ServiceCmd>) {
+        self.realtime = rt::make_current_thread_realtime(rt::PRIORITY).is_ok();
         self.rescan();
-        let watchdog = Watchdog::start(self.link.clone(), self.grab.clone(), Duration::from_secs(1));
+        let watchdog = Watchdog::start(self.link.clone(), self.guard.clone(), Duration::from_secs(1));
         let mut next_rescan = Instant::now() + RESCAN;
         let mut next_status = Instant::now();
+        let mut msgs = Vec::new();
         loop {
             watchdog.feed();
             // Commands from the GUI
             loop {
                 match rx.try_recv() {
                     Ok(ServiceCmd::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => {
-                        self.ctl.shutdown();
+                        self.shutdown();
                         drop(watchdog);
-                        self.readers = None;
                         thread::sleep(Duration::from_millis(30));
                         return;
                     }
-                    Ok(ServiceCmd::Action(a)) => {
-                        for n in self.ctl.command(a) {
-                            self.emit(ServiceEvent::Notice(n));
-                        }
-                    }
+                    Ok(ServiceCmd::Action(a)) => self.command(a),
                     Ok(ServiceCmd::Focus(f)) => {
-                        for n in self.ctl.handle(Event::Focus(f), Instant::now()) {
-                            self.emit(ServiceEvent::Notice(n));
-                        }
+                        let n = self.ctl.handle(Event::Focus(f), Instant::now(), None);
+                        self.apply_grab();
+                        self.notices(n);
                     }
                     Ok(ServiceCmd::Record(on)) => {
                         if on {
                             // Never record while the PS5 gets the keys.
-                            for n in self.ctl.command(Action::Off) {
-                                self.emit(ServiceEvent::Notice(n));
-                            }
+                            self.command(Action::Off);
                         }
                         self.recording = on.then(BTreeSet::new);
                         self.record_pressed.clear();
@@ -371,27 +431,19 @@ impl Runner {
                     Err(mpsc::TryRecvError::Empty) => break,
                 }
             }
-            // Input
-            match self.input_rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(InputMsg::Event { dev, event }) => {
-                    self.handle_input(dev, event);
-                    while let Ok(m) = self.input_rx.try_recv() {
-                        if let InputMsg::Event { dev, event } = m {
-                            self.handle_input(dev, event);
-                        }
-                    }
+            // Input (or a wake-up for a command), until the next periodic job
+            let now = Instant::now();
+            let timeout = next_rescan.min(next_status).saturating_duration_since(now);
+            match &mut self.inputs {
+                Some(set) => set.wait(timeout, &mut msgs),
+                None => self.waker.wait(timeout),
+            }
+            for m in msgs.drain(..) {
+                match m {
+                    InputMsg::Event { dev, event, ts_us } => self.handle_input(dev, event, ts_us),
+                    InputMsg::Gone { .. } => next_rescan = Instant::now(),
+                    InputMsg::GrabFailed { .. } => {}
                 }
-                Ok(InputMsg::Gone { .. }) => next_rescan = Instant::now(),
-                Ok(InputMsg::GrabFailed { path, error }) => {
-                    self.emit(ServiceEvent::Error(format!(
-                        "{} cannot be grabbed exclusively: {error}",
-                        path.display()
-                    )));
-                    for n in self.ctl.command(Action::Off) {
-                        self.emit(ServiceEvent::Notice(n));
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {}
             }
             let now = Instant::now();
             if now >= next_rescan {
@@ -404,6 +456,8 @@ impl Runner {
             }
             if watchdog.take_fired() {
                 self.emit(ServiceEvent::Error("Watchdog: devices were released.".into()));
+                // Bring the engine in line with what the watchdog did.
+                self.command(Action::Off);
             }
         }
     }
@@ -461,5 +515,95 @@ mod tests {
     fn recorded_combo_text() {
         assert_eq!(normalize_modifiers("LEFTCTRL+Alt+P"), "Ctrl+Alt+P");
         assert!(Combo::parse(&normalize_modifiers("LEFTCTRL+Alt+P")).is_ok());
+    }
+
+    /// Answers pings; counts INPUT packets with RELEASE_ALL and with keys.
+    fn fake_board(key: [u8; KEY_LEN]) -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicBool>) {
+        use crate::crypto::PacketKey;
+        use crate::protocol::{Direction, PacketType, Ping, STATUS_USB_MOUNTED};
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+        let addr = sock.local_addr().unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s2 = stop.clone();
+        thread::spawn(move || {
+            let key = PacketKey::new(&key);
+            let mut buf = [0u8; 256];
+            let mut counter = 1;
+            while !s2.load(std::sync::atomic::Ordering::Acquire) {
+                let Ok((n, from)) = sock.recv_from(&mut buf) else {
+                    continue;
+                };
+                let Ok((h, payload)) = key.open(Direction::AppToBoard, &buf[..n]) else {
+                    continue;
+                };
+                if h.ptype == PacketType::Ping as u8 {
+                    let ping = Ping::decode(&payload);
+                    let pong = Pong {
+                        t_app_us: ping.t_app_us,
+                        seq: ping.seq,
+                        session_id: 77,
+                        status: STATUS_USB_MOUNTED,
+                        ..Default::default()
+                    };
+                    counter += 1;
+                    let pkt = key.seal(Direction::BoardToApp, PacketType::Pong, counter, &pong.encode());
+                    let _ = sock.send_to(&pkt, from);
+                }
+            }
+        });
+        (addr, stop)
+    }
+
+    #[test]
+    fn service_reacts_at_once_and_stops_quickly() {
+        let key = [3u8; KEY_LEN];
+        let (board, stop) = fake_board(key);
+        let (tx, rx) = mpsc::channel();
+        let sink: Sink = Box::new(move |e| {
+            let _ = tx.send(e);
+        });
+        let svc = Service::start(
+            ServiceConfig {
+                config: Config::default(),
+                key,
+                board,
+                counter_store: None,
+            },
+            sink,
+        )
+        .unwrap();
+        let wait_for = |want: &dyn Fn(&ServiceEvent) -> bool, within: Duration| -> bool {
+            let end = Instant::now() + within;
+            while let Some(left) = end.checked_duration_since(Instant::now()) {
+                match rx.recv_timeout(left) {
+                    Ok(e) if want(&e) => return true,
+                    Ok(_) => {}
+                    Err(_) => return false,
+                }
+            }
+            false
+        };
+        assert!(wait_for(
+            &|e| matches!(e, ServiceEvent::Status(s) if s.connected),
+            Duration::from_secs(2)
+        ));
+        // Commands wake the service thread: no waiting for its 250 ms timer.
+        let t = Instant::now();
+        svc.send(ServiceCmd::Action(Action::On));
+        assert!(wait_for(
+            &|e| *e == ServiceEvent::Notice(Notice::Activated),
+            Duration::from_millis(500)
+        ));
+        assert!(t.elapsed() < Duration::from_millis(100), "{:?}", t.elapsed());
+        svc.send(ServiceCmd::Action(Action::Off));
+        assert!(wait_for(
+            &|e| *e == ServiceEvent::Notice(Notice::Deactivated),
+            Duration::from_millis(500)
+        ));
+        let t = Instant::now();
+        drop(svc);
+        assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
+        stop.store(true, std::sync::atomic::Ordering::Release);
     }
 }

@@ -21,6 +21,13 @@ evdev = "0.13"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+# Real-time priority through rtkit (D-Bus) when SCHED_FIFO is not permitted
+# directly (feature "rtkit", on by default).
+zbus = { version = "5", optional = true, default-features = false, features = ["async-io", "blocking-api"] }
+
+[features]
+default = ["rtkit"]
+rtkit = ["dep:zbus"]
 
 [dev-dependencies]
 serde_json = "1"

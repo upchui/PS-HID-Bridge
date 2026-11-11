@@ -40,6 +40,10 @@ pub mod qobject {
         #[qproperty(f64, rtt_p50)]
         #[qproperty(f64, rtt_p95)]
         #[qproperty(QString, rtt_history_json)]
+        #[qproperty(f64, input_p50)]
+        #[qproperty(f64, input_p95)]
+        #[qproperty(f64, input_max)]
+        #[qproperty(bool, realtime)]
         #[qproperty(i32, packets_per_second)]
         #[qproperty(QString, board_firmware)]
         #[qproperty(QString, board_usb)]
@@ -136,6 +140,11 @@ pub struct AppControllerRust {
     rtt_p50: f64,
     rtt_p95: f64,
     rtt_history_json: QString,
+    /// Input event -> packet sent, in ms (-1 = no samples yet).
+    input_p50: f64,
+    input_p95: f64,
+    input_max: f64,
+    realtime: bool,
     packets_per_second: i32,
     board_firmware: QString,
     board_usb: QString,
@@ -178,6 +187,10 @@ impl Default for AppControllerRust {
             rtt_p50: -1.0,
             rtt_p95: -1.0,
             rtt_history_json: QString::from("[]"),
+            input_p50: -1.0,
+            input_p95: -1.0,
+            input_max: -1.0,
+            realtime: false,
             packets_per_second: 0,
             board_firmware: QString::default(),
             board_usb: QString::default(),
@@ -376,6 +389,12 @@ impl qobject::AppController {
         self.as_mut().set_rtt_history_json(QString::from(
             &serde_json::to_string(&rounded).unwrap_or_default(),
         ));
+        let ms = |us: u32| f64::from(us) / 1000.0;
+        let lat = st.input_latency;
+        self.as_mut().set_input_p50(lat.map_or(-1.0, |l| ms(l.p50_us)));
+        self.as_mut().set_input_p95(lat.map_or(-1.0, |l| ms(l.p95_us)));
+        self.as_mut().set_input_max(lat.map_or(-1.0, |l| ms(l.max_us)));
+        self.as_mut().set_realtime(st.realtime);
         self.as_mut().set_packets_per_second(st.packets_per_second as i32);
         self.as_mut().set_devices_open(st.devices_open as i32);
         self.as_mut().set_devices_blocked(st.devices_blocked as i32);

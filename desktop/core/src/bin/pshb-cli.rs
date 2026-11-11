@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -15,8 +14,9 @@ use pshb_core::config::{self, Config};
 use pshb_core::controller::{Controller, Watchdog};
 use pshb_core::crypto::parse_key_hex;
 use pshb_core::engine::{Engine, Notice};
-use pshb_core::input::{self, InputMsg, Readers};
+use pshb_core::input::{self, GrabGuard, InputMsg, InputSet, Waker};
 use pshb_core::protocol::{self, Pong};
+use pshb_core::rt;
 use pshb_core::script;
 use pshb_core::transport::{KeyState, Link, LinkConfig};
 use pshb_core::trigger::{Action, Trigger};
@@ -58,6 +58,9 @@ enum Command {
         /// Key combination that toggles the bridge, e.g. "Ctrl+Alt+P"
         #[arg(long)]
         hotkey: Option<String>,
+        /// Print the input latency (event -> packet sent) every 5 seconds
+        #[arg(long)]
+        stats: bool,
     },
     /// Play input from a script file (test without real devices)
     Replay {
@@ -202,8 +205,13 @@ fn load_key(args: &BoardArgs) -> Result<[u8; 32], String> {
 }
 
 fn start_link(ctx: &Ctx, args: &BoardArgs, ping: Duration) -> Result<Link, String> {
+    start_link_rt(ctx, args, ping, false)
+}
+
+fn start_link_rt(ctx: &Ctx, args: &BoardArgs, ping: Duration, realtime: bool) -> Result<Link, String> {
     let mut cfg = LinkConfig::new(board_addr(ctx, args)?, load_key(args)?);
     cfg.ping_interval = ping;
+    cfg.realtime = realtime;
     cfg.counter_store = Some(config::counter_path());
     Link::start(cfg).map_err(|e| format!("UDP: {e}"))
 }
@@ -313,7 +321,13 @@ fn cmd_list_devices() -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_run(ctx: &Ctx, board: &BoardArgs, devices: &[String], hotkey: Option<&str>) -> Result<(), String> {
+fn cmd_run(
+    ctx: &Ctx,
+    board: &BoardArgs,
+    devices: &[String],
+    hotkey: Option<&str>,
+    stats: bool,
+) -> Result<(), String> {
     let specs = if devices.is_empty() {
         ctx.config.devices.clone()
     } else {
@@ -349,7 +363,7 @@ fn cmd_run(ctx: &Ctx, board: &BoardArgs, devices: &[String], hotkey: Option<&str
         println!("Device: {} ({}, {})", d.name, d.kind(), d.path.display());
     }
 
-    let link = Arc::new(start_link(ctx, board, Duration::from_secs(1))?);
+    let link = Arc::new(start_link_rt(ctx, board, Duration::from_secs(1), true)?);
     if link.wait_connected(Duration::from_secs(2)) {
         if let Some(p) = link.status().board {
             println!("Board connected: {}", describe(&p));
@@ -358,51 +372,76 @@ fn cmd_run(ctx: &Ctx, board: &BoardArgs, devices: &[String], hotkey: Option<&str
         eprintln!("Warning: {} Still trying.", no_answer_reason(&link));
     }
 
-    let (tx, rx) = mpsc::channel();
-    let grab = Arc::new(AtomicBool::new(false));
-    let readers = Readers::start(&selected, tx, grab.clone()).map_err(|e| format!("Opening device: {e}"))?;
-    let watchdog = Watchdog::start(link.clone(), grab.clone(), Duration::from_secs(1));
-    let mut ctl = Controller::new(Engine::new(ecfg), link.clone(), Some(grab));
+    let waker = Arc::new(Waker::new().map_err(|e| e.to_string())?);
+    let guard = GrabGuard::default();
+    let mut inputs =
+        InputSet::open(&selected, waker, guard.clone()).map_err(|e| format!("Opening device: {e}"))?;
+    let watchdog = Watchdog::start(link.clone(), guard, Duration::from_secs(1));
+    let mut ctl = Controller::new(Engine::new(ecfg), link.clone());
     install_signal_handlers();
+    let realtime = rt::make_current_thread_realtime(rt::PRIORITY);
 
     println!(
         "Ready. Toggle: {}. Emergency stop: Ctrl+Alt+Shift+Esc. Quit: Ctrl+C.",
         trigger_summary(ctx, hotkey)
     );
+    if stats {
+        match &realtime {
+            Ok(how) => println!("Priority: real-time ({how})."),
+            Err(e) => println!("Priority: normal (real-time {e})."),
+        }
+    }
 
-    let mut remaining = selected.len();
-    let mut connected = link.status().is_connected();
-    let mut result = Ok(());
-    while !STOP.load(Ordering::Acquire) {
-        watchdog.feed();
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(InputMsg::Event { event, .. }) => {
-                for n in ctl.handle(event, Instant::now()) {
-                    println!("{}", notice_text(n));
+    // Grab or release as the engine asks; a device that cannot be grabbed
+    // switches the bridge off again.
+    let apply_grab = |ctl: &mut Controller, inputs: &mut InputSet| {
+        while let Some(on) = ctl.take_grab_request() {
+            for f in inputs.set_grab(on) {
+                if let InputMsg::GrabFailed { path, error } = f {
+                    eprintln!(
+                        "Cannot grab device {} exclusively ({error}). The bridge stays off.",
+                        path.display()
+                    );
                 }
-            }
-            Ok(InputMsg::Gone { path, error }) => {
-                eprintln!("Device {} disconnected: {error}", path.display());
-                remaining -= 1;
-                if remaining == 0 {
-                    result = Err("All devices disconnected.".into());
-                    break;
-                }
-            }
-            Ok(InputMsg::GrabFailed { path, error }) => {
-                eprintln!(
-                    "Cannot grab device {} exclusively ({error}). The bridge stays off.",
-                    path.display()
-                );
                 for n in ctl.command(Action::Off) {
                     println!("{}", notice_text(n));
                 }
             }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    };
+
+    let mut connected = link.status().is_connected();
+    let mut result = Ok(());
+    let mut msgs = Vec::new();
+    let mut next_stats = Instant::now() + Duration::from_secs(5);
+    let mut stats_total = 0;
+    while !STOP.load(Ordering::Acquire) {
+        watchdog.feed();
+        inputs.wait(Duration::from_millis(100), &mut msgs);
+        for m in msgs.drain(..) {
+            match m {
+                InputMsg::Event { event, ts_us, .. } => {
+                    for n in ctl.handle(event, Instant::now(), ts_us) {
+                        println!("{}", notice_text(n));
+                    }
+                    apply_grab(&mut ctl, &mut inputs);
+                }
+                InputMsg::Gone { path, error } => {
+                    eprintln!("Device {} disconnected: {error}", path.display());
+                }
+                InputMsg::GrabFailed { .. } => {}
+            }
+        }
+        if inputs.is_empty() {
+            result = Err("All devices disconnected.".into());
+            break;
         }
         if watchdog.take_fired() {
             eprintln!("Watchdog: the main loop hung, devices were released.");
+            for n in ctl.command(Action::Off) {
+                println!("{}", notice_text(n));
+            }
+            apply_grab(&mut ctl, &mut inputs);
         }
         let now_connected = link.status().is_connected();
         if now_connected != connected {
@@ -416,11 +455,22 @@ fn cmd_run(ctx: &Ctx, board: &BoardArgs, devices: &[String], hotkey: Option<&str
                 }
             );
         }
+        if stats && Instant::now() >= next_stats {
+            next_stats += Duration::from_secs(5);
+            if let Some(l) = link.input_latency().filter(|l| l.total != stats_total) {
+                stats_total = l.total;
+                println!(
+                    "Latency input -> network: median {} µs, 95 % below {} µs, 99 % below {} µs, max {} µs ({} packets)",
+                    l.p50_us, l.p95_us, l.p99_us, l.max_us, l.samples
+                );
+            }
+        }
     }
 
     ctl.shutdown();
+    apply_grab(&mut ctl, &mut inputs);
     drop(watchdog);
-    drop(readers);
+    drop(inputs);
     thread::sleep(Duration::from_millis(30));
     println!("Stopped.");
     result
@@ -431,10 +481,10 @@ fn cmd_replay(ctx: &Ctx, board: &BoardArgs, file: &Path, hotkey: Option<&str>) -
     let steps = script::parse(&text)?;
     let ecfg = engine_config(ctx, hotkey)?;
     let link = Arc::new(connect(ctx, board, Duration::from_secs(1))?);
-    let mut ctl = Controller::new(Engine::new(ecfg), link.clone(), None);
+    let mut ctl = Controller::new(Engine::new(ecfg), link.clone());
     for step in steps {
         thread::sleep(step.delay);
-        for n in ctl.handle(step.event, Instant::now()) {
+        for n in ctl.handle(step.event, Instant::now(), None) {
             println!("{}", notice_text(n));
         }
     }
@@ -490,8 +540,8 @@ fn cmd_send(
     }
     let link = connect(ctx, board, Duration::from_secs(1))?;
     link.set_active(true);
-    link.set_state(state);
-    link.add_motion(dx, dy, 0, 0);
+    link.set_state(state, None);
+    link.add_motion(dx, dy, 0, 0, None);
     thread::sleep(Duration::from_millis(hold_ms));
     link.set_active(false);
     thread::sleep(Duration::from_millis(20));
@@ -612,7 +662,8 @@ fn main() -> ExitCode {
             board,
             devices,
             hotkey,
-        } => cmd_run(&ctx, board, devices, hotkey.as_deref()),
+            stats,
+        } => cmd_run(&ctx, board, devices, hotkey.as_deref(), *stats),
         Command::Replay { board, file, hotkey } => cmd_replay(&ctx, board, file, hotkey.as_deref()),
         Command::Ping { board, count } => cmd_ping(&ctx, board, *count),
         Command::Send {
