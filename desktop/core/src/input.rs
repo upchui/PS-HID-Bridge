@@ -173,8 +173,21 @@ pub enum InputMsg {
     Gone { path: PathBuf, error: String },
     /// A device could not be opened (it stays closed until the next update).
     OpenFailed { path: PathBuf, error: String },
-    /// Grabbing failed (e.g. another program holds the device).
-    GrabFailed { path: PathBuf, error: String },
+    /// Grabbing failed; `busy`: another program holds the device exclusively.
+    GrabFailed {
+        path: PathBuf,
+        name: String,
+        busy: bool,
+        error: String,
+    },
+    /// Releasing the grab failed. As a last resort the device was closed
+    /// (which ends the grab) and opened again, unless `reopened` is false.
+    ReleaseFailed {
+        path: PathBuf,
+        name: String,
+        error: String,
+        reopened: bool,
+    },
     /// Device nodes in /dev/input appeared, disappeared or changed their
     /// permissions: time to look at the device list again.
     Hotplug,
@@ -183,14 +196,86 @@ pub enum InputMsg {
 const EVIOCGRAB: libc::c_ulong = 0x4004_4590; // _IOW('E', 0x90, int)
 const EVIOCSCLOCKID: libc::c_ulong = 0x4004_45a0; // _IOW('E', 0xa0, int)
 
-fn ioctl_int(fd: RawFd, req: libc::c_ulong, value: libc::c_int) -> io::Result<()> {
-    // SAFETY: both requests take an int argument; fd is a valid descriptor.
-    let r = unsafe { libc::ioctl(fd, req as _, &value as *const libc::c_int) };
+/// EVIOCSCLOCKID: the kernel reads the int the argument points to.
+fn set_clock_id(fd: RawFd, clock: libc::c_int) -> io::Result<()> {
+    // SAFETY: valid descriptor; the argument points to an int.
+    let r = unsafe { libc::ioctl(fd, EVIOCSCLOCKID as _, &clock as *const libc::c_int) };
     if r == 0 {
         Ok(())
     } else {
         Err(io::Error::last_os_error())
     }
+}
+
+/// EVIOCGRAB: unlike EVIOCSCLOCKID the kernel uses the argument's *value*
+/// (0 = release, anything else = grab). A pointer is never 0, so passing
+/// one turns every release into a second grab that fails with EBUSY.
+fn ioctl_grab(fd: RawFd, on: bool) -> io::Result<()> {
+    loop {
+        // SAFETY: valid descriptor; the argument is passed by value.
+        let r = unsafe { libc::ioctl(fd, EVIOCGRAB as _, libc::c_ulong::from(on)) };
+        if r == 0 {
+            return Ok(());
+        }
+        let e = io::Error::last_os_error();
+        if e.kind() != io::ErrorKind::Interrupted {
+            return Err(e);
+        }
+    }
+}
+
+/// Release a grab. Also fine if this descriptor held none (EINVAL).
+fn release_grab(fd: RawFd) -> io::Result<()> {
+    match ioctl_grab(fd, false) {
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => Ok(()),
+        r => r,
+    }
+}
+
+fn grab_failed(info: &DeviceInfo, e: io::Error) -> InputMsg {
+    InputMsg::GrabFailed {
+        path: info.path.clone(),
+        name: info.name.clone(),
+        busy: e.raw_os_error() == Some(libc::EBUSY),
+        error: e.to_string(),
+    }
+}
+
+/// One sentence for the user about devices that could not be grabbed or
+/// released (None if `msgs` holds no such problem).
+pub fn grab_problems(msgs: &[InputMsg]) -> Option<String> {
+    let mut grab = Vec::new();
+    let mut release = Vec::new();
+    for m in msgs {
+        match m {
+            InputMsg::GrabFailed { name, busy: true, .. } => grab.push(format!(
+                "\u{201c}{name}\u{201d} is held exclusively by another program"
+            )),
+            InputMsg::GrabFailed { name, error, .. } => {
+                grab.push(format!("\u{201c}{name}\u{201d} cannot be taken over ({error})"))
+            }
+            InputMsg::ReleaseFailed {
+                name,
+                error,
+                reopened: true,
+                ..
+            } => release.push(format!(
+                "\u{201c}{name}\u{201d} could not be released ({error}), so it was opened again"
+            )),
+            InputMsg::ReleaseFailed { name, error, .. } => release.push(format!(
+                "\u{201c}{name}\u{201d} could not be released ({error}): unplug it or quit the app"
+            )),
+            _ => {}
+        }
+    }
+    let mut parts = Vec::new();
+    if !grab.is_empty() {
+        parts.push(format!("{}. The bridge stays off.", grab.join("; ")));
+    }
+    if !release.is_empty() {
+        parts.push(format!("{}.", release.join("; ")));
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 /// Wakes a thread waiting in [`InputSet::wait`] or [`Waker::wait`] (eventfd).
@@ -258,13 +343,17 @@ impl GrabGuard {
         self.0.grabbed.load(Ordering::Acquire)
     }
 
-    /// Release the grab of every open device (from any thread).
-    pub fn release(&self) {
+    /// Release the grab of every open device (from any thread). Returns
+    /// how many could not be released; the owner of the devices retries
+    /// with [`InputSet::set_grab`]`(false)`, which reopens them if need be.
+    pub fn release(&self) -> usize {
         let fds = self.0.fds.lock().unwrap();
-        for fd in fds.iter() {
-            let _ = ioctl_int(fd.as_raw_fd(), EVIOCGRAB, 0);
-        }
+        let failed = fds
+            .iter()
+            .filter(|fd| release_grab(fd.as_raw_fd()).is_err())
+            .count();
         self.0.grabbed.store(false, Ordering::Release);
+        failed
     }
 
     fn set_fds(&self, devices: &[Open]) {
@@ -285,6 +374,19 @@ struct Open {
     mono: bool,
     /// Keys and buttons currently held on this device.
     pressed: Vec<u16>,
+}
+
+impl Open {
+    /// Replace the descriptor by a new one for the same node. The old file
+    /// (and with it any grab it holds) is closed once its duplicates in the
+    /// [`GrabGuard`] are gone, see [`InputSet::devices_changed`].
+    fn reopen(&mut self) -> io::Result<()> {
+        let dev = Device::open(&self.info.path)?;
+        dev.set_nonblocking(true)?;
+        self.mono = set_clock_id(dev.as_raw_fd(), libc::CLOCK_MONOTONIC).is_ok();
+        self.dev = dev;
+        Ok(())
+    }
 }
 
 /// Notices device nodes appearing, disappearing or changing permissions in
@@ -389,7 +491,7 @@ impl InputSet {
     fn add(&mut self, info: &DeviceInfo) -> io::Result<()> {
         let dev = Device::open(&info.path)?;
         dev.set_nonblocking(true)?;
-        let mono = ioctl_int(dev.as_raw_fd(), EVIOCSCLOCKID, libc::CLOCK_MONOTONIC).is_ok();
+        let mono = set_clock_id(dev.as_raw_fd(), libc::CLOCK_MONOTONIC).is_ok();
         self.devices.push(Open {
             id: self.next_id,
             info: info.clone(),
@@ -427,9 +529,8 @@ impl InputSet {
                 continue;
             }
             let closed = self.devices.remove(i);
-            if self.guard.is_grabbed() {
-                let _ = ioctl_int(closed.dev.as_raw_fd(), EVIOCGRAB, 0);
-            }
+            // Closing it below ends the grab in any case.
+            let _ = release_grab(closed.dev.as_raw_fd());
             self.release_keys(closed, out);
             changed = true;
         }
@@ -442,11 +543,8 @@ impl InputSet {
                 Ok(()) => {
                     changed = true;
                     let d = self.devices.last().expect("just added");
-                    if grabbed && let Err(e) = ioctl_int(d.dev.as_raw_fd(), EVIOCGRAB, 1) {
-                        out.push(InputMsg::GrabFailed {
-                            path: info.path.clone(),
-                            error: e.to_string(),
-                        });
+                    if grabbed && let Err(e) = ioctl_grab(d.dev.as_raw_fd(), true) {
+                        out.push(grab_failed(info, e));
                     }
                 }
                 // Gone again between listing and opening: the next hot-plug
@@ -475,22 +573,46 @@ impl InputSet {
     }
 
     /// Grab (true) or release every device. Returns the devices that could
-    /// not be grabbed; the caller decides what to do (usually: bridge off).
+    /// not be grabbed (the caller decides what to do, usually: bridge off)
+    /// or released.
+    ///
+    /// Releasing always covers every device, whatever the grab flag says,
+    /// and a device that cannot be released is closed (which ends the grab)
+    /// and opened again: a grab left behind takes keyboard and mouse away
+    /// from the desktop.
     pub fn set_grab(&mut self, on: bool) -> Vec<InputMsg> {
         let mut failed = Vec::new();
-        if self.guard.is_grabbed() == on {
+        if on {
+            if !self.guard.is_grabbed() {
+                for d in &self.devices {
+                    if let Err(e) = ioctl_grab(d.dev.as_raw_fd(), true) {
+                        failed.push(grab_failed(&d.info, e));
+                    }
+                }
+                self.guard.0.grabbed.store(true, Ordering::Release);
+            }
             return failed;
         }
-        for d in &self.devices {
-            let r = ioctl_int(d.dev.as_raw_fd(), EVIOCGRAB, on as libc::c_int);
-            if let (true, Err(e)) = (on, r) {
-                failed.push(InputMsg::GrabFailed {
-                    path: d.info.path.clone(),
-                    error: e.to_string(),
-                });
-            }
+        let mut reopened = false;
+        for d in &mut self.devices {
+            let Err(e) = release_grab(d.dev.as_raw_fd()) else {
+                continue;
+            };
+            let ok = d.reopen().is_ok();
+            reopened |= ok;
+            failed.push(InputMsg::ReleaseFailed {
+                path: d.info.path.clone(),
+                name: d.info.name.clone(),
+                error: e.to_string(),
+                reopened: ok,
+            });
         }
-        self.guard.0.grabbed.store(on, Ordering::Release);
+        self.guard.0.grabbed.store(false, Ordering::Release);
+        if reopened {
+            // Drops the watchdog's duplicates of the old descriptors: only
+            // then is the old file closed and its grab gone.
+            self.devices_changed();
+        }
         failed
     }
 
@@ -633,6 +755,32 @@ mod tests {
             keyboard: kb,
             mouse,
         }
+    }
+
+    #[test]
+    fn grab_problem_text() {
+        let failed = |name: &str, busy| InputMsg::GrabFailed {
+            path: PathBuf::from("/dev/input/event26"),
+            name: name.into(),
+            busy,
+            error: "Device or resource busy (os error 16)".into(),
+        };
+        assert_eq!(grab_problems(&[]), None);
+        assert_eq!(
+            grab_problems(&[failed("Keyboard", true), failed("Mouse", true)]).unwrap(),
+            "\u{201c}Keyboard\u{201d} is held exclusively by another program; \
+             \u{201c}Mouse\u{201d} is held exclusively by another program. The bridge stays off."
+        );
+        let released = InputMsg::ReleaseFailed {
+            path: PathBuf::from("/dev/input/event4"),
+            name: "Mouse".into(),
+            error: "x".into(),
+            reopened: true,
+        };
+        assert_eq!(
+            grab_problems(&[released]).unwrap(),
+            "\u{201c}Mouse\u{201d} could not be released (x), so it was opened again."
+        );
     }
 
     #[test]

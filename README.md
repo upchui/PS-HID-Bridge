@@ -269,6 +269,12 @@ make udp-test IP=192.168.1.50 ARGS='--psk-file psk.txt pattern'   # mouse square
 make udp-test IP=192.168.1.50 ARGS='--psk-file psk.txt flood --rate 1000 --seconds 5'
 ```
 
+Grabbing and releasing the devices is tested against virtual devices (uinput) that look like a keyboard converter and a gaming mouse with several event nodes each: the bridge service is switched on and off in many ways (Ctrl+Alt+P split over two nodes, hot-plug and service restart while on, a device held by another program), and after each step a second descriptor checks whether a node is still grabbed. It needs write access to `/dev/uinput`, and read access to the virtual devices: they use the IDs of the udev rule written by "Set up access" (default `feed:6536,0db0:1fc6`, otherwise `PSHB_GRAB_TEST_IDS=vvvv:pppp,vvvv:pppp`). Close the app first, it would pick up the virtual devices too. Runs on the host, not in Docker:
+
+```sh
+cd desktop && cargo test -p pshb-core --test grab_release -- --ignored --test-threads=1
+```
+
 ## Directories
 
 | Path | Content |

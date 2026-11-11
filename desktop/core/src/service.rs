@@ -239,16 +239,21 @@ impl Runner {
     /// device that cannot be grabbed switches the bridge off again.
     fn apply_grab(&mut self) {
         while let Some(on) = self.ctl.take_grab_request() {
-            for f in self.inputs.set_grab(on) {
-                if let InputMsg::GrabFailed { path, error } = f {
-                    self.emit(ServiceEvent::Error(format!(
-                        "{} cannot be grabbed exclusively: {error}",
-                        path.display()
-                    )));
-                }
+            let problems = self.inputs.set_grab(on);
+            self.report_grab_problems(&problems);
+            if problems.iter().any(|m| matches!(m, InputMsg::GrabFailed { .. })) {
                 let n = self.ctl.command(Action::Off);
                 self.notices(n);
             }
+        }
+    }
+
+    /// Devices that could not be grabbed or released: one message for the
+    /// GUI, and a line in the log (journal).
+    fn report_grab_problems(&self, msgs: &[InputMsg]) {
+        if let Some(text) = input::grab_problems(msgs) {
+            eprintln!("PS HID Bridge: {text}");
+            self.emit(ServiceEvent::Error(text));
         }
     }
 
@@ -283,6 +288,7 @@ impl Runner {
     }
 
     fn handle_msgs(&mut self, msgs: &mut Vec<InputMsg>) {
+        self.report_grab_problems(msgs);
         let mut grab_failed = false;
         for m in msgs.drain(..) {
             match m {
@@ -296,13 +302,8 @@ impl Runner {
                         path.display()
                     )));
                 }
-                InputMsg::GrabFailed { path, error } => {
-                    self.emit(ServiceEvent::Error(format!(
-                        "{} cannot be grabbed exclusively: {error}",
-                        path.display()
-                    )));
-                    grab_failed = true;
-                }
+                InputMsg::GrabFailed { .. } => grab_failed = true,
+                InputMsg::ReleaseFailed { .. } => {}
             }
         }
         if grab_failed {

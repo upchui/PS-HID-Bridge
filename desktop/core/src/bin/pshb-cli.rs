@@ -466,13 +466,11 @@ fn cmd_run(
     // switches the bridge off again.
     let apply_grab = |ctl: &mut Controller, inputs: &mut InputSet| {
         while let Some(on) = ctl.take_grab_request() {
-            for f in inputs.set_grab(on) {
-                if let InputMsg::GrabFailed { path, error } = f {
-                    eprintln!(
-                        "Cannot grab device {} exclusively ({error}). The bridge stays off.",
-                        path.display()
-                    );
-                }
+            let problems = inputs.set_grab(on);
+            if let Some(text) = input::grab_problems(&problems) {
+                eprintln!("{text}");
+            }
+            if problems.iter().any(|m| matches!(m, InputMsg::GrabFailed { .. })) {
                 for n in ctl.command(Action::Off) {
                     println!("{}", notice_text(n));
                 }
@@ -500,7 +498,10 @@ fn cmd_run(
                 InputMsg::Gone { path, error } => {
                     eprintln!("Device {} disconnected: {error}", path.display());
                 }
-                InputMsg::GrabFailed { .. } | InputMsg::OpenFailed { .. } | InputMsg::Hotplug => {}
+                InputMsg::GrabFailed { .. }
+                | InputMsg::ReleaseFailed { .. }
+                | InputMsg::OpenFailed { .. }
+                | InputMsg::Hotplug => {}
             }
         }
         if inputs.is_empty() {
