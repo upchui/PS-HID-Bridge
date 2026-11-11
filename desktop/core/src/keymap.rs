@@ -1,6 +1,6 @@
 //! Linux evdev key codes -> USB HID usages (Keyboard/Keypad page 0x07).
 //!
-//! The board sends *positions*, not characters: the PS5 must use the same
+//! The board sends *positions*, not characters: the PlayStation must use the same
 //! layout as the physical keyboard (e.g. German). ISO specifics:
 //! * KEY_102ND (`<>|` left of Y) -> 0x64 "Non-US \ and |"
 //! * KEY_BACKSLASH (`#'` left of Enter on ISO boards) -> 0x32 "Non-US # and ~",

@@ -1,4 +1,4 @@
-// PS5 HID Bridge – board web interface.
+// PS HID Bridge – board web interface.
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -69,8 +69,8 @@ function fmtUptime(ms) {
 function setPill(st) {
   const p = $("pill");
   p.hidden = false;
-  if (!st.usb_mounted) { p.textContent = "PS5 not connected"; p.className = "pill bad"; }
-  else if (st.usb_suspended) { p.textContent = "PS5 in rest mode"; p.className = "pill warn"; }
+  if (!st.usb_mounted) { p.textContent = "PlayStation not connected"; p.className = "pill bad"; }
+  else if (st.usb_suspended) { p.textContent = "PlayStation in rest mode"; p.className = "pill warn"; }
   else if (st.input_active) { p.textContent = "Input active"; p.className = "pill ok"; }
   else { p.textContent = "Ready"; p.className = "pill ok"; }
 }
@@ -300,7 +300,7 @@ function init() {
   onSubmit("f-ota", async (f) => {
     const file = f.file.files[0];
     if (!file) throw new Error("Please choose a UF2 file.");
-    if (!file.name.toLowerCase().endsWith(".uf2")) throw new Error("Please choose the file ps5-hid-bridge.uf2.");
+    if (!file.name.toLowerCase().endsWith(".uf2")) throw new Error("Please choose the file ps-hid-bridge.uf2.");
     const data = new Uint8Array(await file.arrayBuffer());
     const bar = $("ota-progress");
     bar.hidden = false;

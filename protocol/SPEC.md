@@ -1,4 +1,4 @@
-# PS5 HID Bridge – Protocol v1
+# PS HID Bridge – Protocol v1
 
 This document describes the UDP packets between the desktop app and the board. There are three implementations:
 
@@ -112,7 +112,7 @@ The board creates a new **session id** from the TRNG on every boot. After a rest
 ## Failsafe
 
 - If no valid INPUT or HEARTBEAT arrives for **250 ms**, the board releases all keys and mouse buttons (status bit 2).
-- The same happens when the PS5 disconnects the USB port or puts it into rest mode.
+- The same happens when the PlayStation disconnects the USB port or puts it into rest mode.
 - The next valid packet restores the state.
 
 ## Behaviour of the app
@@ -125,7 +125,7 @@ The board creates a new **session id** from the TRNG on every boot. After a rest
 
 ## Unencrypted debug mode (version 0)
 
-Only the debug image `ps5-hid-bridge-plain.uf2` and the simulator with `--plaintext` accept packets with version `0x00`. They have the same header and payloads, but no encryption and no tag. Counter and session are not checked in this mode (the sender filter is). Answers are also sent as version 0. Status bit 7 shows this mode.
+Only the debug image `ps-hid-bridge-plain.uf2` and the simulator with `--plaintext` accept packets with version `0x00`. They have the same header and payloads, but no encryption and no tag. Counter and session are not checked in this mode (the sender filter is). Answers are also sent as version 0. Status bit 7 shows this mode.
 
 ## Test vectors
 

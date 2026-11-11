@@ -9,7 +9,7 @@
 
 #include "settings.h"
 
-#define PSHB_DEFAULT_PASSWORD "ps5-hid-bridge"
+#define PSHB_DEFAULT_PASSWORD "ps-hid-bridge"
 #define PSHB_PASSWORD_MIN_LEN 8
 #define PSHB_PASSWORD_MAX_LEN 64
 

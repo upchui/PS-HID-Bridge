@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.thealhu.ps5hidbridge</id>
+  <id>io.github.thealhu.pshidbridge</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <name>PS5 HID Bridge</name>
-  <summary>Use the mouse and keyboard of this computer on the PS5</summary>
+  <name>PS HID Bridge</name>
+  <summary>Use the mouse and keyboard of this computer on the PlayStation</summary>
   <description>
     <p>
-      Forwards mouse and keyboard, encrypted over the network, to a small board on the PS5's
+      Forwards mouse and keyboard, encrypted over the network, to a small board on the PlayStation's
       USB port. The picture comes in via Remote Play (for example chiaki-ng).
     </p>
     <ul>
@@ -15,7 +15,7 @@
       <li>Status view with latency measurement to the board</li>
     </ul>
   </description>
-  <launchable type="desktop-id">io.github.thealhu.ps5hidbridge.desktop</launchable>
+  <launchable type="desktop-id">io.github.thealhu.pshidbridge.desktop</launchable>
   <categories>
     <category>Utility</category>
   </categories>

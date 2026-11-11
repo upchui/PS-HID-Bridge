@@ -9,7 +9,9 @@ use std::process::{Command, Stdio};
 
 use crate::input::DeviceInfo;
 
-pub const RULE_PATH: &str = "/etc/udev/rules.d/70-ps5-hid-bridge.rules";
+pub const RULE_PATH: &str = "/etc/udev/rules.d/70-ps-hid-bridge.rules";
+/// Rule file of the old name (PS5 HID Bridge), replaced by RULE_PATH.
+const OLD_RULE_PATH: &str = "/etc/udev/rules.d/70-ps5-hid-bridge.rules";
 
 /// Rule text for the given devices (one line per vendor:product pair).
 pub fn udev_rule(devices: &[DeviceInfo]) -> String {
@@ -20,7 +22,7 @@ pub fn udev_rule(devices: &[DeviceInfo]) -> String {
     ids.sort();
     ids.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
     let mut out = String::from(
-        "# PS5 HID Bridge: read access to the selected keyboards and mice\n\
+        "# PS HID Bridge: read access to the selected keyboards and mice\n\
          # (written by the app; remove this file to revoke)\n",
     );
     for (v, p, name) in ids {
@@ -37,8 +39,9 @@ pub fn udev_rule(devices: &[DeviceInfo]) -> String {
 /// on a FUSE mount that root may not be able to read, so the rule is passed
 /// on stdin instead of as a file.
 pub fn install_rule(rule: &str) -> Result<(), String> {
+    // Also removes the rule file of the old name (PS5 HID Bridge).
     let script = format!(
-        "set -e; cat > {RULE_PATH}.tmp && mv {RULE_PATH}.tmp {RULE_PATH} && \
+        "set -e; cat > {RULE_PATH}.tmp && mv {RULE_PATH}.tmp {RULE_PATH} && rm -f {OLD_RULE_PATH} && \
          udevadm control --reload && udevadm trigger --subsystem-match=input --action=change"
     );
     let mut child = Command::new("pkexec")

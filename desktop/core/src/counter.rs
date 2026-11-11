@@ -95,7 +95,7 @@ fn lock(path: &Path) -> io::Result<File> {
             io::Error::new(
                 io::ErrorKind::WouldBlock,
                 format!(
-                    "another PS5 HID Bridge program is already sending to the board \
+                    "another PS HID Bridge program is already sending to the board \
                      ({} is locked); close it first",
                     lock_path.display()
                 ),

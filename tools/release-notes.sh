@@ -28,10 +28,10 @@ cat <<'EOF'
 
 | File | Purpose |
 |---|---|
-| `PS5-HID-Bridge-x86_64.AppImage` | desktop app: make it executable (`chmod +x`) and start it |
+| `PS-HID-Bridge-x86_64.AppImage` | desktop app: make it executable (`chmod +x`) and start it |
 | `pshb-cli-x86_64-linux` | command line tool |
-| `ps5-hid-bridge.uf2` | board firmware: update via the web interface (System), or copy it to the board in BOOTSEL mode |
-| `ps5-hid-bridge-pt.uf2` | partition table: copy it once via BOOTSEL before the first firmware |
+| `ps-hid-bridge.uf2` | board firmware: update via the web interface (System), or copy it to the board in BOOTSEL mode |
+| `ps-hid-bridge-pt.uf2` | partition table: copy it once via BOOTSEL before the first firmware |
 | other `.uf2` files | test and recovery images, see "Other images" in the README |
 | `SHA256SUMS` | checksums (`sha256sum -c SHA256SUMS`) |
 EOF

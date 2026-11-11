@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import PS5HIDBridge
+import PSHIDBridge
 
 Kirigami.ScrollablePage {
     title: "Mouse"
@@ -13,7 +13,7 @@ Kirigami.ScrollablePage {
         Controls.Label {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
-            text: "The default is the raw mouse values (sensitivity 1, no acceleration). Many PS5 games have their own settings; adjusting there is usually better."
+            text: "The default is the raw mouse values (sensitivity 1, no acceleration). Many PlayStation games have their own settings; adjusting there is usually better."
         }
 
         Kirigami.FormLayout {

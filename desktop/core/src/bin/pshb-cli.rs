@@ -1,4 +1,4 @@
-//! Command line front end of the PS5 HID Bridge.
+//! Command line front end of the PS HID Bridge.
 
 use std::io::Read;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -22,9 +22,9 @@ use pshb_core::transport::{KeyState, Link, LinkConfig};
 use pshb_core::trigger::{Action, Trigger};
 
 #[derive(Parser)]
-#[command(name = "pshb-cli", version = pshb_core::VERSION, about = "PS5 HID Bridge – command line")]
+#[command(name = "pshb-cli", version = pshb_core::VERSION, about = "PS HID Bridge – command line")]
 struct Cli {
-    /// Settings file (default: ~/.config/ps5-hid-bridge/config.toml)
+    /// Settings file (default: ~/.config/ps-hid-bridge/config.toml)
     #[arg(long, global = true)]
     config: Option<PathBuf>,
     #[command(subcommand)]
@@ -39,7 +39,7 @@ struct BoardArgs {
     /// Pre-shared key as 64 hex digits
     #[arg(long, conflicts_with = "psk_file")]
     psk: Option<String>,
-    /// File with the pre-shared key (default: ~/.config/ps5-hid-bridge/psk)
+    /// File with the pre-shared key (default: ~/.config/ps-hid-bridge/psk)
     #[arg(long)]
     psk_file: Option<PathBuf>,
 }
@@ -271,7 +271,7 @@ fn describe(p: &Pong) -> String {
 
 fn notice_text(n: Notice) -> &'static str {
     match n {
-        Notice::Activated => "Bridge ON – mouse and keyboard go to the PS5.",
+        Notice::Activated => "Bridge ON – mouse and keyboard go to the PlayStation.",
         Notice::Deactivated => "Bridge OFF – mouse and keyboard belong to the desktop again.",
         Notice::WaitingForRelease => "Please release all keys …",
         Notice::Paused => "Paused.",

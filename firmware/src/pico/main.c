@@ -1,4 +1,4 @@
-// PS5 HID Bridge firmware -- entry point and core 0 loop.
+// PS HID Bridge firmware -- entry point and core 0 loop.
 //
 // Core 0 owns the latency-critical input path: the USB device stack and the
 // UDP input socket. It never blocks. Core 1 runs network management.
@@ -208,7 +208,7 @@ int main(void) {
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-    printf("ps5-hid-bridge %u.%u.%u: boot%s%s\n", (PSHB_FW_VERSION >> 24) & 0xFF,
+    printf("ps-hid-bridge %u.%u.%u: boot%s%s\n", (PSHB_FW_VERSION >> 24) & 0xFF,
            (PSHB_FW_VERSION >> 16) & 0xFF, PSHB_FW_VERSION & 0xFFFF,
            PSHB_TEST_PATTERN ? " (test pattern)" : "",
            PSHB_PLAINTEXT_DEBUG ? " (PLAINTEXT DEBUG)" : "");

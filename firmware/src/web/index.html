@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PS5 HID Bridge</title>
+<title>PS HID Bridge</title>
 <link rel="stylesheet" href="/style.css">
 <script src="/app.js" defer></script>
 </head>
 <body>
 <header class="top">
-  <h1>PS5 HID Bridge</h1>
+  <h1>PS HID Bridge</h1>
   <span id="pill" class="pill" hidden></span>
   <button id="logout" class="link" hidden>Log out</button>
 </header>
@@ -24,7 +24,7 @@
       <label>Password <input type="password" name="password" autocomplete="current-password" required autofocus></label>
       <button type="submit">Log in</button>
     </form>
-    <p class="hint">The factory password is <code>ps5-hid-bridge</code>. You have to change it at the first login.</p>
+    <p class="hint">The factory password is <code>ps-hid-bridge</code>. You have to change it at the first login.</p>
   </section>
 
   <!-- Forced password change -->
@@ -77,11 +77,11 @@
       <div class="card">
         <h3>Latency</h3>
         <table class="kv">
-          <tr><th>Packet → report fetched by the PS5</th><td id="s-lat-usb">–</td></tr>
+          <tr><th>Packet → report fetched by the PlayStation</th><td id="s-lat-usb">–</td></tr>
           <tr><th>Receive and decrypt</th><td id="s-lat-rx">–</td></tr>
           <tr><th>Mouse motion that had to wait</th><td id="s-lat-waits">–</td></tr>
         </table>
-        <p class="hint">Measured on the board since it started. The PS5 fetches at most one report per millisecond.</p>
+        <p class="hint">Measured on the board since it started. The PlayStation fetches at most one report per millisecond.</p>
       </div>
     </section>
 
@@ -147,7 +147,7 @@
     <section id="t-system" class="tabpane" hidden>
       <div class="card">
         <h2>Firmware update</h2>
-        <p>Current: <strong id="fw-current">–</strong>. The new firmware (<code>ps5-hid-bridge.uf2</code>) is written to the second slot and only kept after it started successfully. If it does not start properly, the board returns to the previous version after a restart.</p>
+        <p>Current: <strong id="fw-current">–</strong>. The new firmware (<code>ps-hid-bridge.uf2</code>) is written to the second slot and only kept after it started successfully. If it does not start properly, the board returns to the previous version after a restart.</p>
         <form id="f-ota">
           <label>UF2 file <input type="file" name="file" accept=".uf2" required></label>
           <progress id="ota-progress" max="100" value="0" hidden></progress>

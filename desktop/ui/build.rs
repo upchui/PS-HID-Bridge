@@ -7,7 +7,7 @@ fn main() {
     // (Only this binary: the CLI and the tests keep the default linker, so
     // all of them can share one target directory.)
     println!("cargo:rustc-link-arg-bins=-fuse-ld=lld");
-    CxxQtBuilder::new_qml_module(QmlModule::new("PS5HIDBridge").qml_files([
+    CxxQtBuilder::new_qml_module(QmlModule::new("PSHIDBridge").qml_files([
         "qml/Main.qml",
         "qml/StatusPage.qml",
         "qml/DevicesPage.qml",

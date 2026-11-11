@@ -1,6 +1,6 @@
 // Board simulator: runs the portable firmware core (bridge, input state,
 // settings, web interface) on Linux and prints the HID reports the board
-// would send to the PS5. Used by the integration tests and for manual
+// would send to the PlayStation. Used by the integration tests and for manual
 // testing without hardware.
 //
 // Output lines (stdout, line-buffered):

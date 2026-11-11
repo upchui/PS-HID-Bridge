@@ -1,12 +1,12 @@
 import QtQuick
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
-import PS5HIDBridge
+import PSHIDBridge
 
 Kirigami.ApplicationWindow {
     id: root
 
-    title: "PS5 HID Bridge"
+    title: "PS HID Bridge"
     width: Kirigami.Units.gridUnit * 50
     height: Kirigami.Units.gridUnit * 36
     minimumWidth: Kirigami.Units.gridUnit * 30
@@ -46,7 +46,7 @@ Kirigami.ApplicationWindow {
     Component { id: wizardPage; WizardPage { onFinished: root.show("status") } }
 
     globalDrawer: Kirigami.GlobalDrawer {
-        title: "PS5 HID Bridge"
+        title: "PS HID Bridge"
         isMenu: false
         modal: false
         collapsible: false

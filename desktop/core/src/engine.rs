@@ -10,7 +10,7 @@
 //! * Deactivation is immediate: release everything, ungrab.
 //! * The emergency combination (Ctrl+Alt+Shift+Esc) always deactivates and
 //!   cannot be configured away.
-//! * The key that fires a trigger is never forwarded to the PS5.
+//! * The key that fires a trigger is never forwarded to the PlayStation.
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};

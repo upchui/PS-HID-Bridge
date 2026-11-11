@@ -53,8 +53,8 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) {
 }
 
 static const char *const k_strings[] = {
-    [STRID_MANUFACTURER] = "PS5 HID Bridge",
-    [STRID_PRODUCT] = "PS5 HID Bridge",
+    [STRID_MANUFACTURER] = "PS HID Bridge",
+    [STRID_PRODUCT] = "PS HID Bridge",
     [STRID_SERIAL] = NULL,  // filled from the flash unique id
     [STRID_KEYBOARD] = "Keyboard",
     [STRID_MOUSE] = "Mouse",

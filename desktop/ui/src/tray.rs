@@ -63,16 +63,16 @@ impl ksni::Tray for BridgeTray {
     const MENU_ON_ACTIVATE: bool = false;
 
     fn id(&self) -> String {
-        "io.github.thealhu.ps5hidbridge".into()
+        "io.github.thealhu.pshidbridge".into()
     }
 
     fn title(&self) -> String {
         if self.active {
-            "PS5 HID Bridge – bridge on".into()
+            "PS HID Bridge – bridge on".into()
         } else if self.connected {
-            "PS5 HID Bridge – ready".into()
+            "PS HID Bridge – ready".into()
         } else {
-            "PS5 HID Bridge – board not reachable".into()
+            "PS HID Bridge – board not reachable".into()
         }
     }
 

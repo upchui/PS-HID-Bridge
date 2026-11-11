@@ -4,16 +4,16 @@
 set -euo pipefail
 
 ROOT=/work
-APP_ID=io.github.thealhu.ps5hidbridge
+APP_ID=io.github.thealhu.pshidbridge
 APPDIR=$ROOT/.cache/build/AppDir
-OUTPUT=$ROOT/out/PS5-HID-Bridge-x86_64.AppImage
+OUTPUT=$ROOT/out/PS-HID-Bridge-x86_64.AppImage
 TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/desktop/target}
 # Set by the Makefile: version (tools/version.sh) and commit date.
 : "${PSHB_VERSION:?PSHB_VERSION not set (build with make desktop)}"
 PSHB_DATE=${PSHB_DATE:-$(date -u +%F)}
 
 cd "$ROOT/desktop"
-cargo build --release --locked -p ps5-hid-bridge
+cargo build --release --locked -p ps-hid-bridge
 
 rm -rf "$APPDIR"
 mkdir -p "$ROOT/out" "$APPDIR/usr/share/metainfo"
@@ -42,7 +42,7 @@ for l in "${HOST_LIBS[@]}"; do EXCLUDES+=(--exclude-library "$l"); done
 linuxdeploy \
     "${EXCLUDES[@]}" \
     --appdir "$APPDIR" \
-    --executable "$TARGET_DIR/release/ps5-hid-bridge" \
+    --executable "$TARGET_DIR/release/ps-hid-bridge" \
     --desktop-file "$ROOT/desktop/packaging/$APP_ID.desktop" \
     --icon-file "$ROOT/desktop/packaging/icons/$APP_ID.svg" \
     --plugin qt

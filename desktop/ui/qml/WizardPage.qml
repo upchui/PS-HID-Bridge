@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import PS5HIDBridge
+import PSHIDBridge
 
 Kirigami.ScrollablePage {
     id: page
@@ -50,19 +50,19 @@ Kirigami.ScrollablePage {
         // 0 -- Welcome
         ColumnLayout {
             spacing: Kirigami.Units.largeSpacing
-            Kirigami.Heading { text: "Set up PS5 HID Bridge" }
+            Kirigami.Heading { text: "Set up PS HID Bridge" }
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "This app lets you control the PS5 with the mouse and keyboard of this computer while the picture comes in via Remote Play. You need:"
+                text: "This app lets you control the PlayStation with the mouse and keyboard of this computer while the picture comes in via Remote Play. You need:"
             }
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 textFormat: Text.StyledText
-                text: "• the board with current firmware, connected to the PS5 via USB and to the network via cable<br>"
+                text: "• the board with current firmware, connected to the PlayStation via USB and to the network via cable<br>"
                       + "• the pre-shared key from the board's web interface (Security → Generate new key)<br>"
-                      + "• on the PS5: the keyboard language of <b>your keyboard</b> (e.g. German) and USB power in rest mode switched on"
+                      + "• on the PlayStation: the keyboard language of <b>your keyboard</b> (e.g. German) and USB power in rest mode switched on"
             }
         }
 
@@ -72,7 +72,7 @@ Kirigami.ScrollablePage {
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "Enter the board address (your router lists it as ps5-hid-bridge-…) and the key from its web interface."
+                text: "Enter the board address (your router lists it as ps-hid-bridge-…) and the key from its web interface."
             }
             Kirigami.FormLayout {
                 Layout.fillWidth: true
@@ -119,7 +119,7 @@ Kirigami.ScrollablePage {
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "Select the keyboard and mouse that should go to the PS5. The app then asks once for the administrator password to set up read access to exactly these devices."
+                text: "Select the keyboard and mouse that should go to the PlayStation. The app then asks once for the administrator password to set up read access to exactly these devices."
             }
             DeviceList {
                 Layout.fillWidth: true
@@ -135,7 +135,7 @@ Kirigami.ScrollablePage {
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "How do you want to switch between desktop and PS5? The default is Ctrl+Alt+P. More kinds (mouse button, hold, window rule) are available later under \"Triggers\"."
+                text: "How do you want to switch between desktop and PlayStation? The default is Ctrl+Alt+P. More kinds (mouse button, hold, window rule) are available later under \"Triggers\"."
             }
             TriggerEditor {
                 id: triggers
@@ -154,7 +154,7 @@ Kirigami.ScrollablePage {
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "Now press the trigger and release it. While the bridge is on, you see here what reaches the PS5. Press the trigger again to switch it off."
+                text: "Now press the trigger and release it. While the bridge is on, you see here what reaches the PlayStation. Press the trigger again to switch it off."
             }
             Kirigami.FormLayout {
                 Layout.fillWidth: true
@@ -164,11 +164,11 @@ Kirigami.ScrollablePage {
                     font.bold: true
                 }
                 Controls.Label {
-                    Kirigami.FormData.label: "To the PS5:"
+                    Kirigami.FormData.label: "To the PlayStation:"
                     text: AppController.active ? (AppController.liveText !== "" ? AppController.liveText : "no key") : "–"
                 }
                 Controls.Label {
-                    Kirigami.FormData.label: "PS5:"
+                    Kirigami.FormData.label: "PlayStation:"
                     text: AppController.boardUsb !== "" ? AppController.boardUsb : "–"
                 }
                 Controls.Label {

@@ -1,6 +1,6 @@
 [package]
 name = "pshb-core"
-description = "PS5 HID Bridge core: input capture, protocol, crypto, transport"
+description = "PS HID Bridge core: input capture, protocol, crypto, transport"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

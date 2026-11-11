@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Send test traffic to a PS5 HID Bridge board (or the simulator).
+"""Send test traffic to a PS HID Bridge board (or the simulator).
 
 Examples:
   udp_test.py --psk-file psk.txt 192.168.1.50 ping

@@ -314,11 +314,11 @@ fn group_devices(devices: &[DeviceInfo], config: &Config) -> Vec<DeviceGroup> {
 
 fn usb_text(p: &Pong) -> &'static str {
     if p.status & protocol::STATUS_USB_MOUNTED == 0 {
-        "PS5 not connected"
+        "PlayStation not connected"
     } else if p.status & protocol::STATUS_USB_SUSPENDED != 0 {
-        "PS5 in rest mode"
+        "PlayStation in rest mode"
     } else {
-        "PS5 connected"
+        "PlayStation connected"
     }
 }
 
@@ -540,7 +540,7 @@ impl qobject::AppController {
             ServiceEvent::Status(st) => self.as_mut().apply_status(st),
             ServiceEvent::Notice(n) => {
                 let msg = match n {
-                    Notice::Activated => Some(("Bridge on", "Mouse and keyboard go to the PS5.")),
+                    Notice::Activated => Some(("Bridge on", "Mouse and keyboard go to the PlayStation.")),
                     Notice::Deactivated => {
                         Some(("Bridge off", "Mouse and keyboard belong to the desktop again."))
                     }

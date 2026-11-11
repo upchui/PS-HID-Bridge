@@ -1,13 +1,13 @@
 [package]
-name = "ps5-hid-bridge"
-description = "PS5 HID Bridge desktop application (Qt 6 / Kirigami)"
+name = "ps-hid-bridge"
+description = "PS HID Bridge desktop application (Qt 6 / Kirigami)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "ps5-hid-bridge"
+name = "ps-hid-bridge"
 path = "src/main.rs"
 
 [dependencies]

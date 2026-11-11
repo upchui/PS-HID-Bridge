@@ -25,7 +25,7 @@ TEST(default_then_own_password) {
     pshb_settings_t s;
     settings_defaults(&s);
     CHECK(password_verify(&s, PSHB_DEFAULT_PASSWORD));
-    CHECK(!password_verify(&s, "ps5-hid-bridgeX"));
+    CHECK(!password_verify(&s, "ps-hid-bridgeX"));
     CHECK(!password_verify(&s, ""));
 
     const uint8_t salt[16] = {9, 8, 7};

@@ -1,4 +1,4 @@
-# PS5 HID Bridge -- every build step runs inside Docker.
+# PS HID Bridge -- every build step runs inside Docker.
 # Host requirements: docker, make, git.
 
 SHELL := /bin/bash
@@ -72,7 +72,7 @@ FW_RUN      = $(DOCKER_RUN) $(FW_IMAGE)
 help:
 	@echo "Targets:"
 	@echo "  make firmware      UF2 images            -> out/*.uf2"
-	@echo "  make desktop       AppImage (Qt build!)  -> out/PS5-HID-Bridge-x86_64.AppImage"
+	@echo "  make desktop       AppImage (Qt build!)  -> out/PS-HID-Bridge-x86_64.AppImage"
 	@echo "  make desktop-cli   command line tool     -> out/pshb-cli"
 	@echo "  make test          unit tests, protocol vectors, simulator"
 	@echo "  make sim           board simulator: UDP $(SIM_PORT), web http://localhost:$(SIM_HTTP_PORT)"
@@ -136,8 +136,9 @@ firmware: image-firmware check-pins dirs
 	$(FW_RUN) bash -c 'cmake -S firmware -B $(FW_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=Release \
 		-DPSHB_DEV_PSK=$(DEV_PSK) -DPSHB_W5500_FAST_RX=ON $(FW_CMAKE_ARGS) \
 		&& cmake --build $(FW_BUILD) --parallel $(JOBS)'
-	cp $(FW_BUILD)/*.uf2 out/
-	cp $(FW_BUILD)/ps5-hid-bridge.elf out/
+	@# Exactly the images of this build (images.txt), no leftovers in out/.
+	rm -f out/*.uf2 out/*.elf
+	cd $(FW_BUILD) && cp $$(cat images.txt) ps-hid-bridge.elf $(CURDIR)/out/
 	@ls -l out/*.uf2
 
 # ---------------------------------------------------------------- desktop
@@ -158,7 +159,7 @@ test-firmware: image-firmware dirs
 
 # The real firmware UF2 goes through the network-update writer unchanged.
 test-uf2: firmware test-firmware
-	$(FW_RUN) env PSHB_TEST_UF2=out/ps5-hid-bridge.uf2 PSHB_TEST_BIN=$(FW_BUILD)/ps5-hid-bridge.bin \
+	$(FW_RUN) env PSHB_TEST_UF2=out/ps-hid-bridge.uf2 PSHB_TEST_BIN=$(FW_BUILD)/ps-hid-bridge.bin \
 		$(HOST_BUILD)/test_uf2_writer
 
 # Vectors are up to date and the Python reference agrees with them.
@@ -182,7 +183,7 @@ fmt: image-rust dirs
 # offscreen (warnings are fatal) and quits.
 test-appimage: desktop image-apptest dirs
 	$(DOCKER_RUN) -e APPIMAGE_EXTRACT_AND_RUN=1 -e TMPDIR=/tmp -e LANG=C.UTF-8 $(APPTEST_IMAGE) \
-		bash -c 'timeout 120 out/PS5-HID-Bridge-x86_64.AppImage --self-test'
+		bash -c 'timeout 120 out/PS-HID-Bridge-x86_64.AppImage --self-test'
 
 # ---------------------------------------------------------------- manual testing
 SIM_PORT ?= 45045

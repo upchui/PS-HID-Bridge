@@ -1,14 +1,14 @@
 # WIZnet ioLibrary_Driver (W5500 driver, socket API, DHCP client).
 #
 # dhcp.c hard-codes the DHCP host name ("WIZnet" + last 3 MAC bytes). We
-# compile a generated copy that uses "ps5-hid-bridge-" instead, so the board
+# compile a generated copy that uses "ps-hid-bridge-" instead, so the board
 # is easy to find in the router's client list.
 
 set(PSHB_IOLIB ${PSHB_LIB}/ioLibrary_Driver)
 
 file(READ ${PSHB_IOLIB}/Internet/DHCP/dhcp.c PSHB_DHCP_SRC)
 set(PSHB_DHCP_FROM "uint8_t HOST_NAME[] = DCHP_HOST_NAME;")
-set(PSHB_DHCP_TO "uint8_t HOST_NAME[] = \"ps5-hid-bridge-\";")
+set(PSHB_DHCP_TO "uint8_t HOST_NAME[] = \"ps-hid-bridge-\";")
 string(FIND "${PSHB_DHCP_SRC}" "${PSHB_DHCP_FROM}" PSHB_DHCP_POS)
 if(PSHB_DHCP_POS EQUAL -1)
     message(FATAL_ERROR "ioLibrary dhcp.c changed: HOST_NAME definition not found")

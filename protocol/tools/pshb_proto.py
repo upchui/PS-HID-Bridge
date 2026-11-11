@@ -1,4 +1,4 @@
-"""Reference implementation of the PS5 HID Bridge wire protocol.
+"""Reference implementation of the PS HID Bridge wire protocol.
 
 See protocol/SPEC.md. Used by tools/udp_test.py, the simulator integration
 tests and the test vector generator. Encryption needs the `cryptography`

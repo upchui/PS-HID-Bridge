@@ -2,10 +2,10 @@ import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import PS5HIDBridge
+import PSHIDBridge
 
 // Physical keyboard type (ISO or ANSI). The board sends key positions, so the
-// PS5 layout must match the keyboard anyway; the type only decides which code
+// PlayStation layout must match the keyboard anyway; the type only decides which code
 // the key next to Enter sends.
 ColumnLayout {
     spacing: Kirigami.Units.smallSpacing
@@ -29,6 +29,6 @@ ColumnLayout {
         Layout.fillWidth: true
         wrapMode: Text.WordWrap
         opacity: 0.8
-        text: "The PS5 receives key positions, not characters: set its keyboard language to the layout printed on your keyboard. ISO keyboards have an L-shaped Enter key and an extra key next to the left Shift."
+        text: "The PlayStation receives key positions, not characters: set its keyboard language to the layout printed on your keyboard. ISO keyboards have an L-shaped Enter key and an extra key next to the left Shift."
     }
 }

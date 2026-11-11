@@ -129,7 +129,7 @@ jobs:
       - name: Collect release files
         run: |
           mkdir release
-          cp out/*.uf2 out/PS5-HID-Bridge-x86_64.AppImage release/
+          cp out/*.uf2 out/PS-HID-Bridge-x86_64.AppImage release/
           cp out/pshb-cli release/pshb-cli-x86_64-linux
           (cd release && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
 

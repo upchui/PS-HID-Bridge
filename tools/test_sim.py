@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Integration tests: drive the board simulator (firmware/host/sim_main.c)
-over UDP and check the HID reports it would send to the PS5.
+over UDP and check the HID reports it would send to the PlayStation.
 
 Usage: test_sim.py --sim PATH/TO/pshb-sim
 """
@@ -492,13 +492,13 @@ class WebTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def setup_password(self):
-        self.assertEqual(self.web.login("ps5-hid-bridge")[0], 200)
-        self.assertEqual(self.web.req("POST", "/api/password", {"old": "ps5-hid-bridge", "new": NEW_PW})[0], 200)
+        self.assertEqual(self.web.login("ps-hid-bridge")[0], 200)
+        self.assertEqual(self.web.req("POST", "/api/password", {"old": "ps-hid-bridge", "new": NEW_PW})[0], 200)
 
     def test_static_files_and_headers(self):
         status, body, headers = self.web.req("GET", "/")
         self.assertEqual(status, 200)
-        self.assertIn(b"PS5 HID Bridge", body)
+        self.assertIn(b"PS HID Bridge", body)
         self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
         self.assertEqual(headers["X-Frame-Options"], "DENY")
         self.assertEqual(self.web.req("GET", "/app.js")[0], 200)
@@ -508,18 +508,18 @@ class WebTests(unittest.TestCase):
         st = self.web.req("GET", "/api/state")[1]
         self.assertEqual(st, {"logged_in": False, "must_change_password": True})
         self.assertEqual(self.web.req("GET", "/api/status")[0], 401)
-        self.assertEqual(self.web.req("POST", "/api/login", {"password": "ps5-hid-bridge"}, csrf=False)[0], 403)
+        self.assertEqual(self.web.req("POST", "/api/login", {"password": "ps-hid-bridge"}, csrf=False)[0], 403)
         self.assertEqual(self.web.login("falsch")[0], 401)
-        status, r, _ = self.web.login("ps5-hid-bridge")
+        status, r, _ = self.web.login("ps-hid-bridge")
         self.assertEqual(status, 200)
         self.assertTrue(r["must_change_password"])
         self.assertTrue(self.web.cookie.startswith("pshb_session="))
         # Nothing but the password change works yet.
         self.assertEqual(self.web.req("GET", "/api/status")[0], 403)
-        self.assertEqual(self.web.req("POST", "/api/password", {"old": "ps5-hid-bridge", "new": "kurz"})[0], 400)
-        self.assertEqual(self.web.req("POST", "/api/password", {"old": "ps5-hid-bridge", "new": "ps5-hid-bridge"})[0], 400)
+        self.assertEqual(self.web.req("POST", "/api/password", {"old": "ps-hid-bridge", "new": "kurz"})[0], 400)
+        self.assertEqual(self.web.req("POST", "/api/password", {"old": "ps-hid-bridge", "new": "ps-hid-bridge"})[0], 400)
         self.assertEqual(self.web.req("POST", "/api/password", {"old": "x", "new": NEW_PW})[0], 403)
-        self.assertEqual(self.web.req("POST", "/api/password", {"old": "ps5-hid-bridge", "new": NEW_PW})[0], 200)
+        self.assertEqual(self.web.req("POST", "/api/password", {"old": "ps-hid-bridge", "new": NEW_PW})[0], 200)
         status, st, _ = self.web.req("GET", "/api/status")
         self.assertEqual(status, 200)
         self.assertFalse(st["psk_set"])
@@ -532,13 +532,13 @@ class WebTests(unittest.TestCase):
         # Logout, then only the new password works.
         self.assertEqual(self.web.req("POST", "/api/logout", {})[0], 200)
         self.assertEqual(self.web.req("GET", "/api/status")[0], 401)
-        self.assertEqual(self.web.login("ps5-hid-bridge")[0], 401)
+        self.assertEqual(self.web.login("ps-hid-bridge")[0], 401)
         self.assertEqual(self.web.login(NEW_PW)[0], 200)
 
     def test_login_lockout(self):
         for _ in range(3):
             self.assertEqual(self.web.login("falsch")[0], 401)
-        status, r, _ = self.web.login("ps5-hid-bridge")
+        status, r, _ = self.web.login("ps-hid-bridge")
         self.assertEqual(status, 429)
         self.assertIn("wait", r["error"])
 
@@ -605,7 +605,7 @@ class WebTests(unittest.TestCase):
         self.web.req("POST", "/api/psk/generate", {})
         self.assertEqual(self.web.req("POST", "/api/factory-reset", {})[0], 200)
         self.assertTrue(self.sim.wait_line("REBOOT", timeout=2))
-        status, r, _ = self.web.login("ps5-hid-bridge")
+        status, r, _ = self.web.login("ps-hid-bridge")
         self.assertEqual(status, 200)
         self.assertTrue(r["must_change_password"])
 
@@ -682,7 +682,7 @@ class WebTests(unittest.TestCase):
         self.sim.close()
         self.sim = Sim("--http-port", "0", "--settings", self.settings)
         self.web = Web(self.sim.http_port)
-        self.assertEqual(self.web.login("ps5-hid-bridge")[0], 401)
+        self.assertEqual(self.web.login("ps-hid-bridge")[0], 401)
         self.assertEqual(self.web.login(NEW_PW)[0], 200)
 
 

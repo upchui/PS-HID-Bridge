@@ -1044,7 +1044,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ps5-hid-bridge"
+name = "ps-hid-bridge"
 version = "0.0.0"
 dependencies = [
  "cxx",

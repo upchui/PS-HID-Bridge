@@ -49,7 +49,7 @@ bool ota_begin(uint32_t size, char *err, size_t cap) {
     int r = rom_get_uf2_target_partition(s_workarea, sizeof(s_workarea), UF2_FAMILY_RP2350_ARM_S, &part);
     if (r < 0) {
         snprintf(err, cap,
-                 "No partition table. Install ps5-hid-bridge-pt.uf2 once via BOOTSEL.");
+                 "No partition table. Install ps-hid-bridge-pt.uf2 once via BOOTSEL.");
         return false;
     }
     uint32_t first = (part.permissions_and_location & PICOBIN_PARTITION_LOCATION_FIRST_SECTOR_BITS) >>

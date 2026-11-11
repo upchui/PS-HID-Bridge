@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import PS5HIDBridge
+import PSHIDBridge
 
 Kirigami.ScrollablePage {
     id: page
@@ -79,14 +79,14 @@ Kirigami.ScrollablePage {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     text: AppController.active
-                          ? "Mouse and keyboard go to the PS5. The desktop gets no input."
+                          ? "Mouse and keyboard go to the PlayStation. The desktop gets no input."
                           : "Mouse and keyboard belong to the desktop."
                 }
                 Controls.Label {
                     Layout.fillWidth: true
                     visible: AppController.active
                     font.bold: true
-                    text: "To the PS5: " + (AppController.liveText !== "" ? AppController.liveText : "no key")
+                    text: "To the PlayStation: " + (AppController.liveText !== "" ? AppController.liveText : "no key")
                 }
             }
         }
@@ -100,7 +100,7 @@ Kirigami.ScrollablePage {
                       : (AppController.connected ? "connected" : "not reachable") + " (" + AppController.boardAddress + ")"
             }
             Controls.Label {
-                Kirigami.FormData.label: "PS5:"
+                Kirigami.FormData.label: "PlayStation:"
                 text: AppController.boardUsb !== "" ? AppController.boardUsb : "unknown"
             }
             Controls.Label {

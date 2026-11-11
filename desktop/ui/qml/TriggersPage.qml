@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import PS5HIDBridge
+import PSHIDBridge
 
 Kirigami.ScrollablePage {
     title: "Triggers"
@@ -64,7 +64,7 @@ Kirigami.ScrollablePage {
         Controls.Label {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
-            text: "Ctrl+Alt+Shift+Esc always releases mouse and keyboard at once and lets go of every key on the PS5. This combination cannot be changed."
+            text: "Ctrl+Alt+Shift+Esc always releases mouse and keyboard at once and lets go of every key on the PlayStation. This combination cannot be changed."
         }
     }
 }

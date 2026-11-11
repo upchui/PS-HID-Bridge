@@ -1,4 +1,4 @@
-// Build-time configuration of the PS5 HID Bridge firmware.
+// Build-time configuration of the PS HID Bridge firmware.
 #ifndef PSHB_CONFIG_H
 #define PSHB_CONFIG_H
 

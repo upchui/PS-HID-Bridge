@@ -1,6 +1,6 @@
 // Recovery image (runs from RAM): erase the whole flash, then return to the
 // USB bootloader. Use when nothing else helps: BOOTSEL, copy
-// ps5-hid-bridge-nuke.uf2, then install partition table and firmware again.
+// ps-hid-bridge-nuke.uf2, then install partition table and firmware again.
 
 #include "hardware/flash.h"
 #include "pico/bootrom.h"

@@ -31,9 +31,9 @@ pub fn send_now(summary: &str, body: &str) {
         Some("org.freedesktop.Notifications"),
         "Notify",
         &(
-            "PS5 HID Bridge",
+            "PS HID Bridge",
             LAST_ID.load(Ordering::Relaxed),
-            "io.github.thealhu.ps5hidbridge",
+            "io.github.thealhu.pshidbridge",
             summary,
             body,
             Vec::<&str>::new(),

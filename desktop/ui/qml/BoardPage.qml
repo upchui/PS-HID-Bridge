@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import PS5HIDBridge
+import PSHIDBridge
 
 Kirigami.ScrollablePage {
     id: page
@@ -82,7 +82,7 @@ Kirigami.ScrollablePage {
                 text: AppController.boardFirmware !== "" ? AppController.boardFirmware : "–"
             }
             Controls.Label {
-                Kirigami.FormData.label: "PS5:"
+                Kirigami.FormData.label: "PlayStation:"
                 text: AppController.boardUsb !== "" ? AppController.boardUsb : "–"
             }
             Controls.Label {
@@ -95,7 +95,7 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
             opacity: 0.8
-            text: "The board's web interface creates the key under \"Security\". Your router shows the address (device name ps5-hid-bridge-…)."
+            text: "The board's web interface creates the key under \"Security\". Your router shows the address (device name ps-hid-bridge-…)."
         }
     }
 }

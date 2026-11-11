@@ -1,4 +1,4 @@
-//! PS5 HID Bridge core library.
+//! PS HID Bridge core library.
 //!
 //! Reads mouse and keyboard via evdev, decides with the trigger engine when
 //! the bridge is active, encrypts input with ChaCha20-Poly1305 and sends it

@@ -1,4 +1,4 @@
-//! PS5 HID Bridge desktop application (Qt 6 / Kirigami via cxx-qt).
+//! PS HID Bridge desktop application (Qt 6 / Kirigami via cxx-qt).
 //!
 //! Options:
 //!   --self-test            load every page offscreen, then quit (warnings are fatal)
@@ -13,7 +13,7 @@ use cxx_qt_lib::{QByteArray, QGuiApplication, QQmlApplicationEngine, QString, QU
 
 // Instantiate the window through the module (resolves via the qmldir in the
 // compiled-in resources, like QQmlApplicationEngine::loadFromModule).
-const MAIN_QML: &str = "import PS5HIDBridge\nMain {}\n";
+const MAIN_QML: &str = "import PSHIDBridge\nMain {}\n";
 
 /// One instance per user: a second one would fight over the devices, the
 /// packet counter and the KWin script, and show a second tray icon.
@@ -21,11 +21,11 @@ fn single_instance() -> Option<std::fs::File> {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    match pshb_core::lockfile::exclusive(&dir.join("ps5-hid-bridge.lock")) {
+    match pshb_core::lockfile::exclusive(&dir.join("ps-hid-bridge.lock")) {
         Ok(lock) => Some(lock),
         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-            eprintln!("PS5 HID Bridge is already running.");
-            notify::send_now("PS5 HID Bridge is already running", "Open it from its tray icon.");
+            eprintln!("PS HID Bridge is already running.");
+            notify::send_now("PS HID Bridge is already running", "Open it from its tray icon.");
             std::process::exit(0);
         }
         Err(_) => None, // no lock possible: start anyway
@@ -55,20 +55,19 @@ fn main() {
     }
 
     // Register our QML module (QML files, AppController) with the engine.
-    cxx_qt::init_qml_module!("PS5HIDBridge");
+    cxx_qt::init_qml_module!("PSHIDBridge");
 
     let mut app = QGuiApplication::new();
     let mut engine = QQmlApplicationEngine::new();
 
     if let Some(mut app) = app.as_mut() {
-        app.as_mut()
-            .set_application_name(&QString::from("ps5-hid-bridge"));
+        app.as_mut().set_application_name(&QString::from("ps-hid-bridge"));
         app.as_mut()
             .set_application_version(&QString::from(pshb_core::VERSION));
         app.as_mut()
-            .set_organization_name(&QString::from("ps5-hid-bridge"));
+            .set_organization_name(&QString::from("ps-hid-bridge"));
     }
-    QGuiApplication::set_desktop_file_name(&QString::from("io.github.thealhu.ps5hidbridge"));
+    QGuiApplication::set_desktop_file_name(&QString::from("io.github.thealhu.pshidbridge"));
 
     if let Some(mut engine) = engine.as_mut() {
         engine
@@ -82,7 +81,7 @@ fn main() {
         let startup = std::env::var("PSHB_STARTUP_QML").unwrap_or_else(|_| MAIN_QML.to_string());
         engine.load_data(
             &QByteArray::from(startup.as_str()),
-            &QUrl::from("qrc:/ps5-hid-bridge/startup.qml"),
+            &QUrl::from("qrc:/ps-hid-bridge/startup.qml"),
         );
     }
 

@@ -76,7 +76,7 @@ pub enum ServiceEvent {
     Recorded(String),
     /// A selected device produced a key or button press.
     Identified(PathBuf),
-    /// What the PS5 currently receives, e.g. "Shift + A · mouse: left".
+    /// What the PlayStation currently receives, e.g. "Shift + A · mouse: left".
     Live(String),
     Error(String),
 }
@@ -441,7 +441,7 @@ impl Runner {
                     Ok(ServiceCmd::Focus(f)) => self.focus(f),
                     Ok(ServiceCmd::Record(on)) => {
                         if on {
-                            // Never record while the PS5 gets the keys.
+                            // Never record while the PlayStation gets the keys.
                             self.command(Action::Off);
                         }
                         self.recording = on.then(BTreeSet::new);

@@ -16,9 +16,9 @@ include(${PICO_SDK_PATH}/pico_sdk_init.cmake)
 # the binary version of the OTA images.
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/version.cmake)
 
-project(ps5_hid_bridge VERSION ${PSHB_VERSION} LANGUAGES C CXX ASM)
+project(ps_hid_bridge VERSION ${PSHB_VERSION} LANGUAGES C CXX ASM)
 set(CMAKE_C_STANDARD 11)
-message(STATUS "PS5 HID Bridge firmware ${PROJECT_VERSION}")
+message(STATUS "PS HID Bridge firmware ${PROJECT_VERSION}")
 
 pico_sdk_init()
 
@@ -101,25 +101,33 @@ if(PSHB_DEV_PSK)
     add_compile_definitions(PSHB_DEV_PSK="${PSHB_DEV_PSK}")
 endif()
 
-pshb_add_firmware(ps5-hid-bridge OTA)
+pshb_add_firmware(ps-hid-bridge OTA)
 
 # Partition table: A/B firmware slots + settings (see partitions/pt.json).
 # Flash it once before the first firmware image (README, "Erstinstallation").
 add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/ps5-hid-bridge-pt.uf2
+    OUTPUT ${CMAKE_BINARY_DIR}/ps-hid-bridge-pt.uf2
     COMMAND picotool partition create ${CMAKE_CURRENT_LIST_DIR}/partitions/pt.json
-            ${CMAKE_BINARY_DIR}/ps5-hid-bridge-pt.uf2
+            ${CMAKE_BINARY_DIR}/ps-hid-bridge-pt.uf2
     DEPENDS ${CMAKE_CURRENT_LIST_DIR}/partitions/pt.json
     COMMENT "Creating partition table UF2"
 )
-add_custom_target(partition_table ALL DEPENDS ${CMAKE_BINARY_DIR}/ps5-hid-bridge-pt.uf2)
-pshb_add_firmware(ps5-hid-bridge-plain OTA DEFINES PSHB_PLAINTEXT_DEBUG=1)
-pshb_add_firmware(ps5-hid-bridge-rollbacktest OTA DEFINES PSHB_OTA_NO_CONFIRM=1)
+add_custom_target(partition_table ALL DEPENDS ${CMAKE_BINARY_DIR}/ps-hid-bridge-pt.uf2)
+pshb_add_firmware(ps-hid-bridge-plain OTA DEFINES PSHB_PLAINTEXT_DEBUG=1)
+pshb_add_firmware(ps-hid-bridge-rollbacktest OTA DEFINES PSHB_OTA_NO_CONFIRM=1)
 
 # Recovery: erase everything (RAM-only image).
-add_executable(ps5-hid-bridge-nuke src/tools/nuke.c)
-target_link_libraries(ps5-hid-bridge-nuke PRIVATE pico_stdlib hardware_flash)
-pico_set_binary_type(ps5-hid-bridge-nuke no_flash)
-pico_add_extra_outputs(ps5-hid-bridge-nuke)
-pshb_add_firmware(ps5-hid-bridge-hidtest DEFINES PSHB_TEST_PATTERN=1)
-pshb_add_firmware(ps5-hid-bridge-hidtest-mouse8 DEFINES PSHB_TEST_PATTERN=1 PSHB_MOUSE_8BIT=1)
+add_executable(ps-hid-bridge-nuke src/tools/nuke.c)
+target_link_libraries(ps-hid-bridge-nuke PRIVATE pico_stdlib hardware_flash)
+pico_set_binary_type(ps-hid-bridge-nuke no_flash)
+pico_add_extra_outputs(ps-hid-bridge-nuke)
+pshb_add_firmware(ps-hid-bridge-hidtest DEFINES PSHB_TEST_PATTERN=1)
+pshb_add_firmware(ps-hid-bridge-hidtest-mouse8 DEFINES PSHB_TEST_PATTERN=1 PSHB_MOUSE_8BIT=1)
+
+# The images of this build: the Makefile copies exactly these to out/ (not
+# leftovers of renamed or removed targets in the build directory).
+set(PSHB_IMAGES ps-hid-bridge ps-hid-bridge-pt ps-hid-bridge-plain ps-hid-bridge-rollbacktest
+    ps-hid-bridge-nuke ps-hid-bridge-hidtest ps-hid-bridge-hidtest-mouse8)
+list(TRANSFORM PSHB_IMAGES APPEND ".uf2")
+list(JOIN PSHB_IMAGES "\n" PSHB_IMAGES_TEXT)
+file(CONFIGURE OUTPUT ${CMAKE_BINARY_DIR}/images.txt CONTENT "${PSHB_IMAGES_TEXT}\n")

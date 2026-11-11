@@ -1,13 +1,13 @@
-# PS5 HID Bridge
+# PS HID Bridge
 
-Control a PS5 with the mouse and keyboard of a Linux PC while the picture comes in via Remote Play (chiaki-ng).
+Control a PlayStation with the mouse and keyboard of a Linux PC while the picture comes in via Remote Play (chiaki-ng).
 
-Remote Play only carries controller input. Mouse and keyboard therefore take a separate path through a small board on the PS5's USB port:
+Remote Play only carries controller input. Mouse and keyboard therefore take a separate path through a small board on the PlayStation's USB port:
 
 1. The desktop app reads mouse and keyboard via evdev and grabs them exclusively.
 2. It encrypts the input (ChaCha20-Poly1305) and sends it over the LAN via UDP.
-3. The board (WIZnet W5500-EVB-Pico2) verifies and decrypts it and passes it on to the PS5 as USB HID reports.
-4. The PS5 sees an ordinary keyboard and mouse. The controller keeps working through Remote Play.
+3. The board (WIZnet W5500-EVB-Pico2) verifies and decrypts it and passes it on to the PlayStation as USB HID reports.
+4. The PlayStation sees an ordinary keyboard and mouse. The controller keeps working through Remote Play.
 
 The packet format is described in [protocol/SPEC.md](protocol/SPEC.md). If no valid packet arrives for 250 ms, the board releases all keys (failsafe).
 
@@ -31,34 +31,34 @@ Every commit on `main` is built and tested automatically and published as a pre-
 ## Quick start
 
 1. **Get the files:** download them from the latest release, or build them yourself with `make submodules && make all` (see "Building"; the first run takes long because of Qt).
-2. **Flash the board:** hold BOOTSEL and plug the board into the PC via USB; the drive `RP2350` appears. First copy `out/ps5-hid-bridge-pt.uf2` onto it (partition table; the board comes back as a drive afterwards), then `out/ps5-hid-bridge.uf2`.
-3. **Connect the board:** network cable, USB to the PS5. Look up the IP in your router (`ps5-hid-bridge-XXXXXX`) and open it in the browser.
-4. **Web interface:** log in with `ps5-hid-bridge`, set your own password, generate a key under "Security".
-5. **App:** start `out/PS5-HID-Bridge-x86_64.AppImage`. The wizard asks for the board address and key, the devices, the keyboard type and the trigger.
-6. **PS5:** set the keyboard language to the layout of your keyboard (see "Keyboard layout") and switch on USB power in rest mode in the power saving settings.
+2. **Flash the board:** hold BOOTSEL and plug the board into the PC via USB; the drive `RP2350` appears. First copy `out/ps-hid-bridge-pt.uf2` onto it (partition table; the board comes back as a drive afterwards), then `out/ps-hid-bridge.uf2`.
+3. **Connect the board:** network cable, USB to the PlayStation. Look up the IP in your router (`ps-hid-bridge-XXXXXX`) and open it in the browser.
+4. **Web interface:** log in with `ps-hid-bridge`, set your own password, generate a key under "Security".
+5. **App:** start `out/PS-HID-Bridge-x86_64.AppImage`. The wizard asks for the board address and key, the devices, the keyboard type and the trigger.
+6. **PlayStation:** set the keyboard language to the layout of your keyboard (see "Keyboard layout") and switch on USB power in rest mode in the power saving settings.
 
 ## Desktop app
 
-`out/PS5-HID-Bridge-x86_64.AppImage` runs on current Linux systems (built against glibc 2.34) under Wayland and X11.
+`out/PS-HID-Bridge-x86_64.AppImage` runs on current Linux systems (built against glibc 2.34) under Wayland and X11.
 
-- **Wizard** on first start: board (address, key, connection test) → select devices and set up access, keyboard type → trigger → live test that shows what reaches the PS5.
-- **Status:** bridge on/off, connection, PS5 connected/rest mode, latency to the board with median and 95th percentile plus history, packets per second.
+- **Wizard** on first start: board (address, key, connection test) → select devices and set up access, keyboard type → trigger → live test that shows what reaches the PlayStation.
+- **Status:** bridge on/off, connection, PlayStation connected/rest mode, latency to the board with median and 95th percentile plus history, packets per second.
 - **Devices:** keyboards and mice, grouped per device. "Press a key to identify" marks the device you are typing on. Below the list: the keyboard type (ISO or ANSI).
 - **Triggers:** key combination, mouse button (`Mouse4`, `Mouse5`), *Hold* (bridge on only while pressed) and *Double tap*; each with the action Toggle, Switch on, Switch off, Pause or Release all. "Record" takes over the combination you press.
 - **Window rule** (KDE Plasma, off by default): see below.
 - **Mouse:** sensitivity and acceleration with a curve preview; the default is the raw values.
 - **Tray icon:** grey = board not reachable, blue = ready, green = bridge on. A click toggles. A Plasma notification appears when the bridge switches.
-- **Emergency stop:** `Ctrl+Alt+Shift+Esc` always releases mouse and keyboard at once and lets go of everything on the PS5. This combination cannot be switched off.
+- **Emergency stop:** `Ctrl+Alt+Shift+Esc` always releases mouse and keyboard at once and lets go of everything on the PlayStation. This combination cannot be switched off.
 
 The bridge only switches on once all keys are released: if the devices were grabbed while a key is down, that key would stay stuck on the desktop. *Hold* triggers are the exception, because their key is down by definition: the desktop does not see that key (or any other key held at that moment) being released, so it considers it pressed until it is pressed again. A mouse button (`Mouse4`) is therefore a better hold key than a keyboard key. The emergency stop and "Switch off" end a hold until its key is released. If the app hangs, a watchdog releases the devices after one second.
 
-Settings: `~/.config/ps5-hid-bridge/config.toml`, key: `~/.config/ps5-hid-bridge/psk` (readable by the user only).
+Settings: `~/.config/ps-hid-bridge/config.toml`, key: `~/.config/ps-hid-bridge/psk` (readable by the user only). The project used to be called PS5 HID Bridge: settings, key and packet counter under the old name (`~/.config/ps5-hid-bridge`, `~/.local/state/ps5-hid-bridge`) move to the new folders on the first start, and "Set up access" replaces the old udev rule file.
 
 ### Keyboard layout
 
-The board sends key **positions**, not characters, just like a real USB keyboard. The PS5 turns them into characters with its own keyboard language setting. So:
+The board sends key **positions**, not characters, just like a real USB keyboard. The PlayStation turns them into characters with its own keyboard language setting. So:
 
-- **On the PS5**, set the keyboard language in the keyboard settings to the layout printed on your keyboard, e.g. German for a German keyboard.
+- **On the PlayStation**, set the keyboard language in the keyboard settings to the layout printed on your keyboard, e.g. German for a German keyboard.
 - **In the app**, choose the physical keyboard type under "Devices" (or in the wizard):
 
 | Type | Typical layouts | Recognisable by |
@@ -85,7 +85,7 @@ With the command line tool (the setting is used by the desktop app): `pshb-cli c
 A normal user may not read keyboard and mouse raw. In the wizard the app sets up a udev rule **only for the selected devices** (it asks once for the administrator password):
 
 ```
-# /etc/udev/rules.d/70-ps5-hid-bridge.rules
+# /etc/udev/rules.d/70-ps-hid-bridge.rules
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{id/vendor}=="046d", ATTRS{id/product}=="c52b", TAG+="uaccess"
 ```
 
@@ -128,8 +128,8 @@ focus on              # window rule: the window has the focus
 
 At `http://<board IP>/`:
 
-- **Login:** factory password `ps5-hid-bridge`. On the first login you must set your own password (8–64 characters). After three failed attempts the waiting time grows up to 64 seconds.
-- **Status:** connection to the PS5, network, firmware and slot, packet counters.
+- **Login:** factory password `ps-hid-bridge`. On the first login you must set your own password (8–64 characters). After three failed attempts the waiting time grows up to 64 seconds.
+- **Status:** connection to the PlayStation, network, firmware and slot, packet counters.
 - **Network:** DHCP or static address, UDP port. Saving restarts the board.
 - **Security:** generate a pre-shared key (shown exactly once) or enter an existing one, sender filter (one address such as `192.168.1.20` or a subnet such as `192.168.1.0/24`), change the password.
 - **System:** firmware update, restart, factory reset.
@@ -138,48 +138,48 @@ The web interface uses unencrypted HTTP in the local network. The password prote
 
 ### Network and LED
 
-The board gets an address via DHCP and registers as `ps5-hid-bridge-XXXXXX` (last six digits of the MAC address). It receives input on UDP port 45045.
+The board gets an address via DHCP and registers as `ps-hid-bridge-XXXXXX` (last six digits of the MAC address). It receives input on UDP port 45045.
 
 LED: blinks slowly = no USB host, blinks fast = USB present but no IP yet, steady = ready (flickers briefly on input).
 
 ### Firmware update over the network
 
-Web interface → System → upload `ps5-hid-bridge.uf2`. The board writes the new firmware into the second slot (A/B), checks checksum and content and starts it "on trial". Only when it has started by itself and reaches the network chip is it accepted permanently. If it does not start properly, the board returns to the previous version after a restart. Every new firmware carries a higher version (its last part is the number of commits); the boot ROM always starts the newer one.
+Web interface → System → upload `ps-hid-bridge.uf2`. The board writes the new firmware into the second slot (A/B), checks checksum and content and starts it "on trial". Only when it has started by itself and reaches the network chip is it accepted permanently. If it does not start properly, the board returns to the previous version after a restart. Every new firmware carries a higher version (its last part is the number of commits); the boot ROM always starts the newer one.
 
-This needs the partition table from the first installation (`ps5-hid-bridge-pt.uf2`).
+This needs the partition table from the first installation (`ps-hid-bridge-pt.uf2`).
 
 ### Factory reset and recovery
 
 - **Factory reset:** in the web interface, or hold the BOOTSEL button for 5 seconds while the board is running. Password, key and network settings are erased.
 - **Reflashing always works:** hold BOOTSEL while plugging in and copy a UF2 file.
-- **Erase everything:** copy `out/ps5-hid-bridge-nuke.uf2` via BOOTSEL. It erases the whole flash and returns to the drive; then install partition table and firmware again.
+- **Erase everything:** copy `out/ps-hid-bridge-nuke.uf2` via BOOTSEL. It erases the whole flash and returns to the drive; then install partition table and firmware again.
 
 ### Other images
 
 | File | Purpose |
 |---|---|
-| `ps5-hid-bridge.uf2` | normal firmware |
-| `ps5-hid-bridge-pt.uf2` | partition table (once, before the first firmware) |
-| `ps5-hid-bridge-hidtest.uf2` | no network: 5 s after plugging in, the mouse moves in a square |
-| `ps5-hid-bridge-hidtest-mouse8.uf2` | the same with 8-bit mouse axes, in case a host dislikes the 16-bit descriptor |
-| `ps5-hid-bridge-plain.uf2` | **bring-up only:** also accepts unencrypted packets |
-| `ps5-hid-bridge-rollbacktest.uf2` | **testing only:** never confirms itself after an update, the board must return to the previous version |
-| `ps5-hid-bridge-nuke.uf2` | erases the whole flash |
+| `ps-hid-bridge.uf2` | normal firmware |
+| `ps-hid-bridge-pt.uf2` | partition table (once, before the first firmware) |
+| `ps-hid-bridge-hidtest.uf2` | no network: 5 s after plugging in, the mouse moves in a square |
+| `ps-hid-bridge-hidtest-mouse8.uf2` | the same with 8-bit mouse axes, in case a host dislikes the 16-bit descriptor |
+| `ps-hid-bridge-plain.uf2` | **bring-up only:** also accepts unencrypted packets |
+| `ps-hid-bridge-rollbacktest.uf2` | **testing only:** never confirms itself after an update, the board must return to the previous version |
+| `ps-hid-bridge-nuke.uf2` | erases the whole flash |
 
 Console: UART0 (GP0/GP1, 115200 baud). The USB ID `1209:0001` is the pid.codes test PID and meant for private use only.
 
 ## Latency
 
-The input path takes about 1–2 ms from a key press or mouse movement to the PS5; the video path (PS5 encoder → network → chiaki-ng → display) takes tens of milliseconds. The input path is built to stay short even when the PC is busy:
+The input path takes about 1–2 ms from a key press or mouse movement to the PlayStation; the video path (PlayStation encoder → network → chiaki-ng → display) takes tens of milliseconds. The input path is built to stay short even when the PC is busy:
 
 - **App:** one thread waits on all selected devices, runs the trigger logic and sends the packet itself, without handing the event to another thread. It runs with real-time priority (through rtkit, which desktops with PipeWire usually have, or directly if the user may use `SCHED_FIFO`, e.g. via a `realtime` group). If neither works, the status page says "normal priority".
-- **Network:** packets are marked DSCP EF, so Wi-Fi sends them in the voice queue. A cable is still better: connect the PC and the PS5 by cable and the board to the same switch.
+- **Network:** packets are marked DSCP EF, so Wi-Fi sends them in the voice queue. A cable is still better: connect the PC and the PlayStation by cable and the board to the same switch.
 - **Board:** core 0 handles nothing but USB and the input socket; network management and the web interface run on core 1 and use the SPI bus as little as possible.
 
 Measuring:
 
 - App, status page: "Input → network" (kernel time of the event until the packet is sent), median, 95 % and maximum. On the command line: `pshb-cli run --stats`.
-- Board, web interface (Status): "Latency" with the time from a packet to the report fetched by the PS5, the receive and decrypt time, and how often mouse motion had to wait for the previous report.
+- Board, web interface (Status): "Latency" with the time from a packet to the report fetched by the PlayStation, the receive and decrypt time, and how often mouse motion had to wait for the previous report.
 - `tools/latency_bench.py --cli out/pshb-cli --vendor VVVV --product PPPP [--load 16]` measures the app from outside: it creates a virtual mouse via `/dev/uinput`, plays the board and reports percentiles, optionally with busy processes on every core. It needs write access to `/dev/uinput` and read access to the virtual device (`--vendor`/`--product` of a device that your udev rule covers). Typical on a desktop with real-time priority: median about 0.1 ms, 99 % below 0.3 ms, also with every core busy.
 
 ## Bring-up on real hardware
@@ -187,14 +187,14 @@ Measuring:
 These points cannot be checked without a board. The order is chosen so that each step builds on the previous one:
 
 1. `picotool info -a` (BOOTSEL mode): RP2350A, 2 MB flash.
-2. `ps5-hid-bridge-hidtest.uf2` on the PC: `lsusb -v` (1209:0001, two HID interfaces), `evtest` (the mouse moves in a square), polling rate 1000 Hz (`usbhid-dump` / usbmon).
-3. The same image on the PS5: mouse in the menu and in a game with mouse support, also during a running Remote Play session (Aimlabs). If the mouse does not react: try `-hidtest-mouse8.uf2`.
-4. Partition table + `ps5-hid-bridge-plain.uf2`: DHCP, host name in the router, `make udp-test IP=… ARGS='--plain flood --rate 1000 --seconds 10'` without losses; test SPI clock 37.5 MHz (`PSHB_W5500_SPI_HZ`, i.e. clk_peri / 4).
+2. `ps-hid-bridge-hidtest.uf2` on the PC: `lsusb -v` (1209:0001, two HID interfaces), `evtest` (the mouse moves in a square), polling rate 1000 Hz (`usbhid-dump` / usbmon).
+3. The same image on the PlayStation: mouse in the menu and in a game with mouse support, also during a running Remote Play session (Aimlabs). If the mouse does not react: try `-hidtest-mouse8.uf2`.
+4. Partition table + `ps-hid-bridge-plain.uf2`: DHCP, host name in the router, `make udp-test IP=… ARGS='--plain flood --rate 1000 --seconds 10'` without losses; test SPI clock 37.5 MHz (`PSHB_W5500_SPI_HZ`, i.e. clk_peri / 4).
 5. Waiting time on core 0 while the web interface loads (GPIO pulse + logic analyser, or the maximum of "Receive and decrypt" on the Latency card): should stay below 0.5 ms.
 6. Normal firmware, key via the web interface, connect the app; check the failsafe (pull the network cable while a key is pressed → released after 250 ms).
-7. Update over the network with `ps5-hid-bridge.uf2` (slot changes from A to B), then with `ps5-hid-bridge-rollbacktest.uf2`: this image deliberately never confirms itself; after about 17 seconds the board must restart by itself with the previous version (check slot and firmware in the web interface).
+7. Update over the network with `ps-hid-bridge.uf2` (slot changes from A to B), then with `ps-hid-bridge-rollbacktest.uf2`: this image deliberately never confirms itself; after about 17 seconds the board must restart by itself with the previous version (check slot and firmware in the web interface).
 8. Settings survive several updates (they live outside the firmware slots).
-9. Latency card in the web interface while moving the mouse in a game: "Receive and decrypt" should stay well below 0.1 ms; "Packet → report fetched" around 0.5–1 ms. Compare with a build using `make firmware FW_CMAKE_ARGS=-DPSHB_W5500_FAST_RX=OFF` (plain ioLibrary receive). Note "Mouse motion that had to wait": a high count means reports should rather be filled right before the PS5 fetches them instead of as early as possible — that can save up to 1 ms with continuous motion. Also check after the PS5 wakes from rest mode that no old keystrokes arrive, and that logging in to the web interface works (it needs the larger core 1 stack).
+9. Latency card in the web interface while moving the mouse in a game: "Receive and decrypt" should stay well below 0.1 ms; "Packet → report fetched" around 0.5–1 ms. Compare with a build using `make firmware FW_CMAKE_ARGS=-DPSHB_W5500_FAST_RX=OFF` (plain ioLibrary receive). Note "Mouse motion that had to wait": a high count means reports should rather be filled right before the PlayStation fetches them instead of as early as possible — that can save up to 1 ms with continuous motion. Also check after the PlayStation wakes from rest mode that no old keystrokes arrive, and that logging in to the web interface works (it needs the larger core 1 stack).
 
 ## Building
 
@@ -204,7 +204,7 @@ Everything is built in Docker. The host only needs `docker`, `make` and `git`.
 make submodules        # Pico SDK, TinyUSB, ioLibrary, Monocypher (pinned, not recursive)
 make firmware          # -> out/*.uf2
 make desktop-cli       # -> out/pshb-cli
-make desktop           # -> out/PS5-HID-Bridge-x86_64.AppImage
+make desktop           # -> out/PS-HID-Bridge-x86_64.AppImage
 make test              # unit tests, test vectors, simulator, Rust tests
 make all               # everything, including the AppImage self-test (tests first)
 make -j2 -O all        # the same, two steps at a time (faster)

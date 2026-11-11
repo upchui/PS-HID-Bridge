@@ -1,4 +1,4 @@
-//! Settings file (~/.config/ps5-hid-bridge/config.toml) and the key file.
+//! Settings file (~/.config/ps-hid-bridge/config.toml) and the key file.
 
 use std::fs;
 use std::io::{self, Write};
@@ -221,12 +221,28 @@ fn home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
+const APP_DIR: &str = "ps-hid-bridge";
+/// Directory name before the project was renamed (PS5 HID Bridge).
+const OLD_APP_DIR: &str = "ps5-hid-bridge";
+
 fn xdg(var: &str, fallback: &str) -> PathBuf {
-    std::env::var_os(var)
+    let base = std::env::var_os(var)
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| home().join(fallback))
-        .join("ps5-hid-bridge")
+        .unwrap_or_else(|| home().join(fallback));
+    app_dir(&base)
+}
+
+/// `base/ps-hid-bridge`; settings, key and packet counter under the old
+/// name move there once. The counter must move along: a fresh one could
+/// repeat values already used with the same key.
+fn app_dir(base: &Path) -> PathBuf {
+    let dir = base.join(APP_DIR);
+    let old = base.join(OLD_APP_DIR);
+    if !dir.exists() && old.is_dir() {
+        let _ = fs::rename(&old, &dir);
+    }
+    dir
 }
 
 pub fn config_dir() -> PathBuf {
@@ -406,6 +422,24 @@ mod tests {
             ..Default::default()
         };
         assert!(c.engine_config().unwrap_err().contains("Banana"));
+    }
+
+    #[test]
+    fn files_under_the_old_name_move_once() {
+        let base = temp("rename");
+        let old = base.join(OLD_APP_DIR);
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("counter"), "12345\n").unwrap();
+        let dir = app_dir(&base);
+        assert_eq!(dir, base.join(APP_DIR));
+        assert_eq!(fs::read_to_string(dir.join("counter")).unwrap(), "12345\n");
+        assert!(!old.exists());
+        // An old directory that shows up later is left alone.
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("counter"), "1\n").unwrap();
+        app_dir(&base);
+        assert_eq!(fs::read_to_string(dir.join("counter")).unwrap(), "12345\n");
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
