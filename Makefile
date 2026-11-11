@@ -64,7 +64,7 @@ DESKTOP_RUN = $(DOCKER_RUN) $(CARGO_ENV) -e APPIMAGE_EXTRACT_AND_RUN=1 $(DESKTOP
 FW_RUN      = $(DOCKER_RUN) $(FW_IMAGE)
 
 .PHONY: help all firmware desktop desktop-cli test test-firmware test-desktop test-appimage \
-        test-sim test-protocol test-uf2 sim udp-test fmt submodules check-pins check-version images \
+        test-sim test-protocol test-uf2 sim udp-test fmt submodules check-pins check-version check-icons images \
         image-firmware image-rust image-desktop image-apptest print-version print-release-tag \
         print-toolchain-tag \
         shell-fw shell-desktop clean distclean dirs
@@ -127,6 +127,11 @@ check-version:
 print-version:
 	@tools/version.sh
 
+# desktop/ui/qml/Icons.qml and the web interface's icon sprite are generated
+# from desktop/ui/icons/*.svg by tools/gen_icons.py.
+check-icons:
+	@python3 tools/gen_icons.py --check
+
 # Release tag, e.g. v0.9.16: every commit on main gets a higher one.
 print-release-tag:
 	@v=$$(tools/version.sh) && echo "v$$v"
@@ -150,7 +155,7 @@ desktop: image-desktop dirs
 	$(DESKTOP_RUN) bash desktop/packaging/build-appimage.sh
 
 # ---------------------------------------------------------------- tests
-test: check-version test-protocol test-firmware test-sim test-desktop
+test: check-version check-icons test-protocol test-firmware test-sim test-desktop
 
 test-firmware: image-firmware dirs
 	$(FW_RUN) bash -c 'cmake -S firmware/host -B $(HOST_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=Debug \

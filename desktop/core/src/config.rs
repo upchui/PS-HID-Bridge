@@ -117,6 +117,8 @@ pub struct Config {
     pub setup_done: bool,
     /// Look for new releases on GitHub (GUI: at start and every 6 hours).
     pub update_check: bool,
+    /// Look of the app: "system" (follow the desktop), "light" or "dark".
+    pub appearance: String,
 }
 
 impl Default for Config {
@@ -134,6 +136,7 @@ impl Default for Config {
             iso_keyboard: true,
             setup_done: false,
             update_check: true,
+            appearance: "system".into(),
         }
     }
 }
@@ -177,6 +180,9 @@ impl Config {
     /// versions ("Strg+Alt+P" -> "Ctrl+Alt+P"). Entries that do not parse are
     /// kept as they are, so the error is reported where they are used.
     fn normalize(&mut self) {
+        if !["system", "light", "dark"].contains(&self.appearance.as_str()) {
+            self.appearance = "system".into();
+        }
         for t in &mut self.triggers {
             if let Ok(combo) = Combo::parse(&t.keys) {
                 t.keys = combo.to_text();
@@ -410,9 +416,22 @@ mod tests {
     }
 
     #[test]
+    fn appearance_is_kept_or_falls_back_to_system() {
+        let dir = temp("appearance");
+        let path = dir.join("config.toml");
+        fs::create_dir_all(&dir).unwrap();
+        for (stored, loaded) in [("dark", "dark"), ("light", "light"), ("purple", "system")] {
+            fs::write(&path, format!("appearance = \"{stored}\"\n")).unwrap();
+            assert_eq!(Config::load(&path).unwrap().appearance, loaded);
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn missing_file_gives_defaults() {
         let c = Config::load(Path::new("/nonexistent/pshb.toml")).unwrap();
         assert_eq!(c.triggers[0].keys, "Ctrl+Alt+P");
+        assert_eq!(c.appearance, "system");
     }
 
     #[test]

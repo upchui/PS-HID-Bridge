@@ -1,34 +1,27 @@
 import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
-import org.kde.kirigami as Kirigami
 import PSHIDBridge
 
 // Physical keyboard type (ISO or ANSI). The board sends key positions, so the
-// PlayStation layout must match the keyboard anyway; the type only decides which code
-// the key next to Enter sends.
-ColumnLayout {
-    spacing: Kirigami.Units.smallSpacing
+// PlayStation layout must match the keyboard anyway; the type only decides
+// which code the key next to Enter sends.
+RowLayout {
+    spacing: 10
 
-    Kirigami.Heading { level: 3; text: "Keyboard type" }
-    Flow {
-        Layout.fillWidth: true
-        spacing: Kirigami.Units.largeSpacing
-        Controls.RadioButton {
-            text: "ISO (105 keys, e.g. German, UK, French)"
-            checked: AppController.isoKeyboard
-            onToggled: if (checked) AppController.setKeyboardType(true)
-        }
-        Controls.RadioButton {
-            text: "ANSI (104 keys, e.g. US)"
-            checked: !AppController.isoKeyboard
-            onToggled: if (checked) AppController.setKeyboardType(false)
-        }
+    Segmented {
+        value: AppController.isoKeyboard ? "iso" : "ansi"
+        model: [
+            { value: "iso", text: "ISO · 105 keys" },
+            { value: "ansi", text: "ANSI · 104 keys" }
+        ]
+        onActivated: v => AppController.setKeyboardType(v === "iso")
     }
     Controls.Label {
-        Layout.fillWidth: true
-        wrapMode: Text.WordWrap
-        opacity: 0.8
-        text: "The PlayStation receives key positions, not characters: set its keyboard language to the layout printed on your keyboard. ISO keyboards have an L-shaped Enter key and an extra key next to the left Shift."
+        text: AppController.isoKeyboard ? "e.g. German, UK, French" : "e.g. US"
+        color: Style.muted
+    }
+    HelpHint {
+        text: "ISO keyboards have an L-shaped Enter key and an extra key next to the left Shift. The PlayStation receives key positions, not characters: set its keyboard language to the layout printed on your keyboard."
     }
 }

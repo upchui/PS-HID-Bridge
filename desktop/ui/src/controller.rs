@@ -74,6 +74,7 @@ pub mod qobject {
         #[qproperty(QString, access_message)]
         #[qproperty(QString, version)]
         #[qproperty(bool, update_check)]
+        #[qproperty(QString, appearance)]
         #[qproperty(QString, latest_version)]
         #[qproperty(bool, app_update_available)]
         #[qproperty(bool, board_update_available)]
@@ -146,6 +147,9 @@ pub mod qobject {
         /// Look for a new release now (also when the automatic check is off).
         #[qinvokable]
         fn check_updates(self: Pin<&mut AppController>);
+        /// Look of the app: "system", "light" or "dark".
+        #[qinvokable]
+        fn choose_appearance(self: Pin<&mut AppController>, value: &QString);
         /// Automatic check at start and every six hours.
         #[qinvokable]
         fn enable_update_check(self: Pin<&mut AppController>, on: bool);
@@ -229,6 +233,7 @@ pub struct AppControllerRust {
     focus_state: Option<bool>,
 
     update_check: bool,
+    appearance: QString,
     latest_version: QString,
     app_update_available: bool,
     board_update_available: bool,
@@ -326,6 +331,7 @@ impl Default for AppControllerRust {
             latency_view: false,
             focus_state: None,
             update_check: true,
+            appearance: QString::from("system"),
             latest_version: QString::default(),
             app_update_available: false,
             board_update_available: false,
@@ -429,6 +435,7 @@ impl qobject::AppController {
         self.as_mut().set_accel(c.mouse.accel);
         self.as_mut().set_setup_done(c.setup_done);
         self.as_mut().set_update_check(c.update_check);
+        self.as_mut().set_appearance(QString::from(&c.appearance));
     }
 
     fn command(&self, cmd: ServiceCmd) {
@@ -907,6 +914,16 @@ impl qobject::AppController {
                 .set_update_status(QString::from("Looking for updates …"));
         }
         self.start_update_check(true);
+    }
+
+    pub fn choose_appearance(mut self: Pin<&mut Self>, value: &QString) {
+        let value = String::from(value);
+        if !["system", "light", "dark"].contains(&value.as_str()) {
+            return;
+        }
+        self.as_mut().rust_mut().config.appearance = value;
+        self.as_mut().save_config();
+        self.as_mut().publish_config();
     }
 
     pub fn enable_update_check(mut self: Pin<&mut Self>, on: bool) {

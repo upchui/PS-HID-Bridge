@@ -2,14 +2,13 @@ import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
-import org.kde.kirigami as Kirigami
 import PSHIDBridge
 
 // Flash the board over USB (BOOTSEL drive): first installation, firmware,
 // test images, erase. Looks for the board while it is shown.
 ColumnLayout {
     id: root
-    spacing: Kirigami.Units.smallSpacing
+    spacing: 12
 
     // Own UF2 file (URL); "" = files of the newest release.
     property string file: ""
@@ -26,92 +25,152 @@ ColumnLayout {
         { value: "erase", text: "Erase everything (firmware and settings)" }
     ]
 
-    Controls.Label {
+    component Step: RowLayout {
+        id: step
+        property int number
+        property string text
+        default property alias extra: stepExtra.data
         Layout.fillWidth: true
-        wrapMode: Text.WordWrap
-        text: "Hold the BOOTSEL button on the board and connect it to this PC via USB (not to the PlayStation). It then shows up as the drive \"RP2350\"."
-    }
-    Kirigami.InlineMessage {
-        Layout.fillWidth: true
-        visible: true
-        type: AppController.usbBoardFound ? Kirigami.MessageType.Positive : Kirigami.MessageType.Information
-        text: AppController.usbBoardFound ? "Board found (RP2350 boot drive)." : "Waiting for the board …"
+        spacing: 12
+        Rectangle {
+            Layout.alignment: Qt.AlignTop
+            implicitWidth: 26
+            implicitHeight: 26
+            radius: 13
+            color: Style.tint(Style.accent, 0.15)
+            Controls.Label {
+                anchors.centerIn: parent
+                text: step.number
+                color: Style.accent
+                font.weight: Font.Bold
+            }
+        }
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 8
+            Controls.Label {
+                Layout.fillWidth: true
+                Layout.topMargin: 3
+                text: step.text
+                color: Style.text
+                wrapMode: Text.WordWrap
+            }
+            ColumnLayout {
+                id: stepExtra
+                Layout.fillWidth: true
+                spacing: 8
+            }
+        }
     }
 
-    Kirigami.FormLayout {
-        Layout.fillWidth: true
+    Step {
+        number: 1
+        text: "Hold BOOTSEL on the board and connect it to this PC via USB (not to the PlayStation)."
+        Pill {
+            level: AppController.usbBoardFound ? "ok" : ""
+            icon: AppController.usbBoardFound ? "check" : "usb"
+            text: AppController.usbBoardFound ? "Board found (drive RP2350)" : "Waiting for the board …"
+        }
+    }
+
+    Step {
+        number: 2
+        text: "Choose what to install."
         Controls.ComboBox {
             id: imageBox
-            Kirigami.FormData.label: "Install:"
             Layout.fillWidth: true
+            Layout.maximumWidth: 460
             model: root.images
             textRole: "text"
             valueRole: "value"
             onActivated: root.confirmErase = false
         }
         RowLayout {
-            Kirigami.FormData.label: "Files:"
+            Layout.fillWidth: true
+            spacing: 8
+            AppIcon {
+                name: (root.file === "" ? "download" : "folder")
+                color: Style.muted
+                implicitWidth: 16
+                implicitHeight: 16
+            }
             Controls.Label {
                 Layout.fillWidth: true
                 elide: Text.ElideMiddle
-                text: root.file === "" ? "from the newest release (GitHub)"
+                color: Style.muted
+                text: root.file === "" ? "Files from the newest release"
                       : decodeURIComponent(root.file.replace(/^file:\/\//, ""))
             }
-            Controls.Button {
+            AppButton {
                 text: "Choose file …"
+                flat: true
                 onClicked: fileDialog.open()
             }
-            Controls.Button {
+            AppButton {
                 text: "Newest release"
+                flat: true
                 visible: root.file !== ""
                 onClicked: root.file = ""
             }
         }
     }
 
-    Kirigami.InlineMessage {
-        Layout.fillWidth: true
-        visible: root.confirmErase
-        type: Kirigami.MessageType.Warning
-        text: "This erases the board's firmware and settings."
-        actions: [
-            Kirigami.Action {
-                text: "Erase"
-                onTriggered: {
-                    root.confirmErase = false;
-                    AppController.usbFlash("erase", root.file);
+    Step {
+        number: 3
+        text: "Install. The board restarts by itself afterwards."
+        Banner {
+            kind: "warn"
+            visible: root.confirmErase
+            text: "This erases the board's firmware and settings."
+            actions: [
+                AppButton {
+                    text: "Erase"
+                    onClicked: {
+                        root.confirmErase = false;
+                        AppController.usbFlash("erase", root.file);
+                    }
+                },
+                AppButton {
+                    text: "Cancel"
+                    flat: true
+                    onClicked: root.confirmErase = false
                 }
-            },
-            Kirigami.Action {
+            ]
+        }
+        RowLayout {
+            spacing: 8
+            AppButton {
+                text: "Install"
+                highlighted: true
+                icon.name: "usb"
+                icon.color: enabled ? Style.accent : Style.disabled
+                enabled: !AppController.usbBusy
+                onClicked: {
+                    if (imageBox.currentValue === "erase")
+                        root.confirmErase = true;
+                    else
+                        AppController.usbFlash(imageBox.currentValue, root.file);
+                }
+            }
+            AppButton {
                 text: "Cancel"
-                onTriggered: root.confirmErase = false
+                visible: AppController.usbBusy
+                onClicked: AppController.usbCancel()
             }
-        ]
-    }
-
-    RowLayout {
-        Controls.Button {
-            text: "Install"
-            highlighted: true
-            enabled: !AppController.usbBusy
-            onClicked: {
-                if (imageBox.currentValue === "erase")
-                    root.confirmErase = true;
-                else
-                    AppController.usbFlash(imageBox.currentValue, root.file);
+            Controls.BusyIndicator {
+                visible: AppController.usbBusy
+                running: visible
+                implicitWidth: 24
+                implicitHeight: 24
             }
         }
-        Controls.Button {
-            text: "Cancel"
-            visible: AppController.usbBusy
-            onClicked: AppController.usbCancel()
+        Controls.Label {
+            Layout.fillWidth: true
+            visible: AppController.usbStatus !== ""
+            text: AppController.usbStatus
+            color: Style.text
+            wrapMode: Text.WordWrap
         }
-    }
-    Controls.Label {
-        Layout.fillWidth: true
-        wrapMode: Text.WordWrap
-        visible: AppController.usbStatus !== ""
-        text: AppController.usbStatus
     }
 
     FileDialog {

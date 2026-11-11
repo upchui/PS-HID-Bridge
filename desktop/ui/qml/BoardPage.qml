@@ -1,12 +1,13 @@
 import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
-import org.kde.kirigami as Kirigami
 import PSHIDBridge
 
-Kirigami.ScrollablePage {
+// Connection to the board: address and key.
+AppPage {
     id: page
     title: "Board"
+    subtitle: "The small board at the PlayStation's USB port, reached over the network."
 
     property string error: ""
     property bool saved: false
@@ -16,30 +17,71 @@ Kirigami.ScrollablePage {
         return a.indexOf(":") >= 0 ? a.substring(0, a.lastIndexOf(":")) : a;
     }
 
-    ColumnLayout {
-        spacing: Kirigami.Units.largeSpacing
+    Banner {
+        kind: "error"
+        visible: page.error !== ""
+        text: page.error
+    }
+    Banner {
+        kind: AppController.connected ? "ok" : "info"
+        visible: page.saved && page.error === ""
+        text: AppController.connected ? "Connected."
+              : AppController.lastError !== "" ? "Saved. " + AppController.lastError
+              : "Saved. Connecting …"
+    }
 
-        Kirigami.FormLayout {
+    Card {
+        title: "Connection"
+        icon: "network"
+        help: "Your router lists the board as ps-hid-bridge-… with its address. The key is created in the board's web interface under \"Security\"."
+        actions: Pill {
+            level: AppController.boardAddress === "" ? "" : AppController.connected ? "ok" : "bad"
+            text: AppController.boardAddress === "" ? "not set up" : AppController.connected ? "connected" : "not reachable"
+        }
+
+        GridLayout {
             Layout.fillWidth: true
-
+            columns: 3
+            columnSpacing: 12
+            rowSpacing: 8
+            Controls.Label {
+                text: "Address"
+                color: Style.text
+            }
             Controls.TextField {
                 id: address
-                Kirigami.FormData.label: "Address:"
-                Layout.preferredWidth: Kirigami.Units.gridUnit * 16
+                Layout.fillWidth: true
                 text: AppController.boardAddress
                 placeholderText: "e.g. 192.168.1.50"
             }
+            Item {
+                implicitWidth: showKey.implicitWidth
+            }
+            Controls.Label {
+                text: "Key"
+                color: Style.text
+            }
             Controls.TextField {
                 id: psk
-                Kirigami.FormData.label: "Pre-shared key:"
-                Layout.preferredWidth: Kirigami.Units.gridUnit * 24
-                echoMode: TextInput.Password
+                Layout.fillWidth: true
+                echoMode: showKey.checked ? TextInput.Normal : TextInput.Password
                 placeholderText: AppController.pskSet ? "stored – fill in only to change it" : "64 hex digits from the web interface"
+            }
+            AppButton {
+                id: showKey
+                checkable: true
+                flat: true
+                icon.name: "eye"
+                icon.color: checked ? Style.accent : Style.muted
+                Accessible.name: "Show key"
+                Controls.ToolTip.visible: hovered
+                Controls.ToolTip.text: checked ? "Hide key" : "Show key"
             }
         }
 
         RowLayout {
-            Controls.Button {
+            spacing: 8
+            AppButton {
                 text: "Save and connect"
                 highlighted: true
                 onClicked: {
@@ -49,133 +91,46 @@ Kirigami.ScrollablePage {
                         psk.text = "";
                 }
             }
-            Controls.Button {
+            AppButton {
                 text: "Open web interface"
+                icon.name: "external"
+                icon.color: Style.text
                 enabled: AppController.boardAddress !== ""
                 onClicked: Qt.openUrlExternally("http://" + page.host() + "/")
             }
         }
+    }
 
-        Kirigami.InlineMessage {
+    Card {
+        title: "Details"
+        icon: "board"
+        GridLayout {
             Layout.fillWidth: true
-            visible: page.error !== ""
-            type: Kirigami.MessageType.Error
-            text: page.error
-        }
-        Kirigami.InlineMessage {
-            Layout.fillWidth: true
-            visible: page.saved && page.error === ""
-            type: AppController.connected ? Kirigami.MessageType.Positive : Kirigami.MessageType.Information
-            text: AppController.connected ? "Connected."
-                  : AppController.lastError !== "" ? "Saved. " + AppController.lastError
-                  : "Saved. Connecting …"
-        }
-
-        Kirigami.FormLayout {
-            Layout.fillWidth: true
-            Controls.Label {
-                Kirigami.FormData.label: "Connection:"
-                text: AppController.connected ? "connected" : "not reachable"
+            columns: 2
+            columnSpacing: 24
+            rowSpacing: 6
+            Repeater {
+                model: [
+                    ["Firmware", AppController.boardFirmware !== "" ? AppController.boardFirmware : "–"],
+                    ["PlayStation", AppController.boardUsb !== "" ? AppController.boardUsb : "–"],
+                    ["Round trip", AppController.rttMs >= 0 ? AppController.rttMs.toFixed(2) + " ms" : "–"],
+                    ["Desktop app", AppController.version]
+                ]
+                delegate: RowLayout {
+                    required property var modelData
+                    Layout.columnSpan: 1
+                    spacing: 12
+                    Controls.Label {
+                        Layout.preferredWidth: 110
+                        text: parent.modelData[0]
+                        color: Style.muted
+                    }
+                    Controls.Label {
+                        text: parent.modelData[1]
+                        color: Style.text
+                    }
+                }
             }
-            Controls.Label {
-                Kirigami.FormData.label: "Firmware:"
-                text: AppController.boardFirmware !== "" ? AppController.boardFirmware : "–"
-            }
-            Controls.Label {
-                Kirigami.FormData.label: "PlayStation:"
-                text: AppController.boardUsb !== "" ? AppController.boardUsb : "–"
-            }
-            Controls.Label {
-                Kirigami.FormData.label: "Desktop app:"
-                text: "Version " + AppController.version
-            }
-        }
-
-        Controls.Label {
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-            opacity: 0.8
-            text: "The board's web interface creates the key under \"Security\". Your router shows the address (device name ps-hid-bridge-…)."
-        }
-
-        Kirigami.Separator { Layout.fillWidth: true }
-
-        Kirigami.Heading {
-            level: 2
-            text: "Updates"
-        }
-        Kirigami.FormLayout {
-            Layout.fillWidth: true
-            Controls.Label {
-                Kirigami.FormData.label: "Newest release:"
-                text: AppController.latestVersion !== "" ? AppController.latestVersion : "–"
-            }
-            Controls.Switch {
-                Kirigami.FormData.label: "Automatically:"
-                text: "Look for updates at start and every 6 hours"
-                checked: AppController.updateCheck
-                onToggled: AppController.enableUpdateCheck(checked)
-            }
-        }
-        RowLayout {
-            Controls.Button {
-                text: "Check now"
-                enabled: !AppController.updateBusy
-                onClicked: AppController.checkUpdates()
-            }
-            Controls.Button {
-                text: AppController.appUpdated ? "Restart now" : "Update app"
-                visible: AppController.appUpdateAvailable || AppController.appUpdated
-                enabled: !AppController.updateBusy && (AppController.appUpdated || AppController.canUpdateApp)
-                onClicked: AppController.appUpdated ? AppController.restartApp() : AppController.updateApp()
-            }
-            Controls.Button {
-                text: "Update board firmware"
-                visible: AppController.boardUpdateAvailable
-                enabled: !AppController.updateBusy && !AppController.active
-                onClicked: AppController.updateBoard()
-            }
-        }
-        Controls.Label {
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-            visible: AppController.updateStatus !== ""
-            text: AppController.updateStatus
-        }
-        Controls.Label {
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-            opacity: 0.8
-            text: "Releases come from github.com/upchui/PS-HID-Bridge; every download is checked against the release's checksums. The board firmware is installed over the network, signed with the key"
-                  + (AppController.active ? " (switch the bridge off first)." : ".")
-        }
-
-        Kirigami.Separator { Layout.fillWidth: true }
-
-        Kirigami.Heading {
-            level: 2
-            text: "Install via USB"
-        }
-        Controls.Label {
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-            opacity: 0.8
-            text: "For the first installation or for recovery: the board is connected to this PC instead of the network."
-        }
-        // Flashing over USB: loaded on demand (it watches for the board);
-        // always in the self-test, so the page is checked too.
-        Controls.Button {
-            id: usbToggle
-            text: usbToggle.checked ? "Hide USB installation" : "Install via USB …"
-            checkable: true
-            icon.name: "drive-removable-media-usb"
-        }
-        Loader {
-            Layout.fillWidth: true
-            active: usbToggle.checked || Qt.application.arguments.indexOf("--self-test") >= 0
-                    || Qt.application.arguments.indexOf("--screenshot") >= 0
-            visible: active
-            sourceComponent: UsbInstall {}
         }
     }
 }

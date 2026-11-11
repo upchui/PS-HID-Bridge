@@ -1,12 +1,11 @@
 import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
-import org.kde.kirigami as Kirigami
 import PSHIDBridge
 
-Kirigami.ScrollablePage {
+AppPage {
     id: page
-    title: "Setup – step " + (step + 1) + " of " + titles.length
+    title: "Set up PS HID Bridge"
 
     signal finished()
 
@@ -14,185 +13,271 @@ Kirigami.ScrollablePage {
     readonly property var titles: ["Welcome", "Board", "Devices", "Trigger", "Test"]
     property string boardError: ""
 
-    footer: Controls.ToolBar {
-        contentItem: RowLayout {
-            Controls.Label {
-                Layout.fillWidth: true
-                leftPadding: Kirigami.Units.largeSpacing
-                text: page.titles[page.step]
-                font.bold: true
+    onStepChanged: if (step === 2) AppController.refreshDevices()
+
+    footer: [
+        Controls.Label {
+            Layout.fillWidth: true
+            text: "Step " + (page.step + 1) + " of " + page.titles.length
+            color: Style.muted
+        },
+        AppButton {
+            text: "Back"
+            enabled: page.step > 0
+            onClicked: page.step--
+        },
+        AppButton {
+            text: page.step === page.titles.length - 1 ? "Finish" : "Next"
+            highlighted: true
+            onClicked: {
+                if (page.step === 3 && !triggers.save())
+                    return;
+                if (page.step === page.titles.length - 1) {
+                    AppController.finishSetup();
+                    page.finished();
+                } else {
+                    page.step++;
+                }
             }
-            Controls.Button {
-                text: "Back"
-                enabled: page.step > 0
-                onClicked: page.step--
-            }
-            Controls.Button {
-                text: page.step === page.titles.length - 1 ? "Finish" : "Next"
-                highlighted: true
-                onClicked: {
-                    if (page.step === 3 && !triggers.save())
-                        return;
-                    if (page.step === page.titles.length - 1) {
-                        AppController.finishSetup();
-                        page.finished();
-                    } else {
-                        page.step++;
+        }
+    ]
+
+    // ------------------------------------------------------------ steps
+    RowLayout {
+        Layout.fillWidth: true
+        Layout.bottomMargin: 4
+        spacing: 0
+        Repeater {
+            model: page.titles
+            delegate: RowLayout {
+                id: stepItem
+                required property string modelData
+                required property int index
+                readonly property bool done: index < page.step
+                readonly property bool current: index === page.step
+                Layout.fillWidth: index < page.titles.length - 1
+                spacing: 8
+                Rectangle {
+                    implicitWidth: 28
+                    implicitHeight: 28
+                    radius: 14
+                    color: stepItem.current || stepItem.done ? Style.accent : Style.surfaceAlt
+                    border.color: stepItem.current || stepItem.done ? Style.accent : Style.border
+                    AppIcon {
+                        anchors.centerIn: parent
+                        visible: stepItem.done
+                        name: "check"
+                        color: Style.accentText
+                        implicitWidth: 16
+                        implicitHeight: 16
                     }
+                    Controls.Label {
+                        anchors.centerIn: parent
+                        visible: !stepItem.done
+                        text: stepItem.index + 1
+                        color: stepItem.current ? Style.accentText : Style.muted
+                        font.weight: Font.DemiBold
+                    }
+                }
+                Controls.Label {
+                    text: stepItem.modelData
+                    color: stepItem.current ? Style.text : Style.muted
+                    font.weight: stepItem.current ? Font.DemiBold : Font.Normal
+                }
+                Rectangle {
+                    visible: stepItem.index < page.titles.length - 1
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 4
+                    Layout.rightMargin: 8
+                    implicitHeight: 2
+                    color: stepItem.done ? Style.accent : Style.border
                 }
             }
         }
     }
 
     StackLayout {
+        Layout.fillWidth: true
         currentIndex: page.step
 
         // 0 -- Welcome
         ColumnLayout {
-            spacing: Kirigami.Units.largeSpacing
-            Kirigami.Heading { text: "Set up PS HID Bridge" }
-            Controls.Label {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                text: "This app lets you control the PlayStation with the mouse and keyboard of this computer while the picture comes in via Remote Play. You need:"
+            spacing: Style.gap
+            Card {
+                title: "Welcome"
+                icon: "gamepad"
+                subtitle: "Control the PlayStation with this computer's mouse and keyboard while Remote Play shows the picture."
+
+                Repeater {
+                    model: [
+                        ["board", "The board with firmware, at the PlayStation's USB port and connected to the network."],
+                        ["key", "The key from the board's web interface (Security → Generate new key)."],
+                        ["gamepad", "On the PlayStation: the keyboard language of your keyboard, and USB power in rest mode on."]
+                    ]
+                    delegate: RowLayout {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        spacing: 12
+                        AppIcon {
+                            name: (parent.modelData[0])
+                            color: Style.accent
+                            implicitWidth: 20
+                            implicitHeight: 20
+                        }
+                        Controls.Label {
+                            Layout.fillWidth: true
+                            text: parent.modelData[1]
+                            color: Style.text
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+                }
             }
-            Controls.Label {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                textFormat: Text.StyledText
-                text: "• the board with current firmware, connected to the PlayStation via USB and to the network via cable<br>"
-                      + "• the pre-shared key from the board's web interface (Security → Generate new key)<br>"
-                      + "• on the PlayStation: the keyboard language of <b>your keyboard</b> (e.g. German) and USB power in rest mode switched on"
+            Card {
+                title: "No firmware on the board yet?"
+                icon: "usb"
+                subtitle: "Install it from here over USB."
+                actions: AppButton {
+                    id: usbToggle
+                    text: checked ? "Hide" : "Install via USB"
+                    checkable: true
+                }
+                // Loaded on demand (it watches for the board); always in
+                // the self-test, so it is checked too.
+                Loader {
+                    Layout.fillWidth: true
+                    active: usbToggle.checked || Qt.application.arguments.indexOf("--self-test") >= 0
+                            || Qt.application.arguments.indexOf("--screenshot") >= 0
+                    visible: active
+                    sourceComponent: UsbInstall {}
+                }
             }
-        // Flashing over USB: loaded on demand (it watches for the board);
-        // always in the self-test, so the page is checked too.
-        Controls.Button {
-            id: usbToggle
-            text: usbToggle.checked ? "Hide USB installation" : "No firmware on the board yet? Install it via USB …"
-            checkable: true
-            icon.name: "drive-removable-media-usb"
-        }
-        Loader {
-            Layout.fillWidth: true
-            active: usbToggle.checked || Qt.application.arguments.indexOf("--self-test") >= 0
-                    || Qt.application.arguments.indexOf("--screenshot") >= 0
-            visible: active
-            sourceComponent: UsbInstall {}
-        }
         }
 
         // 1 -- Board
         ColumnLayout {
-            spacing: Kirigami.Units.largeSpacing
-            Controls.Label {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                text: "Enter the board address (your router lists it as ps-hid-bridge-…) and the key from its web interface."
-            }
-            Kirigami.FormLayout {
-                Layout.fillWidth: true
-                Controls.TextField {
-                    id: address
-                    Kirigami.FormData.label: "Address:"
-                    Layout.preferredWidth: Kirigami.Units.gridUnit * 16
-                    text: AppController.boardAddress
-                    placeholderText: "e.g. 192.168.1.50"
+            spacing: Style.gap
+            Card {
+                title: "Board"
+                icon: "network"
+                subtitle: "Your router lists it as ps-hid-bridge-…; the key comes from its web interface."
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: 2
+                    columnSpacing: 12
+                    rowSpacing: 8
+                    Controls.Label {
+                        text: "Address"
+                        color: Style.text
+                    }
+                    Controls.TextField {
+                        id: address
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: 360
+                        text: AppController.boardAddress
+                        placeholderText: "e.g. 192.168.1.50"
+                    }
+                    Controls.Label {
+                        text: "Key"
+                        color: Style.text
+                    }
+                    Controls.TextField {
+                        id: psk
+                        Layout.fillWidth: true
+                        echoMode: TextInput.Password
+                        placeholderText: AppController.pskSet ? "stored – fill in only to change it" : "64 hex digits"
+                    }
                 }
-                Controls.TextField {
-                    id: psk
-                    Kirigami.FormData.label: "Pre-shared key:"
-                    Layout.preferredWidth: Kirigami.Units.gridUnit * 24
-                    echoMode: TextInput.Password
-                    placeholderText: AppController.pskSet ? "stored – fill in only to change it" : "64 hex digits"
+                AppButton {
+                    text: "Connect"
+                    highlighted: true
+                    onClicked: page.boardError = AppController.saveBoard(address.text, psk.text)
                 }
-            }
-            Controls.Button {
-                text: "Connect"
-                highlighted: true
-                onClicked: page.boardError = AppController.saveBoard(address.text, psk.text)
-            }
-            Kirigami.InlineMessage {
-                Layout.fillWidth: true
-                visible: page.boardError !== ""
-                type: Kirigami.MessageType.Error
-                text: page.boardError
-            }
-            Kirigami.InlineMessage {
-                Layout.fillWidth: true
-                visible: page.boardError === "" && AppController.boardAddress !== ""
-                type: AppController.connected ? Kirigami.MessageType.Positive : Kirigami.MessageType.Information
-                text: AppController.connected
-                      ? "Connected. " + AppController.boardUsb + ", firmware " + AppController.boardFirmware + "."
-                      : AppController.lastError !== "" ? AppController.lastError
-                      : "Waiting for an answer from the board … Are address and key correct?"
+                Banner {
+                    kind: "error"
+                    visible: page.boardError !== ""
+                    text: page.boardError
+                }
+                Banner {
+                    kind: AppController.connected ? "ok" : "info"
+                    visible: page.boardError === "" && AppController.boardAddress !== ""
+                    text: AppController.connected
+                          ? "Connected. " + AppController.boardUsb + ", firmware " + AppController.boardFirmware + "."
+                          : AppController.lastError !== "" ? AppController.lastError
+                          : "Waiting for an answer from the board … Are address and key correct?"
+                }
             }
         }
 
         // 2 -- Devices
         ColumnLayout {
-            spacing: Kirigami.Units.largeSpacing
-            Controls.Label {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                text: "Select the keyboard and mouse that should go to the PlayStation. The app then asks once for the administrator password to set up read access to exactly these devices."
+            spacing: Style.gap
+            Card {
+                title: "Keyboard and mouse"
+                icon: "input"
+                subtitle: "Select what should go to the PlayStation."
+                DeviceList {
+                    Layout.fillWidth: true
+                }
             }
-            DeviceList {
-                Layout.fillWidth: true
-            }
-            KeyboardTypeChooser {
-                Layout.fillWidth: true
+            Card {
+                title: "Keyboard type"
+                icon: "keyboard"
+                KeyboardTypeChooser {}
             }
         }
 
         // 3 -- Trigger
         ColumnLayout {
-            spacing: Kirigami.Units.largeSpacing
-            Controls.Label {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                text: "How do you want to switch between desktop and PlayStation? The default is Ctrl+Alt+P. More kinds (mouse button, hold, window rule) are available later under \"Triggers\"."
-            }
-            TriggerEditor {
-                id: triggers
-                Layout.fillWidth: true
-            }
-            Controls.Label {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                text: "Emergency stop, always available: Ctrl+Alt+Shift+Esc."
+            spacing: Style.gap
+            Card {
+                title: "Switching"
+                icon: "bolt"
+                subtitle: "How you switch between desktop and PlayStation. Emergency stop, always: Ctrl+Alt+Shift+Esc."
+                TriggerEditor {
+                    id: triggers
+                    Layout.fillWidth: true
+                }
             }
         }
 
         // 4 -- Test
         ColumnLayout {
-            spacing: Kirigami.Units.largeSpacing
-            Controls.Label {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                text: "Now press the trigger and release it. While the bridge is on, you see here what reaches the PlayStation. Press the trigger again to switch it off."
-            }
-            Kirigami.FormLayout {
-                Layout.fillWidth: true
+            spacing: Style.gap
+            Card {
+                title: "Try it"
+                icon: "play"
+                subtitle: "Press the trigger: you see here what reaches the PlayStation. Press it again to switch off."
+
                 Controls.Label {
-                    Kirigami.FormData.label: "Status:"
                     text: AppController.statusText
-                    font.bold: true
+                    color: AppController.active ? Style.ok : Style.text
+                    font.pointSize: Style.fontSize * 1.5
+                    font.weight: Font.DemiBold
                 }
-                Controls.Label {
-                    Kirigami.FormData.label: "To the PlayStation:"
-                    text: AppController.active ? (AppController.liveText !== "" ? AppController.liveText : "no key") : "–"
-                }
-                Controls.Label {
-                    Kirigami.FormData.label: "PlayStation:"
-                    text: AppController.boardUsb !== "" ? AppController.boardUsb : "–"
-                }
-                Controls.Label {
-                    Kirigami.FormData.label: "Latency:"
-                    text: AppController.rttMs >= 0 ? AppController.rttMs.toFixed(2) + " ms" : "–"
+                GridLayout {
+                    columns: 2
+                    columnSpacing: 16
+                    rowSpacing: 6
+                    Controls.Label { text: "To the PlayStation"; color: Style.muted }
+                    Controls.Label {
+                        text: AppController.active ? (AppController.liveText !== "" ? AppController.liveText : "no key") : "–"
+                        color: Style.text
+                        font.weight: Font.DemiBold
+                    }
+                    Controls.Label { text: "PlayStation"; color: Style.muted }
+                    Controls.Label {
+                        text: AppController.boardUsb !== "" ? AppController.boardUsb : "–"
+                        color: Style.text
+                    }
+                    Controls.Label { text: "Round trip"; color: Style.muted }
+                    Controls.Label {
+                        text: AppController.rttMs >= 0 ? AppController.rttMs.toFixed(2) + " ms" : "–"
+                        color: Style.text
+                    }
                 }
             }
         }
     }
-
-    onStepChanged: if (step === 2) AppController.refreshDevices()
 }

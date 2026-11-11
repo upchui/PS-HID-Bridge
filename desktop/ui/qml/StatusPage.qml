@@ -1,10 +1,9 @@
 import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
-import org.kde.kirigami as Kirigami
 import PSHIDBridge
 
-Kirigami.ScrollablePage {
+AppPage {
     id: page
     title: "Status"
 
@@ -12,217 +11,311 @@ Kirigami.ScrollablePage {
     Component.onDestruction: AppController.setLatencyView(false)
 
     readonly property var triggers: JSON.parse(AppController.triggersJson)
+    readonly property string level: AppController.active ? "ok" : AppController.connected ? "accent" : ""
 
-    function triggerSummary() {
-        const actions = { "toggle": "toggle", "on": "on", "off": "off", "pause": "pause", "release-all": "release all" };
-        const kinds = { "combo": "", "hold": " (hold)", "double-tap": " (double tap)" };
-        let parts = triggers.map(t => t.keys + kinds[t.kind] + (t.kind === "hold" ? "" : ": " + actions[t.action]));
-        if (AppController.windowRuleEnabled && AppController.windowRule !== "")
-            parts.push("automatically while \"" + AppController.windowRule + "\" is active");
-        return parts.length ? parts.join(" · ") : "no triggers set up";
+    // "Shift + A · mouse: left" -> ["Shift", "A", "mouse: left"]
+    function keyChips(text) {
+        if (text === "")
+            return [];
+        return text.split(" · ").map(p => p.split(" + ")).reduce((a, b) => a.concat(b), []);
     }
 
-    ColumnLayout {
-        spacing: Kirigami.Units.largeSpacing
+    function triggerChips() {
+        const actions = { "toggle": "toggle", "on": "on", "off": "off", "pause": "pause", "release-all": "release all" };
+        let chips = triggers.filter(t => t.keys !== "").map(t => ({
+            keys: t.keys,
+            what: t.kind === "hold" ? "hold" : (t.kind === "double-tap" ? "double tap: " : "") + actions[t.action]
+        }));
+        if (AppController.windowRuleEnabled && AppController.windowRule !== "")
+            chips.push({ keys: AppController.windowRule, what: "window active" });
+        return chips;
+    }
 
-        Kirigami.InlineMessage {
-            Layout.fillWidth: true
-            type: Kirigami.MessageType.Error
-            text: AppController.lastError
-            visible: AppController.lastError !== ""
-            // Not showCloseButton: it hides the message for good (the
-            // binding above would be gone and later errors not shown).
-            actions: [
-                Kirigami.Action {
-                    icon.name: "dialog-close"
-                    text: "Dismiss"
-                    onTriggered: AppController.lastError = ""
+    // ------------------------------------------------------------ banners
+    Banner {
+        kind: "error"
+        visible: AppController.lastError !== ""
+        text: AppController.lastError
+        actions: AppButton {
+            text: "Dismiss"
+            flat: true
+            onClicked: AppController.lastError = ""
+        }
+    }
+    Banner {
+        kind: "ok"
+        visible: AppController.appUpdateAvailable || AppController.boardUpdateAvailable
+                 || AppController.appUpdated || AppController.updateBusy
+        text: AppController.updateStatus !== "" ? AppController.updateStatus
+              : "Version " + AppController.latestVersion + " is available"
+                + (AppController.appUpdateAvailable && AppController.boardUpdateAvailable ? " for app and board."
+                   : AppController.appUpdateAvailable ? " for the app." : " for the board.")
+        actions: [
+            AppButton {
+                text: "Update app"
+                visible: AppController.appUpdateAvailable && AppController.canUpdateApp
+                enabled: !AppController.updateBusy
+                onClicked: AppController.updateApp()
+            },
+            AppButton {
+                text: "Restart now"
+                visible: AppController.appUpdated
+                onClicked: AppController.restartApp()
+            },
+            AppButton {
+                text: "Update board"
+                visible: AppController.boardUpdateAvailable
+                enabled: !AppController.updateBusy && !AppController.active
+                onClicked: AppController.updateBoard()
+            }
+        ]
+    }
+
+    // ------------------------------------------------------------ hero
+    Rectangle {
+        Layout.fillWidth: true
+        implicitHeight: hero.implicitHeight + 2 * Style.pad + 4
+        radius: Style.radius + 2
+        color: page.level === "" ? Style.surface : Style.tint(Style.stateColor(page.level), Style.dark ? 0.14 : 0.09)
+        border.color: page.level === "" ? Style.border : Style.tint(Style.stateColor(page.level), 0.5)
+
+        ColumnLayout {
+            id: hero
+            anchors.fill: parent
+            anchors.margins: Style.pad + 2
+            spacing: 10
+
+            RowLayout {
+                spacing: 14
+                Rectangle {
+                    implicitWidth: 48
+                    implicitHeight: 48
+                    radius: 24
+                    color: page.level === "" ? Style.surfaceAlt : Style.stateColor(page.level)
+                    AppIcon {
+                        anchors.centerIn: parent
+                        name: "power"
+                        color: page.level === "" ? Style.muted : Style.accentText
+                        implicitWidth: 26
+                        implicitHeight: 26
+                    }
                 }
-            ]
-        }
-        Kirigami.InlineMessage {
-            Layout.fillWidth: true
-            type: Kirigami.MessageType.Positive
-            visible: AppController.appUpdateAvailable || AppController.boardUpdateAvailable
-                     || AppController.appUpdated || AppController.updateBusy
-            text: AppController.updateStatus !== "" ? AppController.updateStatus
-                  : "Version " + AppController.latestVersion + " is available"
-                    + (AppController.appUpdateAvailable ? " for the app" : "")
-                    + (AppController.appUpdateAvailable && AppController.boardUpdateAvailable ? " and" : "")
-                    + (AppController.boardUpdateAvailable ? " for the board" : "") + "."
-            actions: [
-                Kirigami.Action {
-                    text: "Update app"
-                    visible: AppController.appUpdateAvailable && AppController.canUpdateApp
-                    enabled: !AppController.updateBusy
-                    onTriggered: AppController.updateApp()
-                },
-                Kirigami.Action {
-                    text: "Restart now"
-                    visible: AppController.appUpdated
-                    onTriggered: AppController.restartApp()
-                },
-                Kirigami.Action {
-                    text: "Update board"
-                    visible: AppController.boardUpdateAvailable
-                    enabled: !AppController.updateBusy && !AppController.active
-                    tooltip: AppController.active ? "Switch the bridge off first" : ""
-                    onTriggered: AppController.updateBoard()
-                }
-            ]
-        }
-        Kirigami.InlineMessage {
-            Layout.fillWidth: true
-            type: Kirigami.MessageType.Warning
-            text: AppController.devicesBlocked + " selected device interface(s) without access. Set it up under \"Devices\"."
-            visible: AppController.devicesBlocked > 0
-        }
-
-        Rectangle {
-            Layout.fillWidth: true
-            implicitHeight: stateColumn.implicitHeight + Kirigami.Units.gridUnit * 2
-            radius: Kirigami.Units.cornerRadius
-            color: AppController.active ? Qt.rgba(0.18, 0.62, 0.36, 0.18)
-                 : AppController.connected ? Qt.rgba(0.11, 0.36, 0.85, 0.12)
-                 : Qt.rgba(0.5, 0.5, 0.5, 0.12)
-            border.color: AppController.active ? "#2e9d5b" : AppController.connected ? "#1d5bd8" : "#7a8290"
-
-            ColumnLayout {
-                id: stateColumn
-                anchors.fill: parent
-                anchors.margins: Kirigami.Units.gridUnit
-
-                RowLayout {
+                ColumnLayout {
                     Layout.fillWidth: true
-                    Kirigami.Heading {
-                        Layout.fillWidth: true
-                        level: 1
+                    spacing: 2
+                    Controls.Label {
                         text: AppController.statusText
+                        color: Style.text
+                        font.pointSize: Style.fontSize * 1.6
+                        font.weight: Font.DemiBold
                     }
-                    Controls.Switch {
-                        text: "Bridge"
-                        enabled: AppController.connected
-                        checked: AppController.active || AppController.pending
-                        onToggled: AppController.setOn(checked)
+                    Controls.Label {
+                        Layout.fillWidth: true
+                        color: Style.muted
+                        wrapMode: Text.WordWrap
+                        text: AppController.active ? "Mouse and keyboard go to the PlayStation."
+                              : AppController.connected ? "Mouse and keyboard belong to the desktop."
+                              : AppController.boardAddress === "" ? "Set up the board first."
+                              : "Waiting for the board …"
                     }
                 }
-                Controls.Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    text: AppController.active
-                          ? "Mouse and keyboard go to the PlayStation. The desktop gets no input."
-                          : "Mouse and keyboard belong to the desktop."
-                }
-                Controls.Label {
-                    Layout.fillWidth: true
-                    visible: AppController.active
-                    font.bold: true
-                    text: "To the PlayStation: " + (AppController.liveText !== "" ? AppController.liveText : "no key")
+                AppSwitch {
+                    enabled: AppController.connected
+                    checked: AppController.active || AppController.pending
+                    onToggled: AppController.setOn(checked)
+                    big: true
+                    Accessible.name: "Bridge"
                 }
             }
-        }
 
-        Kirigami.FormLayout {
-            Layout.fillWidth: true
-
-            Controls.Label {
-                Kirigami.FormData.label: "Board:"
-                text: AppController.boardAddress === "" ? "not set up (see \"Board\")"
-                      : (AppController.connected ? "connected" : "not reachable") + " (" + AppController.boardAddress + ")"
-            }
-            Controls.Label {
-                Kirigami.FormData.label: "PlayStation:"
-                text: AppController.boardUsb !== "" ? AppController.boardUsb : "unknown"
-            }
-            Controls.Label {
-                Kirigami.FormData.label: "Latency:"
-                text: AppController.rttMs >= 0
-                      ? AppController.rttMs.toFixed(2) + " ms round trip (median " + AppController.rttP50.toFixed(2)
-                        + " ms, 95 % below " + AppController.rttP95.toFixed(2) + " ms)"
-                      : "–"
-            }
-            Controls.Label {
-                Kirigami.FormData.label: "Input → network:"
-                text: (AppController.inputP50 >= 0
-                       ? AppController.inputP50.toFixed(2) + " ms median, 95 % below " + AppController.inputP95.toFixed(2)
-                         + " ms, max " + AppController.inputMax.toFixed(2) + " ms"
-                       : "– (measured while the bridge is on)")
-                      + (AppController.connected && !AppController.realtime
-                         ? " · normal priority (real-time not available, see README)" : "")
-                wrapMode: Text.WordWrap
+            Flow {
                 Layout.fillWidth: true
-            }
-            Controls.Label {
-                Kirigami.FormData.label: "Packets:"
-                text: AppController.packetsPerSecond + " per second"
-            }
-            Controls.Label {
-                Kirigami.FormData.label: "Devices:"
-                text: AppController.devicesOpen + " interface(s) open"
-            }
-            Controls.Label {
-                Kirigami.FormData.label: "Firmware:"
-                text: AppController.boardFirmware !== "" ? AppController.boardFirmware : "–"
+                visible: AppController.active
+                spacing: 6
+                Controls.Label {
+                    text: "To the PlayStation:"
+                    color: Style.muted
+                    height: 26
+                    verticalAlignment: Text.AlignVCenter
+                }
+                Repeater {
+                    model: page.keyChips(AppController.liveText)
+                    delegate: Rectangle {
+                        id: keyChip
+                        required property string modelData
+                        implicitWidth: keyLabel.implicitWidth + 16
+                        implicitHeight: 26
+                        radius: 5
+                        color: Style.surface
+                        border.color: Style.border
+                        Controls.Label {
+                            id: keyLabel
+                            anchors.centerIn: parent
+                            text: keyChip.modelData
+                            color: Style.text
+                            font.weight: Font.DemiBold
+                        }
+                    }
+                }
+                Controls.Label {
+                    visible: AppController.liveText === ""
+                    text: "no key"
+                    color: Style.muted
+                    height: 26
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
         }
+    }
 
-        Canvas {
-            id: spark
+    // ------------------------------------------------------------ tiles
+    GridLayout {
+        Layout.fillWidth: true
+        columns: page.width > 760 ? 2 : 1
+        columnSpacing: Style.gap
+        rowSpacing: Style.gap
+
+        StatTile {
+            icon: "board"
+            label: "Board"
+            level: AppController.boardAddress === "" ? "warn" : AppController.connected ? "ok" : "bad"
+            value: AppController.boardAddress === "" ? "Not set up"
+                   : AppController.connected ? "Connected" : "Not reachable"
+            detail: AppController.boardAddress === "" ? "See \"Board\"."
+                    : AppController.boardAddress + (AppController.boardFirmware !== "" ? " · firmware " + AppController.boardFirmware : "")
+        }
+        StatTile {
+            icon: "gamepad"
+            label: "PlayStation"
+            level: AppController.boardUsb === "PlayStation connected" ? "ok"
+                   : AppController.boardUsb === "" ? "" : "warn"
+            value: AppController.boardUsb === "" ? "Unknown"
+                   : AppController.boardUsb === "PlayStation connected" ? "Connected"
+                   : AppController.boardUsb === "PlayStation in rest mode" ? "Rest mode" : "Not connected"
+            detail: "USB connection of the board"
+        }
+        StatTile {
+            icon: "latency"
+            label: "Round trip to the board"
+            value: AppController.rttMs >= 0 ? AppController.rttP50.toFixed(2) + " ms" : "–"
+            detail: AppController.rttMs >= 0 ? "median · 95 % below " + AppController.rttP95.toFixed(2) + " ms" : "measured while connected"
+
+            Canvas {
+                id: spark
+                Layout.fillWidth: true
+                Layout.topMargin: 4
+                implicitHeight: 36
+                visible: AppController.connected
+                readonly property var values: JSON.parse(AppController.rttHistoryJson)
+                readonly property color line: Style.accent
+                onValuesChanged: requestPaint()
+                onWidthChanged: requestPaint()
+                onLineChanged: requestPaint()
+                onPaint: {
+                    const ctx = getContext("2d");
+                    ctx.reset();
+                    const v = values;
+                    if (v.length < 2)
+                        return;
+                    const max = Math.max(1, Math.max.apply(null, v) * 1.2);
+                    const x = i => (width - 2) * i / (v.length - 1) + 1;
+                    const y = val => height - 2 - (height - 4) * val / max;
+                    ctx.strokeStyle = line;
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.moveTo(x(0), y(v[0]));
+                    for (let i = 1; i < v.length; i++)
+                        ctx.lineTo(x(i), y(v[i]));
+                    ctx.stroke();
+                }
+            }
+        }
+        StatTile {
+            icon: "keyboard"
+            label: "Input → network"
+            value: AppController.inputP50 >= 0 ? AppController.inputP50.toFixed(2) + " ms" : "–"
+            detail: AppController.inputP50 >= 0
+                    ? "median · max " + AppController.inputMax.toFixed(2) + " ms · " + AppController.packetsPerSecond + " packets/s"
+                    : "measured while the bridge is on"
+
+            RowLayout {
+                spacing: 6
+                Pill {
+                    visible: AppController.connected
+                    level: AppController.realtime ? "ok" : "warn"
+                    text: AppController.realtime ? "real-time priority" : "normal priority"
+                }
+                HelpHint {
+                    visible: AppController.connected && !AppController.realtime
+                    text: "Real-time priority is not available (rtkit or a realtime group is missing, see README). Input still works, with more variance under load."
+                }
+                Pill {
+                    level: AppController.devicesBlocked > 0 ? "warn" : AppController.devicesOpen > 0 ? "accent" : ""
+                    text: AppController.devicesBlocked > 0 ? AppController.devicesBlocked + " without access"
+                          : AppController.devicesOpen + " device interface(s)"
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ actions
+    Card {
+        title: "Controls"
+        icon: "bolt"
+
+        Flow {
             Layout.fillWidth: true
-            implicitHeight: Kirigami.Units.gridUnit * 4
-            visible: AppController.connected
-            readonly property var values: JSON.parse(AppController.rttHistoryJson)
-            onValuesChanged: requestPaint()
-            onWidthChanged: requestPaint()
-            onPaint: {
-                const ctx = getContext("2d");
-                ctx.reset();
-                const v = values;
-                if (v.length < 2)
-                    return;
-                const max = Math.max(1, Math.max.apply(null, v) * 1.2);
-                const x = i => (width - 2) * i / (v.length - 1) + 1;
-                const y = val => height - 2 - (height - 4) * val / max;
-                ctx.strokeStyle = Kirigami.Theme.highlightColor;
-                ctx.lineWidth = 1.5;
-                ctx.beginPath();
-                ctx.moveTo(x(0), y(v[0]));
-                for (let i = 1; i < v.length; i++)
-                    ctx.lineTo(x(i), y(v[i]));
-                ctx.stroke();
-                ctx.fillStyle = Kirigami.Theme.disabledTextColor;
-                ctx.font = "10px sans-serif";
-                ctx.fillText(max.toFixed(1) + " ms", 2, 10);
-            }
-        }
-
-        Kirigami.Separator { Layout.fillWidth: true }
-
-        Controls.Label {
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-            text: "Toggle: " + page.triggerSummary()
-        }
-        Controls.Label {
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-            text: "Emergency stop (always releases everything): Ctrl+Alt+Shift+Esc"
-        }
-
-        RowLayout {
-            Controls.Button {
+            spacing: 8
+            AppButton {
                 text: "Release all keys"
+                icon.name: "release"
+                icon.color: enabled ? Style.text : Style.disabled
                 enabled: AppController.connected
                 onClicked: AppController.releaseAll()
             }
-            Controls.Button {
+            AppButton {
                 text: AppController.paused ? "Resume" : "Pause"
+                icon.name: (AppController.paused ? "play" : "pause")
+                icon.color: enabled ? Style.text : Style.disabled
                 enabled: AppController.connected
                 onClicked: AppController.pause()
             }
-            Controls.Button {
+            AppButton {
                 text: "Reconnect"
+                icon.name: "reconnect"
+                icon.color: Style.text
                 onClicked: AppController.reconnect()
+            }
+        }
+
+        Flow {
+            Layout.fillWidth: true
+            spacing: 6
+            Repeater {
+                model: page.triggerChips().concat([{ keys: "Ctrl+Alt+Shift+Esc", what: "emergency stop" }])
+                delegate: Rectangle {
+                    id: chip
+                    required property var modelData
+                    implicitWidth: chipRow.implicitWidth + 16
+                    implicitHeight: chipRow.implicitHeight + 8
+                    radius: 5
+                    color: Style.surfaceAlt
+                    border.color: Style.border
+                    RowLayout {
+                        id: chipRow
+                        anchors.centerIn: parent
+                        spacing: 6
+                        Controls.Label {
+                            text: chip.modelData.keys
+                            color: Style.text
+                            font.weight: Font.DemiBold
+                        }
+                        Controls.Label {
+                            text: chip.modelData.what
+                            color: Style.muted
+                        }
+                    }
+                }
             }
         }
     }

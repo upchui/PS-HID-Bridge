@@ -53,6 +53,11 @@ fn main() {
         if std::env::var_os("QT_QUICK_CONTROLS_STYLE").is_none() {
             std::env::set_var("QT_QUICK_CONTROLS_STYLE", "Fusion");
         }
+        // The desktop portal tells Qt whether the system uses a dark scheme
+        // (and gives the native file dialog). Not in the tests: no portal.
+        if !self_test && !screenshot && std::env::var_os("QT_QPA_PLATFORMTHEME").is_none() {
+            std::env::set_var("QT_QPA_PLATFORMTHEME", "xdgdesktopportal");
+        }
         if self_test || screenshot {
             if std::env::var_os("QT_QPA_PLATFORM").is_none() {
                 std::env::set_var("QT_QPA_PLATFORM", "offscreen");
