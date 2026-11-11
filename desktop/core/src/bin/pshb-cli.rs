@@ -77,6 +77,9 @@ enum Command {
         board: BoardArgs,
         #[arg(long, default_value_t = 5)]
         count: u32,
+        /// How long to wait for the first answer
+        #[arg(long, default_value_t = 2000)]
+        timeout_ms: u64,
     },
     /// Send keys or mouse motion once (for testing)
     Send {
@@ -225,8 +228,12 @@ fn no_answer_reason(link: &Link) -> String {
 }
 
 fn connect(ctx: &Ctx, args: &BoardArgs, ping: Duration) -> Result<Link, String> {
+    connect_within(ctx, args, ping, Duration::from_secs(2))
+}
+
+fn connect_within(ctx: &Ctx, args: &BoardArgs, ping: Duration, timeout: Duration) -> Result<Link, String> {
     let link = start_link(ctx, args, ping)?;
-    if !link.wait_connected(Duration::from_secs(2)) {
+    if !link.wait_connected(timeout) {
         return Err(no_answer_reason(&link));
     }
     Ok(link)
@@ -495,8 +502,8 @@ fn cmd_replay(ctx: &Ctx, board: &BoardArgs, file: &Path, hotkey: Option<&str>) -
     Ok(())
 }
 
-fn cmd_ping(ctx: &Ctx, board: &BoardArgs, count: u32) -> Result<(), String> {
-    let link = connect(ctx, board, Duration::from_millis(200))?;
+fn cmd_ping(ctx: &Ctx, board: &BoardArgs, count: u32, timeout: Duration) -> Result<(), String> {
+    let link = connect_within(ctx, board, Duration::from_millis(200), timeout)?;
     let mut last = None;
     let mut answered = 0;
     let start = Instant::now();
@@ -666,7 +673,11 @@ fn main() -> ExitCode {
             stats,
         } => cmd_run(&ctx, board, devices, hotkey.as_deref(), *stats),
         Command::Replay { board, file, hotkey } => cmd_replay(&ctx, board, file, hotkey.as_deref()),
-        Command::Ping { board, count } => cmd_ping(&ctx, board, *count),
+        Command::Ping {
+            board,
+            count,
+            timeout_ms,
+        } => cmd_ping(&ctx, board, *count, Duration::from_millis(*timeout_ms)),
         Command::Send {
             board,
             keys,

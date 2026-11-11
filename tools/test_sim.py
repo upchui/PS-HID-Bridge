@@ -12,6 +12,7 @@ import json
 import os
 import queue
 import re
+import select
 import socket
 import subprocess
 import sys
@@ -25,6 +26,9 @@ import pshb_proto as proto  # noqa: E402
 SIM = None
 CLI = None
 SESSION = 0x1122334455667788
+# How long to wait when NO answer is expected (an answer takes well under
+# a millisecond on localhost; waiting longer only makes the tests slower).
+NO_ANSWER = 0.2
 # The version the simulator must report: MAJOR.MINOR.<commit count> (from
 # make, or computed the same way).
 VERSION = os.environ.get("PSHB_VERSION") or subprocess.run(
@@ -55,15 +59,19 @@ class Sim:
         self.proc = subprocess.Popen([SIM, "--port", "0", "--session", f"{SESSION:x}", *extra],
                                      stdout=subprocess.PIPE, text=True)
         self.lines: queue.Queue[str] = queue.Queue()
+        # Never hang the whole test run on a simulator that does not start.
+        if not select.select([self.proc.stdout], [], [], 10)[0]:
+            self.proc.kill()
+            raise RuntimeError("simulator did not start within 10 s")
         ready = self.proc.stdout.readline()
         m = re.match(r"READY (\d+) HTTP (\d+)", ready)
         if not m:
             raise RuntimeError(f"simulator did not start: {ready!r}")
         self.port = int(m.group(1))
         self.http_port = int(m.group(2))
-        threading.Thread(target=self._reader, daemon=True).start()
+        self.reader = threading.Thread(target=self._reader, daemon=True)
+        self.reader.start()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.settimeout(0.5)
         self.counter = 1000
 
     def _reader(self):
@@ -73,6 +81,8 @@ class Sim:
     def close(self):
         self.proc.terminate()
         self.proc.wait(timeout=5)
+        self.reader.join(timeout=5)  # ends at EOF
+        self.proc.stdout.close()
         self.sock.close()
 
     # ---- sending
@@ -89,7 +99,8 @@ class Sim:
     def send(self, ptype: int, payload: bytes):
         self.raw(self.packet(ptype, payload))
 
-    def receive_pong(self) -> proto.Pong | None:
+    def receive_pong(self, timeout: float = 0.5) -> proto.Pong | None:
+        self.sock.settimeout(timeout)
         try:
             data, _ = self.sock.recvfrom(2048)
         except socket.timeout:
@@ -104,10 +115,10 @@ class Sim:
     def send_input(self, **kw):
         self.send(proto.TYPE_INPUT, proto.Input(session_id=SESSION, **kw).encode())
 
-    def ping(self) -> proto.Pong | None:
+    def ping(self, timeout: float = 0.5) -> proto.Pong | None:
         self.ping_seq = self.counter + 1  # send() uses this value as packet counter
         self.send(proto.TYPE_PING, proto.Ping(12345, self.ping_seq).encode())
-        return self.receive_pong()
+        return self.receive_pong(timeout)
 
     # ---- reports
 
@@ -353,7 +364,7 @@ class InteropTests(unittest.TestCase):
         self.assertEqual(mouse[-1]["buttons"], "00")
 
     def test_wrong_key(self):
-        r = self.cli("ping", "--count", "1", key=bytes(32))
+        r = self.cli("ping", "--count", "1", "--timeout-ms", "300", key=bytes(32))
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("No answer", r.stderr)
 
@@ -363,7 +374,7 @@ class FilterTests(unittest.TestCase):
         sim = Sim("--plaintext", "--allow", "10.9.9.9")
         try:
             sim.send_input(keys=[0x04])
-            self.assertIsNone(sim.ping())
+            self.assertIsNone(sim.ping(NO_ANSWER))
             self.assertEqual(sim.reports("KBD"), [])
         finally:
             sim.close()
@@ -376,7 +387,7 @@ class FilterTests(unittest.TestCase):
             sim.close()
         sim = Sim("--plaintext", "--allow", "10.0.0.0/8")
         try:
-            self.assertIsNone(sim.ping())
+            self.assertIsNone(sim.ping(NO_ANSWER))
         finally:
             sim.close()
 
@@ -384,7 +395,7 @@ class FilterTests(unittest.TestCase):
         sim = Sim()
         try:
             sim.send_input(keys=[0x04])
-            self.assertIsNone(sim.ping())
+            self.assertIsNone(sim.ping(NO_ANSWER))
             self.assertEqual(sim.reports("KBD"), [])
         finally:
             sim.close()
@@ -540,7 +551,7 @@ class WebTests(unittest.TestCase):
         pong = self.sim.ping()
         self.assertIsNotNone(pong)
         self.sim.key = bytes(32)
-        self.assertIsNone(self.sim.ping())
+        self.assertIsNone(self.sim.ping(NO_ANSWER))
         self.assertTrue(self.web.req("GET", "/api/status")[1]["psk_set"])
 
     def test_allowed_sender(self):
@@ -548,7 +559,7 @@ class WebTests(unittest.TestCase):
         self.web.req("POST", "/api/psk", {"psk": KEY.hex()})
         self.sim.key = KEY
         self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "10.1.2.3"})[0], 200)
-        self.assertIsNone(self.sim.ping())
+        self.assertIsNone(self.sim.ping(NO_ANSWER))
         self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "127.0.0.1"})[0], 200)
         self.assertIsNotNone(self.sim.ping())
         self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "999.1.1.1"})[0], 400)
@@ -561,7 +572,7 @@ class WebTests(unittest.TestCase):
         for bad in ("10.0.0.0/33", "10.0.0.0/", "10.0.0.0/8x", "10.0.0.0/-1", "10.0.0.0/8/8", "0.0.0.0/8"):
             self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": bad})[0], 400, bad)
         self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "10.0.0.0/8"})[0], 200)
-        self.assertIsNone(self.sim.ping())
+        self.assertIsNone(self.sim.ping(NO_ANSWER))
         # Host bits are cleared: 127.0.0.9/8 is stored as 127.0.0.0/8.
         self.assertEqual(self.web.req("POST", "/api/allowed-sender", {"ip": "127.0.0.9/8"})[0], 200)
         self.assertEqual(self.web.req("GET", "/api/status")[1]["allowed_sender"], "127.0.0.0/8")
@@ -684,8 +695,26 @@ def main() -> int:
     SIM = os.path.abspath(args.sim)
     if args.cli:
         os.environ["PSHB_CLI"] = os.path.abspath(args.cli)
-    prog = unittest.main(argv=[sys.argv[0], *rest], exit=False, verbosity=2)
-    return 0 if prog.result.wasSuccessful() else 1
+    if rest:  # particular tests (or unittest options): run them here
+        prog = unittest.main(argv=[sys.argv[0], *rest], exit=False, verbosity=2)
+        return 0 if prog.result.wasSuccessful() else 1
+    # Every test class in its own process at the same time: each starts its
+    # own simulators on free ports, and only InteropTests uses pshb-cli.
+    classes = [name for name, obj in globals().items()
+               if isinstance(obj, type) and issubclass(obj, unittest.TestCase)]
+    cmd = [sys.executable, os.path.abspath(__file__), "--sim", SIM]
+    if args.cli:
+        cmd += ["--cli", os.path.abspath(args.cli)]
+    procs = {c: subprocess.Popen([*cmd, c], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+             for c in classes}
+    failed = []
+    for name, proc in procs.items():
+        out, _ = proc.communicate(timeout=600)
+        print(f"===== {name}\n{out}", end="", flush=True)
+        if proc.returncode != 0:
+            failed.append(name)
+    print(f"FAILED: {', '.join(failed)}" if failed else f"OK: {len(classes)} test classes")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
