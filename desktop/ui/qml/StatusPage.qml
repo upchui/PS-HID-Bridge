@@ -42,6 +42,37 @@ Kirigami.ScrollablePage {
         }
         Kirigami.InlineMessage {
             Layout.fillWidth: true
+            type: Kirigami.MessageType.Positive
+            visible: AppController.appUpdateAvailable || AppController.boardUpdateAvailable
+                     || AppController.appUpdated || AppController.updateBusy
+            text: AppController.updateStatus !== "" ? AppController.updateStatus
+                  : "Version " + AppController.latestVersion + " is available"
+                    + (AppController.appUpdateAvailable ? " for the app" : "")
+                    + (AppController.appUpdateAvailable && AppController.boardUpdateAvailable ? " and" : "")
+                    + (AppController.boardUpdateAvailable ? " for the board" : "") + "."
+            actions: [
+                Kirigami.Action {
+                    text: "Update app"
+                    visible: AppController.appUpdateAvailable && AppController.canUpdateApp
+                    enabled: !AppController.updateBusy
+                    onTriggered: AppController.updateApp()
+                },
+                Kirigami.Action {
+                    text: "Restart now"
+                    visible: AppController.appUpdated
+                    onTriggered: AppController.restartApp()
+                },
+                Kirigami.Action {
+                    text: "Update board"
+                    visible: AppController.boardUpdateAvailable
+                    enabled: !AppController.updateBusy && !AppController.active
+                    tooltip: AppController.active ? "Switch the bridge off first" : ""
+                    onTriggered: AppController.updateBoard()
+                }
+            ]
+        }
+        Kirigami.InlineMessage {
+            Layout.fillWidth: true
             type: Kirigami.MessageType.Warning
             text: AppController.devicesBlocked + " selected device interface(s) without access. Set it up under \"Devices\"."
             visible: AppController.devicesBlocked > 0

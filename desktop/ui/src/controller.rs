@@ -16,6 +16,7 @@ use pshb_core::input::{self, DeviceInfo};
 use pshb_core::protocol::{self, Pong};
 use pshb_core::service::{Service, ServiceCmd, ServiceConfig, ServiceEvent, ServiceStatus};
 use pshb_core::trigger::Action;
+use pshb_core::update::{self, Release, Version};
 use serde::Serialize;
 
 use crate::focus::FocusWatcher;
@@ -71,6 +72,14 @@ pub mod qobject {
         #[qproperty(bool, access_busy)]
         #[qproperty(QString, access_message)]
         #[qproperty(QString, version)]
+        #[qproperty(bool, update_check)]
+        #[qproperty(QString, latest_version)]
+        #[qproperty(bool, app_update_available)]
+        #[qproperty(bool, board_update_available)]
+        #[qproperty(bool, can_update_app)]
+        #[qproperty(bool, app_updated)]
+        #[qproperty(bool, update_busy)]
+        #[qproperty(QString, update_status)]
         type AppController = super::AppControllerRust;
 
         /// Switch the bridge on/off (same as the toggle trigger).
@@ -129,6 +138,22 @@ pub mod qobject {
 
         #[qinvokable]
         fn finish_setup(self: Pin<&mut AppController>);
+
+        /// Look for a new release now (also when the automatic check is off).
+        #[qinvokable]
+        fn check_updates(self: Pin<&mut AppController>);
+        /// Automatic check at start and every six hours.
+        #[qinvokable]
+        fn enable_update_check(self: Pin<&mut AppController>, on: bool);
+        /// Download the newest AppImage and replace this one (see restart_app).
+        #[qinvokable]
+        fn update_app(self: Pin<&mut AppController>);
+        /// Start the newly installed version and quit this one.
+        #[qinvokable]
+        fn restart_app(self: Pin<&mut AppController>);
+        /// Install the newest firmware on the board (the bridge must be off).
+        #[qinvokable]
+        fn update_board(self: Pin<&mut AppController>);
         #[qinvokable]
         fn quit_app(self: Pin<&mut AppController>);
     }
@@ -188,6 +213,23 @@ pub struct AppControllerRust {
     identify_on: bool,
     latency_view: bool,
     focus_state: Option<bool>,
+
+    update_check: bool,
+    latest_version: QString,
+    app_update_available: bool,
+    board_update_available: bool,
+    can_update_app: bool,
+    app_updated: bool,
+    update_busy: bool,
+    update_status: QString,
+    /// Newest release found by the last check.
+    latest: Option<Release>,
+    /// Version a notification was shown for (once per version).
+    notified: Option<Version>,
+    /// Firmware the board should come back with after an update (and the
+    /// number of that update, for its timeout).
+    board_expected: Option<(Version, u64)>,
+    board_updates: u64,
 }
 
 /// The running service, shared with the threads that (re)start it, so that
@@ -262,6 +304,18 @@ impl Default for AppControllerRust {
             identify_on: false,
             latency_view: false,
             focus_state: None,
+            update_check: true,
+            latest_version: QString::default(),
+            app_update_available: false,
+            board_update_available: false,
+            can_update_app: false,
+            app_updated: false,
+            update_busy: false,
+            update_status: QString::default(),
+            latest: None,
+            notified: None,
+            board_expected: None,
+            board_updates: 0,
         }
     }
 }
@@ -348,6 +402,7 @@ impl qobject::AppController {
         self.as_mut().set_sensitivity(c.mouse.sensitivity);
         self.as_mut().set_accel(c.mouse.accel);
         self.as_mut().set_setup_done(c.setup_done);
+        self.as_mut().set_update_check(c.update_check);
     }
 
     fn command(&self, cmd: ServiceCmd) {
@@ -510,7 +565,16 @@ impl qobject::AppController {
             self.as_mut()
                 .set_board_firmware(QString::from(&p.fw_version_string()));
             self.as_mut().set_board_usb(QString::from(usb_text(p)));
+            if let Some((want, _)) = self.rust().board_expected
+                && Version::of_firmware(p.fw_version) == want
+            {
+                self.as_mut().rust_mut().board_expected = None;
+                self.as_mut().set_update_busy(false);
+                self.as_mut()
+                    .set_update_status(QString::from(&format!("The board runs firmware {want}.")));
+            }
         }
+        self.as_mut().refresh_board_update(st.connected);
         let text = if !st.connected {
             "Board not reachable"
         } else if st.active {
@@ -779,13 +843,259 @@ impl qobject::AppController {
     }
 
     pub fn quit_app(mut self: Pin<&mut Self>) {
-        // Releases devices and board; a start still in progress is dropped.
+        self.as_mut().stop_everything();
+        std::process::exit(0);
+    }
+
+    /// Release devices and board; a start still in progress is dropped.
+    fn stop_everything(mut self: Pin<&mut Self>) {
         let slot = self.rust().slot.clone();
         slot.generation.fetch_add(1, Ordering::SeqCst);
         let service = slot.service.lock().unwrap().take();
         drop(service);
         self.as_mut().rust_mut().focus = None;
-        std::process::exit(0);
+    }
+
+    // ------------------------------------------------------------ updates
+
+    fn start_update_check(self: Pin<&mut Self>, manual: bool) {
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new()
+            .name("pshb-update-check".into())
+            .spawn(move || {
+                let result = update::latest_release();
+                let _ = qt.queue(move |obj| obj.updates_found(result, manual));
+            });
+    }
+
+    /// Timer tick (start and every six hours).
+    fn periodic_update_check(self: Pin<&mut Self>) {
+        if self.config_ref().update_check {
+            self.start_update_check(false);
+        }
+    }
+
+    pub fn check_updates(mut self: Pin<&mut Self>) {
+        if !*self.update_busy() {
+            self.as_mut()
+                .set_update_status(QString::from("Looking for updates …"));
+        }
+        self.start_update_check(true);
+    }
+
+    pub fn enable_update_check(mut self: Pin<&mut Self>, on: bool) {
+        self.as_mut().rust_mut().config.update_check = on;
+        self.as_mut().save_config();
+        self.as_mut().publish_config();
+        if on {
+            self.start_update_check(false);
+        }
+    }
+
+    fn updates_found(mut self: Pin<&mut Self>, result: Result<Release, String>, manual: bool) {
+        let release = match result {
+            Ok(r) => r,
+            Err(e) => {
+                // An automatic check stays quiet (offline, rate limit).
+                if manual && !*self.update_busy() {
+                    self.as_mut()
+                        .set_update_status(QString::from(&format!("Could not look for updates: {e}")));
+                }
+                return;
+            }
+        };
+        let v = release.version;
+        let newer_app = !*self.app_updated() && Version::of_this_program().is_some_and(|mine| v > mine);
+        self.as_mut().set_latest_version(QString::from(&v.to_string()));
+        self.as_mut().set_app_update_available(newer_app);
+        self.as_mut().rust_mut().latest = Some(release);
+        let connected = *self.connected();
+        self.as_mut().refresh_board_update(connected);
+        let any = newer_app || *self.board_update_available();
+        if manual && !*self.update_busy() {
+            self.as_mut().set_update_status(QString::from(&if any {
+                format!("Version {v} is available.")
+            } else {
+                "Everything is up to date.".to_string()
+            }));
+        }
+        if any && self.rust().notified != Some(v) {
+            self.as_mut().rust_mut().notified = Some(v);
+            notify::send(
+                "Update available",
+                &format!("PS HID Bridge {v} is available. Install it from the app's status page."),
+            );
+        }
+    }
+
+    /// Board update available: the board answers and runs an older firmware.
+    fn refresh_board_update(mut self: Pin<&mut Self>, connected: bool) {
+        let latest = self.rust().latest.as_ref().map(|r| r.version);
+        let board = Version::parse(&self.board_firmware().to_string());
+        let available = connected && matches!((latest, board), (Some(l), Some(b)) if l > b);
+        if *self.board_update_available() != available {
+            self.as_mut().set_board_update_available(available);
+        }
+    }
+
+    fn update_progress(mut self: Pin<&mut Self>, text: String) {
+        if *self.update_busy() {
+            self.as_mut().set_update_status(QString::from(&text));
+        }
+    }
+
+    pub fn update_app(mut self: Pin<&mut Self>) {
+        if *self.update_busy() {
+            return;
+        }
+        let Some(path) = appimage_path() else {
+            self.as_mut().set_update_status(QString::from(
+                "This app does not run as an AppImage in a writable folder: download the new version from the release page.",
+            ));
+            return;
+        };
+        let Some(release) = self.rust().latest.clone() else {
+            return;
+        };
+        self.as_mut().set_update_busy(true);
+        self.as_mut()
+            .set_update_status(QString::from("Downloading the app …"));
+        let progress = self.qt_thread();
+        let done = self.qt_thread();
+        let _ = thread::Builder::new()
+            .name("pshb-update-app".into())
+            .spawn(move || {
+                let mut shown = 0;
+                let result =
+                    update::download_verified(&release, update::APPIMAGE_ASSET, &mut |got, total| {
+                        let pct = (got * 100).checked_div(total).unwrap_or(0);
+                        if pct >= shown + 5 {
+                            shown = pct;
+                            let text = format!("Downloading the app: {pct} %");
+                            let _ = progress.queue(move |obj| obj.update_progress(text));
+                        }
+                    })
+                    .and_then(|data| {
+                        update::replace_file(&path, &data).map_err(|e| format!("{}: {e}", path.display()))
+                    })
+                    .map(|()| release.version);
+                let _ = done.queue(move |obj| obj.app_update_done(result));
+            });
+    }
+
+    fn app_update_done(mut self: Pin<&mut Self>, result: Result<Version, String>) {
+        self.as_mut().set_update_busy(false);
+        match result {
+            Ok(v) => {
+                self.as_mut().set_app_updated(true);
+                self.as_mut().set_app_update_available(false);
+                self.as_mut().set_update_status(QString::from(&format!(
+                    "Version {v} is installed. Restart the app to use it."
+                )));
+            }
+            Err(e) => self
+                .as_mut()
+                .set_update_status(QString::from(&format!("App update failed: {e}"))),
+        }
+    }
+
+    pub fn restart_app(mut self: Pin<&mut Self>) {
+        let Some(path) = std::env::var_os("APPIMAGE") else {
+            return;
+        };
+        // The new instance needs the devices, the board's attention, the
+        // packet counter and the instance lock.
+        self.as_mut().stop_everything();
+        crate::release_instance_lock();
+        match fresh_command(&path).spawn() {
+            Ok(_) => std::process::exit(0),
+            Err(e) => {
+                self.as_mut()
+                    .set_update_status(QString::from(&format!("Restart failed: {e}")));
+                self.as_mut().restart_service();
+            }
+        }
+    }
+
+    pub fn update_board(mut self: Pin<&mut Self>) {
+        if *self.update_busy() {
+            return;
+        }
+        if *self.active() {
+            self.as_mut().set_update_status(QString::from(
+                "Switch the bridge off first: the board restarts during the update.",
+            ));
+            return;
+        }
+        let Some(release) = self.rust().latest.clone() else {
+            return;
+        };
+        let key = match config::load_psk(&config::psk_path()) {
+            Ok(k) => k,
+            Err(e) => {
+                self.as_mut().set_update_status(QString::from(&e));
+                return;
+            }
+        };
+        let board = self.config_ref().board.clone();
+        self.as_mut().set_update_busy(true);
+        self.as_mut()
+            .set_update_status(QString::from("Downloading the firmware …"));
+        let progress = self.qt_thread();
+        let done = self.qt_thread();
+        let _ = thread::Builder::new()
+            .name("pshb-update-board".into())
+            .spawn(move || {
+                let result = update::download_verified(&release, update::FIRMWARE_ASSET, &mut |_, _| {})
+                    .and_then(|image| {
+                        let addr = resolve(&board)?;
+                        let text = "Installing on the board …".to_string();
+                        let _ = progress.queue(move |obj| obj.update_progress(text));
+                        update::board_ota(&addr.ip().to_string(), BOARD_HTTP_PORT, &key, &image)
+                    })
+                    .map(|()| release.version);
+                let _ = done.queue(move |obj| obj.board_update_sent(result));
+            });
+    }
+
+    fn board_update_sent(mut self: Pin<&mut Self>, result: Result<Version, String>) {
+        let v = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.as_mut().set_update_busy(false);
+                self.as_mut()
+                    .set_update_status(QString::from(&format!("Board update failed: {e}")));
+                return;
+            }
+        };
+        let n = self.rust().board_updates + 1;
+        self.as_mut().rust_mut().board_updates = n;
+        self.as_mut().rust_mut().board_expected = Some((v, n));
+        self.as_mut().set_update_status(QString::from(&format!(
+            "Written and checked. The board restarts into firmware {v} …"
+        )));
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new()
+            .name("pshb-update-wait".into())
+            .spawn(move || {
+                thread::sleep(BOARD_UPDATE_WAIT);
+                let _ = qt.queue(move |obj| obj.board_update_timeout(n));
+            });
+    }
+
+    fn board_update_timeout(mut self: Pin<&mut Self>, n: u64) {
+        let Some((v, m)) = self.rust().board_expected else {
+            return;
+        };
+        if m != n {
+            return;
+        }
+        self.as_mut().rust_mut().board_expected = None;
+        self.as_mut().set_update_busy(false);
+        let now = self.board_firmware().to_string();
+        self.as_mut().set_update_status(QString::from(&format!(
+            "The board did not come back with firmware {v} (it reports {now}): it probably went back to the previous version."
+        )));
     }
 }
 
@@ -820,12 +1130,69 @@ impl cxx_qt::Initialize for qobject::AppController {
             if self.config_ref().setup_done {
                 self.as_mut().restart_service();
             }
+            self.as_mut().set_can_update_app(appimage_path().is_some());
+            // Look for updates shortly after the start, then every six hours.
+            let qt = self.qt_thread();
+            let _ = thread::Builder::new()
+                .name("pshb-update-timer".into())
+                .spawn(move || {
+                    thread::sleep(Duration::from_secs(10));
+                    while qt.queue(|obj| obj.periodic_update_check()).is_ok() {
+                        thread::sleep(update::CHECK_INTERVAL);
+                    }
+                });
         }
     }
 }
 
 /// Ping interval while the latency view is visible.
 const LATENCY_VIEW_PING: Duration = Duration::from_millis(200);
+
+/// The board's web interface (firmware updates go there).
+const BOARD_HTTP_PORT: u16 = 80;
+/// How long the board may take to come back after a firmware update.
+const BOARD_UPDATE_WAIT: Duration = Duration::from_secs(60);
+
+/// The running AppImage, if this is one and its folder is writable (the
+/// update writes the new file next to it).
+fn appimage_path() -> Option<std::path::PathBuf> {
+    let path = std::path::PathBuf::from(std::env::var_os("APPIMAGE")?);
+    let probe = path
+        .parent()?
+        .join(format!(".ps-hid-bridge-write-test-{}", std::process::id()));
+    std::fs::File::create(&probe).ok()?;
+    let _ = std::fs::remove_file(&probe);
+    Some(path)
+}
+
+/// Command for the new AppImage without what the running one's AppRun set
+/// up: paths into its mount (PATH, LD_LIBRARY_PATH, Qt plugin paths ...)
+/// would point into a folder that is about to disappear.
+fn fresh_command(appimage: &std::ffi::OsStr) -> std::process::Command {
+    use std::os::unix::process::CommandExt;
+    let mut cmd = std::process::Command::new(appimage);
+    if let Some(appdir) = std::env::var("APPDIR").ok().filter(|d| !d.is_empty()) {
+        for (key, value) in std::env::vars() {
+            if !value.contains(&appdir) {
+                continue;
+            }
+            let kept: Vec<&str> = value.split(':').filter(|p| !p.contains(&appdir)).collect();
+            if kept.iter().all(|p| p.is_empty()) {
+                cmd.env_remove(&key);
+            } else {
+                cmd.env(&key, kept.join(":"));
+            }
+        }
+    }
+    for key in ["APPDIR", "APPIMAGE", "ARGV0"] {
+        cmd.env_remove(key);
+    }
+    if let Some(dir) = std::env::var_os("OWD") {
+        cmd.current_dir(dir);
+    }
+    cmd.process_group(0); // not ended together with this process
+    cmd
+}
 
 /// Drop the running service (and any start in progress) on a helper thread.
 fn stop_service(slot: Arc<ServiceSlot>) {

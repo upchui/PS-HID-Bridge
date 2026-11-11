@@ -48,6 +48,7 @@ Every commit on `main` is built and tested automatically and published as a pre-
 - **Window rule** (KDE Plasma, off by default): see below.
 - **Mouse:** sensitivity and acceleration with a curve preview; the default is the raw values.
 - **Tray icon:** grey = board not reachable, blue = ready, green = bridge on. A click toggles. A Plasma notification appears when the bridge switches.
+- **Updates:** when a new release is out, the Status page offers "Update app" (the AppImage replaces itself, then "Restart now") and "Update board" (firmware over the network, signed with the key; the bridge must be off). The Board page has the section "Updates" with "Check now" and the switch for the automatic check (at start and every six hours). See "Updates from the app and the command line".
 - **Emergency stop:** `Ctrl+Alt+Shift+Esc` always releases mouse and keyboard at once and lets go of everything on the PlayStation. This combination cannot be switched off.
 
 The bridge only switches on once all keys are released: if the devices were grabbed while a key is down, that key would stay stuck on the desktop. *Hold* triggers are the exception, because their key is down by definition: the desktop does not see that key (or any other key held at that moment) being released, so it considers it pressed until it is pressed again. A mouse button (`Mouse4`) is therefore a better hold key than a keyboard key. The emergency stop and "Switch off" end a hold until its key is released. If the app hangs, a watchdog releases the devices after one second.
@@ -210,6 +211,7 @@ These points cannot be checked without a board. The order is chosen so that each
 7. Update over the network with `ps-hid-bridge.uf2` (slot changes from A to B), then with `ps-hid-bridge-rollbacktest.uf2`: this image deliberately never confirms itself; after about 17 seconds the board must restart by itself with the previous version (check slot and firmware in the web interface).
 8. Settings survive several updates (they live outside the firmware slots).
 9. Latency card in the web interface while moving the mouse in a game: "Receive and decrypt" should stay well below 0.1 ms; "Packet → report fetched" around 0.5–1 ms. Compare with a build using `make firmware FW_CMAKE_ARGS=-DPSHB_W5500_FAST_RX=OFF` (plain ioLibrary receive). Note "Mouse motion that had to wait": a high count means reports should rather be filled right before the PlayStation fetches them instead of as early as possible — that can save up to 1 ms with continuous motion. Also check after the PlayStation wakes from rest mode that no old keystrokes arrive, and that logging in to the web interface works (it needs the larger core 1 stack).
+10. Firmware update from the app: bridge off, "Update board" on the Status page (or `pshb-cli update --firmware --file out/ps-hid-bridge.uf2`). The board restarts and the app then shows the new firmware version. A wrong key must be refused ("Signature does not match").
 
 ## Building
 

@@ -97,5 +97,57 @@ Kirigami.ScrollablePage {
             opacity: 0.8
             text: "The board's web interface creates the key under \"Security\". Your router shows the address (device name ps-hid-bridge-…)."
         }
+
+        Kirigami.Separator { Layout.fillWidth: true }
+
+        Kirigami.Heading {
+            level: 2
+            text: "Updates"
+        }
+        Kirigami.FormLayout {
+            Layout.fillWidth: true
+            Controls.Label {
+                Kirigami.FormData.label: "Newest release:"
+                text: AppController.latestVersion !== "" ? AppController.latestVersion : "–"
+            }
+            Controls.Switch {
+                Kirigami.FormData.label: "Automatically:"
+                text: "Look for updates at start and every 6 hours"
+                checked: AppController.updateCheck
+                onToggled: AppController.enableUpdateCheck(checked)
+            }
+        }
+        RowLayout {
+            Controls.Button {
+                text: "Check now"
+                enabled: !AppController.updateBusy
+                onClicked: AppController.checkUpdates()
+            }
+            Controls.Button {
+                text: AppController.appUpdated ? "Restart now" : "Update app"
+                visible: AppController.appUpdateAvailable || AppController.appUpdated
+                enabled: !AppController.updateBusy && (AppController.appUpdated || AppController.canUpdateApp)
+                onClicked: AppController.appUpdated ? AppController.restartApp() : AppController.updateApp()
+            }
+            Controls.Button {
+                text: "Update board firmware"
+                visible: AppController.boardUpdateAvailable
+                enabled: !AppController.updateBusy && !AppController.active
+                onClicked: AppController.updateBoard()
+            }
+        }
+        Controls.Label {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            visible: AppController.updateStatus !== ""
+            text: AppController.updateStatus
+        }
+        Controls.Label {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            opacity: 0.8
+            text: "Releases come from github.com/upchui/PS-HID-Bridge; every download is checked against the release's checksums. The board firmware is installed over the network, signed with the key"
+                  + (AppController.active ? " (switch the bridge off first)." : ".")
+        }
     }
 }
