@@ -115,6 +115,8 @@ pub struct Config {
     pub iso_keyboard: bool,
     /// The first-run wizard has been completed (GUI).
     pub setup_done: bool,
+    /// Look for new releases on GitHub (GUI: at start and every 6 hours).
+    pub update_check: bool,
 }
 
 impl Default for Config {
@@ -131,6 +133,7 @@ impl Default for Config {
             mouse: MouseConfig::default(),
             iso_keyboard: true,
             setup_done: false,
+            update_check: true,
         }
     }
 }

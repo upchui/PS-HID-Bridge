@@ -138,6 +138,12 @@ static void apply_settings(const pshb_settings_t *s) {
 // Power-on: load settings, new session, empty input state.
 static void boot(void) {
     settings_load(&k_flash, &S.settings);
+    if (S.have_key_override) {
+        // As if this key had been set in the web interface (not saved),
+        // so key-based features like signed firmware updates work too.
+        memcpy(S.settings.psk, S.key_override, sizeof(S.settings.psk));
+        S.settings.psk_set = 1;
+    }
     S.boot_us = now_us();
     input_state_init(&S.input);
     uint8_t kbd[PSHB_KBD_REPORT_LEN], mouse[PSHB_MOUSE_REPORT_LEN];

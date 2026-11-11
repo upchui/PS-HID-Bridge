@@ -21,6 +21,12 @@ evdev = "0.13"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+# Updates: GitHub releases over HTTPS (rustls with its own root certificates,
+# so no OpenSSL from the host is needed), checksums, signed firmware upload.
+ureq = { version = "3.5.0", default-features = false, features = ["rustls"] }
+serde_json = "1"
+sha2 = "0.11"
+blake2 = "0.11"
 # Real-time priority through rtkit (D-Bus) when SCHED_FIFO is not permitted
 # directly (feature "rtkit", on by default).
 zbus = { version = "5", optional = true, default-features = false, features = ["async-io", "blocking-api"] }

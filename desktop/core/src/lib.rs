@@ -21,6 +21,7 @@ pub mod script;
 pub mod service;
 pub mod transport;
 pub mod trigger;
+pub mod update;
 
 /// Version of the desktop software (shared by the CLI and the GUI):
 /// MAJOR.MINOR.<commit count>, passed in by the Makefile as PSHB_VERSION

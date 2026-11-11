@@ -363,6 +363,20 @@ class InteropTests(unittest.TestCase):
         self.assertIn("01", [m["buttons"] for m in mouse])  # the click arrived
         self.assertEqual(mouse[-1]["buttons"], "00")
 
+    def test_firmware_update_with_the_key(self):
+        import tempfile
+        self.sim.close()
+        self.sim = Sim("--http-port", "0", key=KEY)
+        self.board = f"127.0.0.1:{self.sim.port}"
+        uf2 = make_uf2(30)
+        with tempfile.NamedTemporaryFile(suffix=".uf2") as f:
+            f.write(uf2)
+            f.flush()
+            r = self.cli("update", "--firmware", "--file", f.name, "--http-port", str(self.sim.http_port))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"The board runs firmware {VERSION}", r.stdout)
+        self.assertTrue(self.sim.wait_line("OTA OK 30", timeout=2))
+
     def test_wrong_key(self):
         r = self.cli("ping", "--count", "1", "--timeout-ms", "300", key=bytes(32))
         self.assertNotEqual(r.returncode, 0)

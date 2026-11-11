@@ -20,6 +20,7 @@ use pshb_core::rt;
 use pshb_core::script;
 use pshb_core::transport::{KeyState, Link, LinkConfig};
 use pshb_core::trigger::{Action, Trigger};
+use pshb_core::update::{self, Version};
 
 #[derive(Parser)]
 #[command(name = "pshb-cli", version = pshb_core::VERSION, about = "PS HID Bridge – command line")]
@@ -107,6 +108,24 @@ enum Command {
         #[command(subcommand)]
         cmd: ConfigCmd,
     },
+    /// Look for a newer release and install it: this program, or with
+    /// --firmware the board's firmware (signed with the key)
+    Update {
+        #[command(flatten)]
+        board: BoardArgs,
+        /// Only show the installed and the newest versions
+        #[arg(long)]
+        check: bool,
+        /// Update the board's firmware instead of this program
+        #[arg(long)]
+        firmware: bool,
+        /// Firmware file to install instead of the newest release
+        #[arg(long, requires = "firmware")]
+        file: Option<PathBuf>,
+        /// Port of the board's web interface
+        #[arg(long, default_value_t = 80)]
+        http_port: u16,
+    },
 }
 
 #[derive(Subcommand)]
@@ -138,6 +157,9 @@ enum ConfigCmd {
         sensitivity: Option<f64>,
         #[arg(long)]
         accel: Option<f64>,
+        /// Look for updates automatically (desktop app)
+        #[arg(long, value_enum)]
+        update_check: Option<OnOff>,
     },
     /// Store the pre-shared key ("-" reads it from standard input)
     SetPsk { key: String },
@@ -556,6 +578,125 @@ fn cmd_send(
     Ok(())
 }
 
+/// Download progress on standard error, in steps of 10 %.
+fn progress_printer(what: &str) -> impl FnMut(u64, u64) + '_ {
+    let mut shown = 0;
+    move |done, total| {
+        let pct = (done * 100).checked_div(total).unwrap_or(0).min(100);
+        if pct >= shown + 10 || (pct == 100 && shown < 100) {
+            shown = pct - pct % 10;
+            eprint!("\r{what}: {pct} %");
+            if pct == 100 {
+                eprintln!();
+            }
+        }
+    }
+}
+
+/// Firmware version the board reports (a short ping).
+fn board_firmware(ctx: &Ctx, board: &BoardArgs) -> Result<Version, String> {
+    let link = connect_within(ctx, board, Duration::from_millis(200), Duration::from_secs(3))?;
+    link.status()
+        .board
+        .map(|p| Version::of_firmware(p.fw_version))
+        .ok_or_else(|| "No answer from the board.".into())
+}
+
+fn cmd_update(
+    ctx: &Ctx,
+    board: &BoardArgs,
+    check: bool,
+    firmware: bool,
+    file: Option<&Path>,
+    http_port: u16,
+) -> Result<(), String> {
+    if firmware {
+        return update_firmware(ctx, board, file, http_port);
+    }
+    let latest = update::latest_release()?;
+    let this = Version::of_this_program();
+    if check {
+        println!("Newest release: {} ({})", latest.version, latest.page);
+        match this {
+            Some(v) if latest.version > v => println!("pshb-cli {v}: update available (pshb-cli update)"),
+            Some(v) => println!("pshb-cli {v}: up to date"),
+            None => println!("pshb-cli {}: development build", pshb_core::VERSION),
+        }
+        if board_addr(ctx, board).is_ok() {
+            match board_firmware(ctx, board) {
+                Ok(v) if latest.version > v => {
+                    println!("Board firmware {v}: update available (pshb-cli update --firmware)")
+                }
+                Ok(v) => println!("Board firmware {v}: up to date"),
+                Err(e) => println!("Board firmware: unknown ({e})"),
+            }
+        }
+        return Ok(());
+    }
+    let Some(v) = this else {
+        return Err("This is a development build; it is not replaced by a release.".into());
+    };
+    if latest.version <= v {
+        println!("pshb-cli {v} is up to date.");
+        return Ok(());
+    }
+    let exe = std::env::current_exe().map_err(|e| format!("Own path: {e}"))?;
+    let data = update::download_verified(&latest, update::CLI_ASSET, &mut progress_printer("Download"))?;
+    update::replace_file(&exe, &data).map_err(|e| format!("{}: {e}", exe.display()))?;
+    println!("Updated {} from {v} to {}.", exe.display(), latest.version);
+    Ok(())
+}
+
+/// Install firmware on the board (newest release or a file), then wait until
+/// it runs the new version.
+fn update_firmware(ctx: &Ctx, board: &BoardArgs, file: Option<&Path>, http_port: u16) -> Result<(), String> {
+    let addr = board_addr(ctx, board)?;
+    let key = load_key(board)?;
+    let before = board_firmware(ctx, board).ok();
+    let (image, expected) = match file {
+        Some(f) => (
+            std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?,
+            None,
+        ),
+        None => {
+            let latest = update::latest_release()?;
+            if let Some(b) = before
+                && latest.version <= b
+            {
+                println!("Board firmware {b} is up to date.");
+                return Ok(());
+            }
+            let data = update::download_verified(
+                &latest,
+                update::FIRMWARE_ASSET,
+                &mut progress_printer("Download"),
+            )?;
+            (data, Some(latest.version))
+        }
+    };
+    println!("Installing on the board ({} KiB) …", image.len() / 1024);
+    update::board_ota(&addr.ip().to_string(), http_port, &key, &image)?;
+    println!("Written and checked; the board restarts into the new firmware …");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    thread::sleep(Duration::from_secs(2));
+    loop {
+        let late = Instant::now() > deadline;
+        match board_firmware(ctx, board) {
+            Ok(v) if expected.is_none_or(|e| v == e) => {
+                println!("The board runs firmware {v}.");
+                return Ok(());
+            }
+            Ok(v) if late => {
+                return Err(format!(
+                    "The board runs {v}: it went back to the previous version."
+                ));
+            }
+            Err(e) if late => return Err(format!("The board did not come back: {e}")),
+            _ => thread::sleep(Duration::from_secs(1)),
+        }
+    }
+}
+
 fn cmd_config(ctx: &mut Ctx, cmd: &ConfigCmd) -> Result<(), String> {
     match cmd {
         ConfigCmd::Show => {
@@ -587,6 +728,7 @@ fn cmd_config(ctx: &mut Ctx, cmd: &ConfigCmd) -> Result<(), String> {
             keyboard,
             sensitivity,
             accel,
+            update_check,
         } => {
             let c = &mut ctx.config;
             if let Some(b) = board {
@@ -617,6 +759,9 @@ fn cmd_config(ctx: &mut Ctx, cmd: &ConfigCmd) -> Result<(), String> {
             }
             if let Some(a) = accel {
                 c.mouse.accel = *a;
+            }
+            if let Some(on) = update_check {
+                c.update_check = matches!(on, OnOff::On);
             }
             c.engine_config()?;
             c.save(&ctx.config_path)?;
@@ -688,6 +833,13 @@ fn main() -> ExitCode {
             hold_ms,
         } => cmd_send(&ctx, board, keys, mods, buttons, *dx, *dy, *hold_ms),
         Command::Config { cmd } => cmd_config(&mut ctx, cmd),
+        Command::Update {
+            board,
+            check,
+            firmware,
+            file,
+            http_port,
+        } => cmd_update(&ctx, board, *check, *firmware, file.as_deref(), *http_port),
     };
     match res {
         Ok(()) => ExitCode::SUCCESS,

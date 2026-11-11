@@ -104,6 +104,10 @@ pshb-cli config show                               # current settings
 pshb-cli ping                                      # connection and board status
 pshb-cli run                                       # forward; toggle with Ctrl+Alt+P
 pshb-cli run --stats                               # also print the input latency every 5 s
+pshb-cli update --check                            # installed and newest versions (also of the board)
+pshb-cli update                                    # replace pshb-cli with the newest release
+pshb-cli update --firmware                         # install the newest firmware on the board
+pshb-cli update --firmware --file ps-hid-bridge.uf2  # ... or a file
 ```
 
 Key names in combinations follow the **position on a US keyboard** (`Z` is the `Y` key on a German keyboard). Modifiers: `Ctrl`, `Alt`, `AltGr`, `Shift`, `Super`; mouse buttons: `Mouse4`, `Mouse5`, `MouseMiddle`. The German names of earlier versions (`Strg`, `Umschalt`, `Maus4` …) are still accepted.
@@ -147,6 +151,17 @@ LED: blinks slowly = no USB host, blinks fast = USB present but no IP yet, stead
 Web interface → System → upload `ps-hid-bridge.uf2`. The board writes the new firmware into the second slot (A/B), checks checksum and content and starts it "on trial". Only when it has started by itself and reaches the network chip is it accepted permanently. If it does not start properly, the board returns to the previous version after a restart. Every new firmware carries a higher version (its last part is the number of commits); the boot ROM always starts the newer one.
 
 This needs the partition table from the first installation (`ps-hid-bridge-pt.uf2`).
+
+The System page shows when a newer firmware is available (your browser asks GitHub; the board itself cannot reach the internet) and links the file.
+
+### Updates from the app and the command line
+
+The desktop app and `pshb-cli update` install the newest release themselves (see "Command line tool"; for the app: section "Updates" on the board page):
+
+- **Where from:** the releases of [upchui/PS-HID-Bridge](https://github.com/upchui/PS-HID-Bridge/releases), asked at `api.github.com` over HTTPS. Every download is checked against the release's `SHA256SUMS` before it is used.
+- **App and CLI** replace their own file (written next to it, then renamed over it).
+- **Board firmware** goes to the board over HTTP, signed with the pre-shared key instead of the web password: the board hands out a one-time challenge, and the app sends a MAC over the challenge and the whole file (see [SPEC.md](protocol/SPEC.md), "Firmware update with the key"). Then it waits until the board runs the new version; if the board returned to the old one, it says so.
+- The app looks for updates at start and every six hours and only installs on a click; `pshb-cli config set --update-check off` (or the switch in the app) turns the check off.
 
 ### Factory reset and recovery
 
