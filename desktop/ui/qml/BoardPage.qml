@@ -66,7 +66,9 @@ Kirigami.ScrollablePage {
             Layout.fillWidth: true
             visible: page.saved && page.error === ""
             type: AppController.connected ? Kirigami.MessageType.Positive : Kirigami.MessageType.Information
-            text: AppController.connected ? "Connected." : "Saved. Connecting …"
+            text: AppController.connected ? "Connected."
+                  : AppController.lastError !== "" ? "Saved. " + AppController.lastError
+                  : "Saved. Connecting …"
         }
 
         Kirigami.FormLayout {

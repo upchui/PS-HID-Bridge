@@ -107,7 +107,11 @@ impl Watchdog {
                 .name("pshb-watchdog".into())
                 .spawn(move || {
                     while !stop.load(Ordering::Acquire) {
-                        thread::sleep(Duration::from_millis(100));
+                        // Woken early by Drop.
+                        thread::park_timeout(Duration::from_millis(100));
+                        if stop.load(Ordering::Acquire) {
+                            break;
+                        }
                         let now = epoch.elapsed().as_millis() as u64;
                         let last = alive_ms.load(Ordering::Acquire);
                         if now.saturating_sub(last) > timeout.as_millis() as u64 && grab.is_grabbed() {
@@ -145,6 +149,7 @@ impl Drop for Watchdog {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(t) = self.thread.take() {
+            t.thread().unpark();
             let _ = t.join();
         }
     }

@@ -17,13 +17,14 @@
 //! processes with the same file (GUI and CLI, two GUIs) would otherwise use
 //! the same values.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Write};
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use crate::lockfile;
 
 const FLOOR_AHEAD_US: u64 = 60_000_000;
 const FLOOR_REFRESH_US: u64 = 30_000_000;
@@ -86,30 +87,23 @@ fn warn(e: io::Error) {
     eprintln!("Warning: could not save the packet counter: {e}");
 }
 
-/// Exclusive, non-blocking lock next to the counter file.
+/// Exclusive lock next to the counter file.
 fn lock(path: &Path) -> io::Result<File> {
     let lock_path = path.with_extension("lock");
-    let f = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)?;
-    // SAFETY: plain syscall on a valid descriptor.
-    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        let e = io::Error::last_os_error();
+    lockfile::exclusive(&lock_path).map_err(|e| {
         if e.kind() == io::ErrorKind::WouldBlock {
-            return Err(io::Error::new(
+            io::Error::new(
                 io::ErrorKind::WouldBlock,
                 format!(
                     "another PS5 HID Bridge program is already sending to the board \
                      ({} is locked); close it first",
                     lock_path.display()
                 ),
-            ));
+            )
+        } else {
+            e
         }
-        return Err(e);
-    }
-    Ok(f)
+    })
 }
 
 fn load(path: &Path) -> io::Result<u64> {

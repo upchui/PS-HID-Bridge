@@ -13,7 +13,6 @@ ColumnLayout {
     readonly property int selectedBlocked: groups.filter(g => g.selected && !g.accessible).length
     readonly property int selectedCount: groups.filter(g => g.selected).length
     property bool identify: false
-    property string accessError: ""
 
     onIdentifyChanged: AppController.setIdentify(identify)
     Component.onDestruction: if (identify) AppController.setIdentify(false)
@@ -87,15 +86,16 @@ ColumnLayout {
         text: list.selectedBlocked + " selected device(s) without read permission. The app sets up a udev rule for them (administrator password required)."
         actions: [
             Kirigami.Action {
-                text: "Set up access"
-                onTriggered: list.accessError = AppController.installAccess()
+                text: AppController.accessBusy ? "Setting up access …" : "Set up access"
+                enabled: !AppController.accessBusy
+                onTriggered: AppController.installAccess()
             }
         ]
     }
     Kirigami.InlineMessage {
         Layout.fillWidth: true
         type: Kirigami.MessageType.Error
-        visible: list.accessError !== ""
-        text: list.accessError
+        visible: AppController.accessMessage !== ""
+        text: AppController.accessMessage
     }
 }

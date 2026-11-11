@@ -30,7 +30,15 @@ Kirigami.ScrollablePage {
             type: Kirigami.MessageType.Error
             text: AppController.lastError
             visible: AppController.lastError !== ""
-            showCloseButton: true
+            // Not showCloseButton: it hides the message for good (the
+            // binding above would be gone and later errors not shown).
+            actions: [
+                Kirigami.Action {
+                    icon.name: "dialog-close"
+                    text: "Dismiss"
+                    onTriggered: AppController.lastError = ""
+                }
+            ]
         }
         Kirigami.InlineMessage {
             Layout.fillWidth: true

@@ -3,7 +3,6 @@
 //! way for an application to learn which window has the focus.
 
 use std::sync::Mutex;
-use std::time::Duration;
 
 use zbus::blocking::{Connection, Proxy, connection};
 
@@ -117,8 +116,7 @@ impl FocusWatcher {
             .and_then(|p| p.call::<_, _, ()>("run", &()))
             .map_err(|e| format!("KWin-Skript starten: {e}"))?;
         }
-        // Give KWin a moment to report the current window.
-        std::thread::sleep(Duration::from_millis(50));
+        // KWin reports the current window by itself shortly after.
         Ok(Self { conn })
     }
 }

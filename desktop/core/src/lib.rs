@@ -13,6 +13,7 @@ pub mod crypto;
 pub mod engine;
 pub mod input;
 pub mod keymap;
+pub mod lockfile;
 pub mod mouse;
 pub mod protocol;
 pub mod rt;

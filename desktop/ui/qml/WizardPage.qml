@@ -108,6 +108,7 @@ Kirigami.ScrollablePage {
                 type: AppController.connected ? Kirigami.MessageType.Positive : Kirigami.MessageType.Information
                 text: AppController.connected
                       ? "Connected. " + AppController.boardUsb + ", firmware " + AppController.boardFirmware + "."
+                      : AppController.lastError !== "" ? AppController.lastError
                       : "Waiting for an answer from the board … Are address and key correct?"
             }
         }

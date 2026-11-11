@@ -2,6 +2,9 @@
 //! service, tray icon, window-focus rule and notifications.
 
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use cxx_qt::{CxxQtType, Threading};
@@ -65,6 +68,8 @@ pub mod qobject {
         #[qproperty(QString, identified_path)]
         #[qproperty(QString, live_text)]
         #[qproperty(QString, last_error)]
+        #[qproperty(bool, access_busy)]
+        #[qproperty(QString, access_message)]
         #[qproperty(QString, version)]
         type AppController = super::AppControllerRust;
 
@@ -90,9 +95,11 @@ pub mod qobject {
         /// Select a device group by its "vvvv:pppp" id.
         #[qinvokable]
         fn set_device_selected(self: Pin<&mut AppController>, id: &QString, selected: bool);
-        /// Install the udev rule for the selected devices; error text or "".
+        /// Install the udev rule for the selected devices (asks for the
+        /// administrator password); `access_busy` meanwhile, then the
+        /// outcome in `access_message` ("" = done).
         #[qinvokable]
-        fn install_access(self: Pin<&mut AppController>) -> QString;
+        fn install_access(self: Pin<&mut AppController>);
         #[qinvokable]
         fn set_identify(self: Pin<&mut AppController>, on: bool);
 
@@ -166,14 +173,45 @@ pub struct AppControllerRust {
     identified_path: QString,
     live_text: QString,
     last_error: QString,
+    access_busy: bool,
+    access_message: QString,
     version: QString,
 
     config: Config,
     devices: Vec<DeviceInfo>,
-    service: Option<Service>,
+    slot: Arc<ServiceSlot>,
     tray: Option<ksni::blocking::Handle<BridgeTray>>,
+    /// Last tray state shown (active, connected).
+    tray_state: Option<(bool, bool)>,
     focus: Option<FocusWatcher>,
+    /// What the GUI asked the service for; re-applied after a restart.
+    identify_on: bool,
+    latency_view: bool,
+    focus_state: Option<bool>,
 }
+
+/// The running service, shared with the threads that (re)start it, so that
+/// name lookups and the start itself never block the UI.
+#[derive(Default)]
+struct ServiceSlot {
+    service: Mutex<Option<Service>>,
+    /// Bumped by every restart request: a start that is no longer the
+    /// newest one is dropped.
+    generation: AtomicU64,
+    /// One start at a time: the old service (devices, packet counter) must
+    /// be gone before the next one starts.
+    starting: Mutex<()>,
+}
+
+impl ServiceSlot {
+    fn is_current(&self, generation: u64) -> bool {
+        self.generation.load(Ordering::SeqCst) == generation
+    }
+}
+
+/// Retry interval when the service could not be started (no network yet,
+/// board name not resolvable, another program sending).
+const RETRY: Duration = Duration::from_secs(5);
 
 impl Default for AppControllerRust {
     fn default() -> Self {
@@ -212,12 +250,18 @@ impl Default for AppControllerRust {
             identified_path: QString::default(),
             live_text: QString::default(),
             last_error: QString::default(),
+            access_busy: false,
+            access_message: QString::default(),
             version: QString::from(pshb_core::VERSION),
             config: Config::default(),
             devices: Vec::new(),
-            service: None,
+            slot: Arc::default(),
             tray: None,
+            tray_state: None,
             focus: None,
+            identify_on: false,
+            latency_view: false,
+            focus_state: None,
         }
     }
 }
@@ -307,70 +351,134 @@ impl qobject::AppController {
     }
 
     fn command(&self, cmd: ServiceCmd) {
-        if let Some(s) = &self.rust().service {
+        if let Some(s) = self.rust().slot.service.lock().unwrap().as_ref() {
             s.send(cmd);
         }
     }
 
-    /// Start (or restart) the bridge service with the current settings.
+    /// Start (or restart) the bridge service with the current settings. The
+    /// work happens on a helper thread; the outcome arrives as
+    /// `service_started` / `service_failed`.
     fn restart_service(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().service = None;
+        let slot = self.rust().slot.clone();
+        let generation = slot.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let cfg = self.config_ref().clone();
-        if cfg.board.is_empty() {
-            self.as_mut()
-                .set_status_text(QString::from("Board address missing"));
+        let problem = if cfg.board.is_empty() {
+            Some("Board address missing")
+        } else if !config::psk_path().exists() {
+            Some("Key missing")
+        } else {
+            None
+        };
+        if let Some(text) = problem {
+            self.as_mut().set_status_text(QString::from(text));
+            stop_service(slot);
             return;
         }
-        let key = match config::load_psk(&config::psk_path()) {
-            Ok(k) => k,
-            Err(_) => {
-                self.as_mut().set_status_text(QString::from("Key missing"));
+        self.as_mut().set_status_text(QString::from("Connecting …"));
+        let events = self.qt_thread();
+        let done = self.qt_thread();
+        let spawned = thread::Builder::new().name("pshb-start".into()).spawn(move || {
+            let _one_at_a_time = slot.starting.lock().unwrap();
+            if !slot.is_current(generation) {
                 return;
             }
-        };
-        let addr = match resolve(&cfg.board) {
-            Ok(a) => a,
-            Err(e) => {
-                self.as_mut().set_status_text(QString::from(&e));
-                return;
+            let old = slot.service.lock().unwrap().take();
+            drop(old); // releases devices and board, frees the packet counter
+            let result = config::load_psk(&config::psk_path())
+                .and_then(|key| Ok((key, resolve(&cfg.board)?)))
+                .and_then(|(key, board)| {
+                    let sink = Box::new(move |ev: ServiceEvent| {
+                        let _ = events.queue(move |obj| obj.on_service_event(ev));
+                    });
+                    let sc = ServiceConfig {
+                        config: cfg,
+                        key,
+                        board,
+                        counter_store: Some(config::counter_path()),
+                    };
+                    Service::start(sc, sink)
+                });
+            match result {
+                Ok(service) if slot.is_current(generation) => {
+                    *slot.service.lock().unwrap() = Some(service);
+                    let _ = done.queue(move |obj| obj.service_started(generation));
+                }
+                Ok(_) => {} // superseded: dropped here
+                Err(e) => {
+                    let _ = done.queue(move |obj| obj.service_failed(generation, e));
+                }
             }
-        };
-        let qt = self.qt_thread();
-        let sink = Box::new(move |ev: ServiceEvent| {
-            let _ = qt.queue(move |obj| obj.on_service_event(ev));
         });
-        let sc = ServiceConfig {
-            config: cfg,
-            key,
-            board: addr,
-            counter_store: Some(config::counter_path()),
-        };
-        match Service::start(sc, sink) {
-            Ok(s) => {
-                self.as_mut().rust_mut().service = Some(s);
-                self.as_mut().set_status_text(QString::from("Connecting …"));
-                self.as_mut().set_last_error(QString::default());
-            }
-            Err(e) => self.as_mut().set_last_error(QString::from(&e)),
+        if let Err(e) = spawned {
+            self.as_mut().set_last_error(QString::from(&e.to_string()));
         }
-        self.as_mut().restart_focus_watcher();
     }
 
+    fn service_started(mut self: Pin<&mut Self>, generation: u64) {
+        if !self.rust().slot.is_current(generation) {
+            return;
+        }
+        self.as_mut().set_last_error(QString::default());
+        // A new service knows nothing of what the GUI asked the old one for.
+        if self.rust().identify_on {
+            self.command(ServiceCmd::Identify(true));
+        }
+        if self.rust().latency_view {
+            self.command(ServiceCmd::PingInterval(LATENCY_VIEW_PING));
+        }
+        if *self.recording() {
+            self.command(ServiceCmd::Record(true));
+        }
+        if let Some(f) = self.rust().focus_state {
+            self.command(ServiceCmd::Focus(f));
+        }
+    }
+
+    fn service_failed(mut self: Pin<&mut Self>, generation: u64, error: String) {
+        if !self.rust().slot.is_current(generation) {
+            return;
+        }
+        self.as_mut().set_status_text(QString::from("Not connected"));
+        self.as_mut()
+            .set_last_error(QString::from(&format!("{error} (trying again)")));
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new().name("pshb-retry".into()).spawn(move || {
+            thread::sleep(RETRY);
+            let _ = qt.queue(move |obj| obj.retry_service(generation));
+        });
+    }
+
+    fn retry_service(self: Pin<&mut Self>, generation: u64) {
+        if self.rust().slot.is_current(generation) {
+            self.restart_service();
+        }
+    }
+
+    /// Watch the window focus (only when the window rule is on). Restarted
+    /// only when the rule changes; the service learns the focus from
+    /// `focus_state`.
     fn restart_focus_watcher(mut self: Pin<&mut Self>) {
         self.as_mut().rust_mut().focus = None;
+        self.as_mut().rust_mut().focus_state = None;
         if !self.config_ref().window_rule_active() {
             return;
         }
         let rule = self.config_ref().window_rule.trim().to_string();
         let qt = self.qt_thread();
         match FocusWatcher::start(&rule, move |focused| {
-            let _ = qt.queue(move |obj| obj.command(ServiceCmd::Focus(focused)));
+            let _ = qt.queue(move |obj| obj.focus_changed(focused));
         }) {
             Ok(w) => self.as_mut().rust_mut().focus = Some(w),
             Err(e) => self
                 .as_mut()
                 .set_last_error(QString::from(&format!("Window rule not available: {e}"))),
         }
+    }
+
+    fn focus_changed(mut self: Pin<&mut Self>, focused: bool) {
+        self.as_mut().rust_mut().focus_state = Some(focused);
+        self.command(ServiceCmd::Focus(focused));
     }
 
     fn apply_status(mut self: Pin<&mut Self>, st: ServiceStatus) {
@@ -415,11 +523,15 @@ impl qobject::AppController {
             "Ready"
         };
         self.as_mut().set_status_text(QString::from(text));
-        if let Some(t) = &self.rust().tray {
-            t.update(|tray| {
-                tray.active = st.active;
-                tray.connected = st.connected;
-            });
+        let tray_state = Some((st.active, st.connected));
+        if self.rust().tray_state != tray_state {
+            self.as_mut().rust_mut().tray_state = tray_state;
+            if let Some(t) = &self.rust().tray {
+                t.update(|tray| {
+                    tray.active = st.active;
+                    tray.connected = st.connected;
+                });
+            }
         }
     }
 
@@ -474,7 +586,9 @@ impl qobject::AppController {
 
     pub fn save_board(mut self: Pin<&mut Self>, address: &QString, psk: &QString) -> QString {
         let address = String::from(address).trim().to_string();
-        if let Err(e) = resolve(&address) {
+        // Only the form here: looking up a host name could block the UI
+        // (the service start does that on its own thread).
+        if let Err(e) = check_address(&address) {
             return QString::from(&e);
         }
         let psk = String::from(psk);
@@ -530,34 +644,59 @@ impl qobject::AppController {
         self.as_mut().restart_service();
     }
 
-    pub fn install_access(mut self: Pin<&mut Self>) -> QString {
+    pub fn install_access(mut self: Pin<&mut Self>) {
+        if *self.access_busy() {
+            return;
+        }
         let selected = input::select(&self.rust().devices, &self.config_ref().devices);
         if selected.is_empty() {
-            return QString::from("Please select keyboard and mouse first.");
+            self.as_mut()
+                .set_access_message(QString::from("Please select keyboard and mouse first."));
+            return;
         }
         let rule = pshb_core::access::udev_rule(&selected);
-        if let Err(e) = pshb_core::access::install_rule(&rule) {
-            return QString::from(&e);
+        self.as_mut().set_access_busy(true);
+        self.as_mut().set_access_message(QString::default());
+        let qt = self.qt_thread();
+        // pkexec waits for the password dialog: never on the UI thread.
+        let spawned = thread::Builder::new().name("pshb-access".into()).spawn(move || {
+            let result = pshb_core::access::install_rule(&rule);
+            if result.is_ok() {
+                // udev applies the ACLs asynchronously.
+                thread::sleep(Duration::from_millis(500));
+            }
+            let _ = qt.queue(move |obj| obj.access_installed(result));
+        });
+        if let Err(e) = spawned {
+            self.as_mut().set_access_busy(false);
+            self.as_mut().set_access_message(QString::from(&e.to_string()));
         }
-        // udev applies the ACLs asynchronously.
-        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    fn access_installed(mut self: Pin<&mut Self>, result: Result<(), String>) {
+        self.as_mut().set_access_busy(false);
+        if let Err(e) = result {
+            self.as_mut().set_access_message(QString::from(&e));
+            return;
+        }
+        // The running service notices the new permissions by itself.
         self.as_mut().refresh_devices();
-        self.as_mut().restart_service();
         let still = input::select(&self.rust().devices, &self.config_ref().devices)
             .iter()
             .filter(|d| !d.accessible)
             .count();
-        if still > 0 {
+        self.as_mut().set_access_message(if still > 0 {
             QString::from(
                 "Rule installed, but no access yet. Please unplug and replug the devices once, \
                  or log in again.",
             )
         } else {
             QString::default()
-        }
+        });
     }
 
-    pub fn set_identify(self: Pin<&mut Self>, on: bool) {
+    pub fn set_identify(mut self: Pin<&mut Self>, on: bool) {
+        self.as_mut().rust_mut().identify_on = on;
         self.command(ServiceCmd::Identify(on));
     }
 
@@ -588,6 +727,7 @@ impl qobject::AppController {
         self.as_mut().rust_mut().config.window_rule = String::from(text).trim().to_string();
         self.as_mut().save_config();
         self.as_mut().publish_config();
+        self.as_mut().restart_focus_watcher();
         self.as_mut().restart_service();
     }
 
@@ -595,6 +735,7 @@ impl qobject::AppController {
         self.as_mut().rust_mut().config.window_rule_enabled = on;
         self.as_mut().save_config();
         self.as_mut().publish_config();
+        self.as_mut().restart_focus_watcher();
         self.as_mut().restart_service();
     }
 
@@ -621,9 +762,10 @@ impl qobject::AppController {
         self.config_ref().mouse_curve().gain(speed)
     }
 
-    pub fn set_latency_view(self: Pin<&mut Self>, visible: bool) {
+    pub fn set_latency_view(mut self: Pin<&mut Self>, visible: bool) {
+        self.as_mut().rust_mut().latency_view = visible;
         let interval = if visible {
-            Duration::from_millis(200)
+            LATENCY_VIEW_PING
         } else {
             Duration::from_secs(1)
         };
@@ -637,7 +779,11 @@ impl qobject::AppController {
     }
 
     pub fn quit_app(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().service = None; // releases everything
+        // Releases devices and board; a start still in progress is dropped.
+        let slot = self.rust().slot.clone();
+        slot.generation.fetch_add(1, Ordering::SeqCst);
+        let service = slot.service.lock().unwrap().take();
+        drop(service);
         self.as_mut().rust_mut().focus = None;
         std::process::exit(0);
     }
@@ -645,10 +791,18 @@ impl qobject::AppController {
 
 impl cxx_qt::Initialize for qobject::AppController {
     fn initialize(mut self: Pin<&mut Self>) {
-        let cfg = match Config::load(&config::config_path()) {
+        let path = config::config_path();
+        let cfg = match Config::load(&path) {
             Ok(c) => c,
             Err(e) => {
-                self.as_mut().set_last_error(QString::from(&e));
+                // Keep the broken file: the next save would replace it.
+                let backup = path.with_extension("toml.broken");
+                let kept = std::fs::copy(&path, &backup).is_ok();
+                self.as_mut().set_last_error(QString::from(&if kept {
+                    format!("{e} (kept as {}; using defaults)", backup.display())
+                } else {
+                    format!("{e} (using defaults)")
+                }));
                 Config::default()
             }
         };
@@ -662,10 +816,47 @@ impl cxx_qt::Initialize for qobject::AppController {
         if !self_test {
             let handle = tray::spawn(self.qt_thread());
             self.as_mut().rust_mut().tray = handle;
+            self.as_mut().restart_focus_watcher();
             if self.config_ref().setup_done {
                 self.as_mut().restart_service();
             }
         }
+    }
+}
+
+/// Ping interval while the latency view is visible.
+const LATENCY_VIEW_PING: Duration = Duration::from_millis(200);
+
+/// Drop the running service (and any start in progress) on a helper thread.
+fn stop_service(slot: Arc<ServiceSlot>) {
+    let _ = thread::Builder::new().name("pshb-stop".into()).spawn(move || {
+        let _one_at_a_time = slot.starting.lock().unwrap();
+        let service = slot.service.lock().unwrap().take();
+        drop(service);
+    });
+}
+
+/// Form of a board address: IP, IP:port, host name or host name:port.
+fn check_address(board: &str) -> Result<(), String> {
+    if board.is_empty() {
+        return Err("Please enter the board address.".into());
+    }
+    if board.parse::<std::net::SocketAddr>().is_ok() || board.parse::<std::net::IpAddr>().is_ok() {
+        return Ok(());
+    }
+    let (host, port) = match board.rsplit_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (board, None),
+    };
+    let host_ok = !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
+    let port_ok = port.is_none_or(|p| p.parse::<u16>().is_ok_and(|p| p != 0));
+    if host_ok && port_ok {
+        Ok(())
+    } else {
+        Err(format!("\"{board}\" is not a valid address."))
     }
 }
 

@@ -15,10 +15,28 @@ use cxx_qt_lib::{QByteArray, QGuiApplication, QQmlApplicationEngine, QString, QU
 // compiled-in resources, like QQmlApplicationEngine::loadFromModule).
 const MAIN_QML: &str = "import PS5HIDBridge\nMain {}\n";
 
+/// One instance per user: a second one would fight over the devices, the
+/// packet counter and the KWin script, and show a second tray icon.
+fn single_instance() -> Option<std::fs::File> {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    match pshb_core::lockfile::exclusive(&dir.join("ps5-hid-bridge.lock")) {
+        Ok(lock) => Some(lock),
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            eprintln!("PS5 HID Bridge is already running.");
+            notify::send_now("PS5 HID Bridge is already running", "Open it from its tray icon.");
+            std::process::exit(0);
+        }
+        Err(_) => None, // no lock possible: start anyway
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let self_test = args.iter().any(|a| a == "--self-test");
     let screenshot = args.iter().any(|a| a == "--screenshot");
+    let _instance = (!self_test && !screenshot).then(single_instance);
 
     // SAFETY: still single-threaded; Qt reads these during startup.
     unsafe {

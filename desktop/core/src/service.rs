@@ -433,7 +433,8 @@ impl Runner {
                     Ok(ServiceCmd::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => {
                         self.shutdown();
                         drop(watchdog);
-                        thread::sleep(Duration::from_millis(30));
+                        // Dropping the last Link reference sends the
+                        // release to the board, rate limit or not.
                         return;
                     }
                     Ok(ServiceCmd::Action(a)) => self.command(a),
