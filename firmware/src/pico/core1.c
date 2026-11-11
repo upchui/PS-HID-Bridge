@@ -9,6 +9,7 @@
 
 #include "bootsel.h"
 #include "dhcp.h"
+#include "diag.h"
 #include "flash_store.h"
 #include "net_shared.h"
 #include "ota.h"
@@ -22,6 +23,12 @@
 
 #define LINK_POLL_MS        100
 #define DHCP_RETRY_MS       5000
+// Core 1 shares the SPI bus with core 0's input path: poll the chip only as
+// often as needed (DHCP works in seconds; a new HTTP connection may wait
+// 1 ms, an open one is served without pause).
+#define DHCP_POLL_US        10000
+#define WEB_IDLE_POLL_US    1000
+#define UDP_TOS_EF          0xB8  // DSCP Expedited Forwarding, like the app's packets
 #define BOOTSEL_POLL_MS     100
 #define FACTORY_RESET_HOLD_MS 5000
 
@@ -70,6 +77,7 @@ static void udp_open(uint16_t port) {
         printf("net: cannot open UDP socket\n");
         return;
     }
+    setSn_TOS(W5500_SOCK_UDP, UDP_TOS_EF);
     setSn_IR(W5500_SOCK_UDP, 0xFF);
     setSn_IMR(W5500_SOCK_UDP, Sn_IR_RECV);
     setSIMR(1u << W5500_SOCK_UDP);
@@ -127,7 +135,10 @@ static void network_service(void) {
         set_state(C1_DHCP);
     }
 
-    if ((s_state == C1_DHCP || s_state == C1_READY) && g_settings.ip_mode == PSHB_IP_DHCP) {
+    static absolute_time_t next_dhcp;
+    if ((s_state == C1_DHCP || s_state == C1_READY) && g_settings.ip_mode == PSHB_IP_DHCP &&
+        time_reached(next_dhcp)) {
+        next_dhcp = make_timeout_time_us(DHCP_POLL_US);
         uint8_t r = DHCP_run();
         if (s_dhcp_assigned) {
             s_dhcp_assigned = false;
@@ -179,6 +190,14 @@ static void be_status(void *ctx, web_status_t *out) {
     out->rx_filtered = g_bridge.stats.rx_filtered;
     out->rx_malformed = g_bridge.stats.rx_malformed;
     out->partition = g_running_slot;
+    out->lat_usb_count = g_diag.usb.count;
+    out->lat_usb_p50_us = latency_percentile(&g_diag.usb, 50);
+    out->lat_usb_p95_us = latency_percentile(&g_diag.usb, 95);
+    out->lat_usb_max_us = g_diag.usb.max_us;
+    out->lat_poll_offset_us = latency_percentile(&g_diag.poll_offset, 50);
+    out->lat_rx_p50_us = latency_percentile(&g_diag.rx, 50);
+    out->lat_rx_max_us = g_diag.rx.max_us;
+    out->mouse_waits = g_diag.mouse_waits;
 }
 
 static bool be_save(void *ctx, const pshb_settings_t *s) {
@@ -290,9 +309,13 @@ void core1_main(void) {
     set_state(C1_NO_LINK);
     web_server_init(&k_backend, &g_settings);
 
+    absolute_time_t next_web = get_absolute_time();
     for (;;) {
         network_service();
-        if (s_state == C1_READY) web_server_service();
+        if (s_state == C1_READY && (web_server_busy() || time_reached(next_web))) {
+            next_web = make_timeout_time_us(WEB_IDLE_POLL_US);
+            web_server_service();
+        }
         bootsel_service();
 
         if (time_reached(next_second)) {

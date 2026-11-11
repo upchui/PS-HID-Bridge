@@ -54,6 +54,7 @@ typedef struct {
     bool failsafe_active;
     uint64_t last_hint_us;
     bool hint_sent;
+    bool input_applied;       // set by every applied INPUT/HEARTBEAT; the caller clears it
 
     bridge_stats_t stats;
 } bridge_t;

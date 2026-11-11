@@ -42,6 +42,7 @@ void bridge_tick(bridge_t *b, uint64_t now_us) {
 static void apply_input(bridge_t *b, const pshb_input_t *in, uint64_t now_us) {
     b->last_input_us = now_us;
     b->input_seen = true;
+    b->input_applied = true;
     b->failsafe_active = false;
     if (in->flags & PSHB_FLAG_RELEASE_ALL) {
         input_state_release_all(b->input);

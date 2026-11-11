@@ -10,4 +10,7 @@ void web_server_init(const web_backend_t *be, pshb_settings_t *settings);
 // Serve pending connections; never blocks for long (1 KiB SPI bursts).
 void web_server_service(void);
 
+// A connection is open: call web_server_service() without pause.
+bool web_server_busy(void);
+
 #endif

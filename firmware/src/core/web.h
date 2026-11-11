@@ -31,6 +31,14 @@ typedef struct {
     bool failsafe;
     uint32_t rx_ok, rx_auth_fail, rx_replay, rx_filtered, rx_malformed;
     const char *partition;  // active firmware slot ("A", "B" or "-")
+
+    // Input path diagnostics measured by core 0 since boot (count 0 = none).
+    uint32_t lat_usb_count;                   // reports fetched by the host
+    uint32_t lat_usb_p50_us, lat_usb_p95_us;  // packet arrival -> report fetched
+    uint32_t lat_usb_max_us;
+    uint32_t lat_poll_offset_us;  // median: start of the USB frame -> report fetched
+    uint32_t lat_rx_p50_us, lat_rx_max_us;  // packet noticed -> applied (SPI + decryption)
+    uint32_t mouse_waits;  // motion arrived while the previous report was not fetched yet
 } web_status_t;
 
 typedef struct {

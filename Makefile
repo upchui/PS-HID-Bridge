@@ -20,6 +20,8 @@ RUST_IMAGE    ?= pshb-rust
 DESKTOP_IMAGE ?= pshb-desktop
 APPTEST_IMAGE ?= pshb-apptest
 PREBUILT      ?=
+# Extra CMake options for the firmware, e.g. -DPSHB_W5500_FAST_RX=OFF
+FW_CMAKE_ARGS ?=
 REPO_URL      ?= https://github.com/upchui/PS-HID-Bridge
 
 FW_ARGS      := UBUNTU_TAG PICO_SDK_TAG PICOTOOL_TAG ARM_TOOLCHAIN_VERSION ARM_TOOLCHAIN_SHA256
@@ -114,7 +116,7 @@ print-release-tag:
 # ---------------------------------------------------------------- firmware
 firmware: image-firmware check-pins dirs
 	$(FW_RUN) bash -c 'cmake -S firmware -B $(FW_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=Release \
-		-DPSHB_DEV_PSK=$(DEV_PSK) \
+		-DPSHB_DEV_PSK=$(DEV_PSK) $(FW_CMAKE_ARGS) \
 		&& cmake --build $(FW_BUILD) --parallel $(JOBS)'
 	cp $(FW_BUILD)/*.uf2 out/
 	cp $(FW_BUILD)/ps5-hid-bridge.elf out/

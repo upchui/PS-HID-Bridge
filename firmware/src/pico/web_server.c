@@ -54,6 +54,10 @@ static void serve(int i, uint8_t sn) {
     }
 }
 
+bool web_server_busy(void) {
+    return s_open[0] || s_open[1];
+}
+
 void web_server_service(void) {
     for (int i = 0; i < 2; i++) {
         uint8_t sn = (uint8_t)(W5500_SOCK_HTTP0 + i);

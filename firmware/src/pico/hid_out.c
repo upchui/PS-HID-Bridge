@@ -3,9 +3,15 @@
 #include "pico/time.h"
 #include "tusb.h"
 
+#include "diag.h"
 #include "usb_descriptors.h"
 
 static input_state_t *s_state;
+// Diagnostics, per interface: arrival of the oldest input that is not in a
+// report yet, and of the input in the report waiting for the host (0 = none).
+static uint64_t s_pending_since[ITF_COUNT];
+static uint64_t s_armed_since[ITF_COUNT];
+static uint64_t s_last_sof_us;
 static bool s_mouse_boot;
 static uint8_t s_leds;
 static absolute_time_t s_mounted_at;
@@ -15,23 +21,47 @@ void hid_out_init(input_state_t *state) {
     s_state = state;
 }
 
+void hid_out_note_input(uint64_t arrival_us) {
+    if (!s_mounted) return;
+    if (input_state_kbd_pending(s_state) && !s_pending_since[ITF_KEYBOARD]) {
+        s_pending_since[ITF_KEYBOARD] = arrival_us;
+    }
+    if (input_state_mouse_pending(s_state)) {
+        if (!s_pending_since[ITF_MOUSE]) s_pending_since[ITF_MOUSE] = arrival_us;
+        if (!tud_hid_n_ready(ITF_MOUSE)) g_diag.mouse_waits++;
+    }
+}
+
+// A report was handed to the USB controller.
+static void armed(uint8_t itf, bool still_pending) {
+    s_armed_since[itf] = s_pending_since[itf];
+    // What is still queued arrived at the same time or later; keeping the
+    // older time errs on the side of a longer latency.
+    if (!still_pending) s_pending_since[itf] = 0;
+}
+
 void hid_out_service(void) {
     if (!s_mounted || tud_suspended()) {
         // Nobody is listening; don't let motion pile up.
         input_state_drop_motion(s_state);
+        for (int i = 0; i < ITF_COUNT; i++) s_pending_since[i] = s_armed_since[i] = 0;
         return;
     }
 
     if (input_state_kbd_pending(s_state) && tud_hid_n_ready(ITF_KEYBOARD)) {
         uint8_t report[PSHB_KBD_REPORT_LEN];
         input_state_take_kbd_report(s_state, report);
-        tud_hid_n_report(ITF_KEYBOARD, 0, report, sizeof(report));
+        if (tud_hid_n_report(ITF_KEYBOARD, 0, report, sizeof(report))) {
+            armed(ITF_KEYBOARD, input_state_kbd_pending(s_state));
+        }
     }
 
     if (input_state_mouse_pending(s_state) && tud_hid_n_ready(ITF_MOUSE)) {
         uint8_t report[PSHB_MOUSE_REPORT_LEN];
         size_t len = input_state_take_mouse_report(s_state, report, s_mouse_boot);
-        tud_hid_n_report(ITF_MOUSE, 0, report, (uint16_t)len);
+        if (tud_hid_n_report(ITF_MOUSE, 0, report, (uint16_t)len)) {
+            armed(ITF_MOUSE, input_state_mouse_pending(s_state));
+        }
     }
 }
 
@@ -52,6 +82,7 @@ uint8_t hid_out_leds(void) {
 
 void tud_mount_cb(void) {
     s_mounted = true;
+    tud_sof_cb_enable(true);  // frame timing for the diagnostics
     s_mounted_at = get_absolute_time();
     s_mouse_boot = false;  // report protocol is the default after configuration
     input_state_mark_dirty(s_state);
@@ -59,6 +90,28 @@ void tud_mount_cb(void) {
 
 void tud_umount_cb(void) {
     s_mounted = false;
+    tud_sof_cb_enable(false);
+}
+
+void tud_sof_cb(uint32_t frame_count) {
+    (void)frame_count;
+    s_last_sof_us = time_us_64();
+}
+
+// The host fetched a report (both times are taken in tud_task(), so they
+// are late by about the same main-loop delay).
+void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len) {
+    (void)report;
+    (void)len;
+    if (instance >= ITF_COUNT) return;
+    uint64_t now = time_us_64();
+    if (s_armed_since[instance]) {
+        latency_add(&g_diag.usb, (uint32_t)(now - s_armed_since[instance]));
+        s_armed_since[instance] = 0;
+    }
+    if (s_last_sof_us && now - s_last_sof_us < 1000) {
+        latency_add(&g_diag.poll_offset, (uint32_t)(now - s_last_sof_us));
+    }
 }
 
 void tud_resume_cb(void) {

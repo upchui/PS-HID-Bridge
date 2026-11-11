@@ -507,6 +507,10 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(st["psk_set"])
         self.assertEqual(st["udp_port"], 45045)
+        # Latency diagnostics are part of the status (the simulator has no USB timing).
+        for k in ("lat_usb_count", "lat_usb_p50_us", "lat_usb_p95_us", "lat_usb_max_us", "lat_poll_offset_us",
+                  "lat_rx_p50_us", "lat_rx_max_us", "mouse_waits"):
+            self.assertEqual(st[k], 0, k)
         # Logout, then only the new password works.
         self.assertEqual(self.web.req("POST", "/api/logout", {})[0], 200)
         self.assertEqual(self.web.req("GET", "/api/status")[0], 401)

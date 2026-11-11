@@ -38,9 +38,19 @@ void w5500_get_mac(uint8_t mac[6]);
 // INTn is active low; asserted while socket 1 has unacknowledged RECV.
 bool w5500_int_asserted(void);
 
+// Hold the SPI bus across several calls (recursive; the ioLibrary calls
+// inside still work). Core 0 takes it once per receive round, so it waits
+// for core 1 at most once instead of before every register access.
+void w5500_lock(void);
+void w5500_unlock(void);
+
 // Read one datagram from a UDP socket without blocking.
 // Returns its length, W5500_RX_EMPTY or W5500_RX_OVERSIZE (dropped).
-int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16_t *port);
+// `*left`: bytes known to be waiting in the socket (0 = ask the chip);
+// updated to what is left afterwards, so a round of reads does not ask the
+// chip again (0 afterwards = nothing known to be left; new datagrams raise
+// INTn again).
+int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16_t *port, uint16_t *left);
 
 // Queue one datagram without waiting for completion. Returns false if the
 // previous send is still in flight or the TX buffer is full (datagram dropped).

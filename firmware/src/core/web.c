@@ -338,6 +338,14 @@ static void h_status(web_app_t *app, web_conn_t *c) {
     jw_int(&w, "rx_replay", st.rx_replay);
     jw_int(&w, "rx_filtered", st.rx_filtered);
     jw_int(&w, "rx_malformed", st.rx_malformed);
+    jw_int(&w, "lat_usb_count", st.lat_usb_count);
+    jw_int(&w, "lat_usb_p50_us", st.lat_usb_p50_us);
+    jw_int(&w, "lat_usb_p95_us", st.lat_usb_p95_us);
+    jw_int(&w, "lat_usb_max_us", st.lat_usb_max_us);
+    jw_int(&w, "lat_poll_offset_us", st.lat_poll_offset_us);
+    jw_int(&w, "lat_rx_p50_us", st.lat_rx_p50_us);
+    jw_int(&w, "lat_rx_max_us", st.lat_rx_max_us);
+    jw_int(&w, "mouse_waits", st.mouse_waits);
     respond_json(c, 200, &w, NULL);
 }
 

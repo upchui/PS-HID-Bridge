@@ -15,6 +15,7 @@
 
 #include "bridge.h"
 #include "core1.h"
+#include "diag.h"
 #include "flash_store.h"
 #include "hexutil.h"
 #include "hid_out.h"
@@ -31,6 +32,7 @@
 net_shared_t g_net;
 pshb_settings_t g_settings;
 bridge_t g_bridge;
+pshb_diag_t g_diag;
 const char *g_running_slot = "-";
 
 static input_state_t g_input;
@@ -105,24 +107,36 @@ static void net_service(void) {
     // INTn signals new data; a slow poll covers a missed edge.
     if (!w5500_int_asserted() && !time_reached(next_poll)) return;
     next_poll = make_timeout_time_ms(1);
-    setSn_IR(W5500_SOCK_UDP, Sn_IR_RECV);
+    uint64_t noticed = time_us_64();
 
+    // One lock for the whole round: core 1 cannot slip in between the
+    // register accesses of a datagram.
+    w5500_lock();
+    setSn_IR(W5500_SOCK_UDP, Sn_IR_RECV);
+    uint16_t left = 0;
     for (int i = 0; i < 8; i++) {
         uint8_t pkt[PSHB_MAX_PACKET_LEN];
         uint8_t ip[4];
         uint16_t port;
-        int n = w5500_udp_recv(W5500_SOCK_UDP, pkt, sizeof(pkt), ip, &port);
+        int n = w5500_udp_recv(W5500_SOCK_UDP, pkt, sizeof(pkt), ip, &port, &left);
         if (n == W5500_RX_EMPTY) break;
         if (n < 0) {
             g_bridge.stats.rx_malformed++;
-            continue;
+        } else {
+            uint8_t reply[PSHB_MAX_PACKET_LEN];
+            g_bridge.input_applied = false;
+            size_t rlen = bridge_handle_packet(&g_bridge, pkt, (size_t)n, ip_to_u32(ip), time_us_64(),
+                                               reply, sizeof(reply));
+            if (rlen) w5500_udp_send_nb(W5500_SOCK_UDP, reply, (uint16_t)rlen, ip, port);
+            if (g_bridge.input_applied) {
+                latency_add(&g_diag.rx, (uint32_t)(time_us_64() - noticed));
+                hid_out_note_input(noticed);
+            }
+            s_activity_until = make_timeout_time_ms(20);
         }
-        uint8_t reply[PSHB_MAX_PACKET_LEN];
-        size_t rlen = bridge_handle_packet(&g_bridge, pkt, (size_t)n, ip_to_u32(ip), time_us_64(),
-                                           reply, sizeof(reply));
-        if (rlen) w5500_udp_send_nb(W5500_SOCK_UDP, reply, (uint16_t)rlen, ip, port);
-        s_activity_until = make_timeout_time_ms(20);
+        if (left < 8) break;  // nothing more known; a new datagram raises INTn again
     }
+    w5500_unlock();
 }
 
 // ---------------------------------------------------------------- test pattern
@@ -195,6 +209,9 @@ int main(void) {
            PSHB_PLAINTEXT_DEBUG ? " (PLAINTEXT DEBUG)" : "");
 
     input_state_init(&g_input);
+    latency_init(&g_diag.usb, 50);
+    latency_init(&g_diag.poll_offset, 20);
+    latency_init(&g_diag.rx, 5);
     bridge_init(&g_bridge, &g_input, get_rand_64(), get_rand_64(), time_us_64());
     g_bridge.allow_plaintext = PSHB_PLAINTEXT_DEBUG;
     critical_section_init(&s_cfg_lock);

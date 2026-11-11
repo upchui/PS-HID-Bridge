@@ -91,6 +91,15 @@ function(pshb_add_firmware name)
     pico_add_extra_outputs(${name})
 endfunction()
 
+# UDP receive path: burst reads (ON) or the plain ioLibrary functions (OFF),
+# e.g. make firmware FW_CMAKE_ARGS=-DPSHB_W5500_FAST_RX=OFF
+option(PSHB_W5500_FAST_RX "Receive UDP with a few SPI burst reads" ON)
+if(PSHB_W5500_FAST_RX)
+    add_compile_definitions(PSHB_W5500_FAST_RX=1)
+else()
+    add_compile_definitions(PSHB_W5500_FAST_RX=0)
+endif()
+
 # Development PSK until settings exist: make firmware DEV_PSK=<64 hex digits>
 set(PSHB_DEV_PSK "" CACHE STRING "Development pre-shared key (64 hex digits)")
 if(PSHB_DEV_PSK)
