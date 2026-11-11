@@ -11,7 +11,6 @@ static input_state_t *s_state;
 // report yet, and of the input in the report waiting for the host (0 = none).
 static uint64_t s_pending_since[ITF_COUNT];
 static uint64_t s_armed_since[ITF_COUNT];
-static uint64_t s_last_sof_us;
 static bool s_mouse_boot;
 static uint8_t s_leds;
 static absolute_time_t s_mounted_at;
@@ -42,8 +41,9 @@ static void armed(uint8_t itf, bool still_pending) {
 
 void hid_out_service(void) {
     if (!s_mounted || tud_suspended()) {
-        // Nobody is listening; don't let motion pile up.
-        input_state_drop_motion(s_state);
+        // Nobody is listening: no motion piling up, and only the current
+        // state goes out once the host is back (no replay of old states).
+        input_state_collapse(s_state);
         for (int i = 0; i < ITF_COUNT; i++) s_pending_since[i] = s_armed_since[i] = 0;
         return;
     }
@@ -82,7 +82,6 @@ uint8_t hid_out_leds(void) {
 
 void tud_mount_cb(void) {
     s_mounted = true;
-    tud_sof_cb_enable(true);  // frame timing for the diagnostics
     s_mounted_at = get_absolute_time();
     s_mouse_boot = false;  // report protocol is the default after configuration
     input_state_mark_dirty(s_state);
@@ -90,12 +89,6 @@ void tud_mount_cb(void) {
 
 void tud_umount_cb(void) {
     s_mounted = false;
-    tud_sof_cb_enable(false);
-}
-
-void tud_sof_cb(uint32_t frame_count) {
-    (void)frame_count;
-    s_last_sof_us = time_us_64();
 }
 
 // The host fetched a report (both times are taken in tud_task(), so they
@@ -108,9 +101,6 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
     if (s_armed_since[instance]) {
         latency_add(&g_diag.usb, (uint32_t)(now - s_armed_since[instance]));
         s_armed_since[instance] = 0;
-    }
-    if (s_last_sof_us && now - s_last_sof_us < 1000) {
-        latency_add(&g_diag.poll_offset, (uint32_t)(now - s_last_sof_us));
     }
 }
 

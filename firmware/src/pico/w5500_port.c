@@ -152,16 +152,26 @@ static void write16(uint32_t addr, uint16_t v) {
     WIZCHIP_WRITE_BUF(addr, b, 2);
 }
 
-// The chip may update the received-size register while we read it: read
-// until two reads agree (as the datasheet asks).
-static uint16_t rx_size(uint8_t sn) {
-    uint16_t a, b = read16(Sn_RX_RSR(sn));
-    do {
-        a = b;
-        b = read16(Sn_RX_RSR(sn));
-    } while (a != b);
-    return a;
+// Received size and read pointer: the registers are neighbours
+// (Sn_RX_RSR 0x26-0x27, Sn_RX_RD 0x28-0x29), so one burst reads both. The
+// chip may update the size while we read it: read until two reads agree
+// (as the datasheet asks).
+static void rx_state(uint8_t sn, uint16_t *size, uint16_t *rd) {
+    uint8_t b[4];
+    WIZCHIP_READ_BUF(Sn_RX_RSR(sn), b, 4);
+    uint16_t a = (uint16_t)((b[0] << 8) | b[1]);
+    *rd = (uint16_t)((b[2] << 8) | b[3]);
+    for (;;) {
+        uint16_t again = read16(Sn_RX_RSR(sn));
+        if (again == a) break;
+        a = again;
+    }
+    *size = a;
 }
+
+// Read pointer after the previous datagram of the same round (valid while
+// the caller passes a non-zero `left`, i.e. under the same lock).
+static uint16_t s_rx_rd[_WIZCHIP_SOCK_NUM_];
 
 static void rx_read(uint8_t sn, uint16_t ptr, uint8_t *buf, uint16_t len) {
     // The chip wraps reads at the end of the socket's buffer by itself.
@@ -169,7 +179,13 @@ static void rx_read(uint8_t sn, uint16_t ptr, uint8_t *buf, uint16_t len) {
 }
 
 int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16_t *port, uint16_t *left) {
-    uint16_t avail = *left ? *left : rx_size(sn);
+    uint16_t avail, ptr;
+    if (*left) {
+        avail = *left;
+        ptr = s_rx_rd[sn];
+    } else {
+        rx_state(sn, &avail, &ptr);
+    }
     *left = 0;
     if (avail < 8) return W5500_RX_EMPTY;
 
@@ -177,7 +193,6 @@ int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16
     // source IP (4), source port (2), payload length (2).
     // Read header and a typical payload in one go.
     uint8_t first[FAST_RX_FIRST];
-    uint16_t ptr = read16(Sn_RX_RD(sn));
     uint16_t n_first = avail < sizeof(first) ? avail : (uint16_t)sizeof(first);
     rx_read(sn, ptr, first, n_first);
     memcpy(ip, first, 4);
@@ -197,7 +212,8 @@ int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16
         if (have < len) rx_read(sn, (uint16_t)(ptr + 8 + have), buf + have, (uint16_t)(len - have));
         result = len;
     }
-    write16(Sn_RX_RD(sn), (uint16_t)(ptr + total));
+    s_rx_rd[sn] = (uint16_t)(ptr + total);
+    write16(Sn_RX_RD(sn), s_rx_rd[sn]);
     exec_cmd(sn, Sn_CR_RECV);
     *left = (uint16_t)(avail - total);
     return result;

@@ -45,8 +45,12 @@ void input_state_set_buttons(input_state_t *s, uint8_t buttons);
 void input_state_add_motion(input_state_t *s, int32_t dx, int32_t dy, int32_t wheel, int32_t pan);
 // Release every key and button and drop pending motion (failsafe).
 void input_state_release_all(input_state_t *s);
-// Drop pending motion only (e.g. while USB is not mounted).
+// Drop pending motion only.
 void input_state_drop_motion(input_state_t *s);
+// Nobody is listening (USB unmounted or suspended): keep only the newest
+// key and button state queued and drop motion, so the host does not get a
+// replay of stale states when it comes back.
+void input_state_collapse(input_state_t *s);
 // Force both reports to be re-sent (e.g. after USB (re)mount).
 void input_state_mark_dirty(input_state_t *s);
 

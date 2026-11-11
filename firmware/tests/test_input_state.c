@@ -236,7 +236,36 @@ TEST(queue_overflow_keeps_newest) {
     CHECK_EQ_U(last, 20);  // the final state always arrives
 }
 
+TEST(collapse_keeps_only_the_current_state) {
+    // USB asleep while input keeps coming: on wake-up only the current
+    // state may go out, not a replay of what happened meanwhile.
+    input_state_t s;
+    input_state_init(&s);
+    uint8_t r[PSHB_KBD_REPORT_LEN];
+    input_state_take_kbd_report(&s, r);
+    for (uint8_t k = 4; k < 10; k++) {
+        const uint8_t keys[6] = {k, 0, 0, 0, 0, 0};
+        input_state_set_keyboard(&s, 0, keys);
+        input_state_set_buttons(&s, k & 1);
+    }
+    input_state_add_motion(&s, 5, 5, 0, 0);
+    input_state_collapse(&s);
+    int n = 0;
+    while (input_state_kbd_pending(&s)) {
+        input_state_take_kbd_report(&s, r);
+        n++;
+    }
+    CHECK_EQ_I(n, 1);
+    CHECK_EQ_U(r[2], 9);
+    uint8_t m[PSHB_MOUSE_REPORT_LEN];
+    CHECK(input_state_mouse_pending(&s));
+    input_state_take_mouse_report(&s, m, false);
+    CHECK_EQ_U(m[0], 1);  // buttons of the last state
+    CHECK(!input_state_mouse_pending(&s));  // motion dropped, one button report
+}
+
 int main(void) {
+    RUN(collapse_keeps_only_the_current_state);
     RUN(fresh_state_sends_empty_reports);
     RUN(keyboard_report_layout);
     RUN(motion_accumulates_between_reports);

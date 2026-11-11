@@ -90,7 +90,6 @@ function renderStatus(st) {
   $("s-lat-usb").textContent = st.lat_usb_count
     ? `median ${ms(st.lat_usb_p50_us)}, 95 % below ${ms(st.lat_usb_p95_us)}, max ${ms(st.lat_usb_max_us)} (${st.lat_usb_count} reports)`
     : "–";
-  $("s-lat-poll").textContent = st.lat_usb_count ? `${st.lat_poll_offset_us} µs after the frame start (median)` : "–";
   $("s-lat-rx").textContent = st.lat_rx_max_us ? `median ${st.lat_rx_p50_us} µs, max ${st.lat_rx_max_us} µs` : "–";
   $("s-lat-waits").textContent = st.mouse_waits;
   $("s-ok").textContent = st.rx_ok;
@@ -309,6 +308,9 @@ function init() {
     stopStatus();
     try {
       await uploadFirmware(data, (p) => { bar.value = p; });
+    } catch (e) {
+      startStatus();  // the board keeps running the old firmware
+      throw e;
     } finally {
       bar.hidden = true;
     }

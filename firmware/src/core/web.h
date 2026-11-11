@@ -36,7 +36,6 @@ typedef struct {
     uint32_t lat_usb_count;                   // reports fetched by the host
     uint32_t lat_usb_p50_us, lat_usb_p95_us;  // packet arrival -> report fetched
     uint32_t lat_usb_max_us;
-    uint32_t lat_poll_offset_us;  // median: start of the USB frame -> report fetched
     uint32_t lat_rx_p50_us, lat_rx_max_us;  // packet noticed -> applied (SPI + decryption)
     uint32_t mouse_waits;  // motion arrived while the previous report was not fetched yet
 } web_status_t;
@@ -71,6 +70,8 @@ typedef struct {
     } sessions[WEB_SESSIONS];
     uint32_t failed_logins;
     uint64_t lockout_until_us;
+    // The connection streaming a firmware image (one update at a time).
+    const void *ota_owner;
 } web_app_t;
 
 typedef enum { WEB_AFTER_NONE, WEB_AFTER_REBOOT, WEB_AFTER_FACTORY_RESET, WEB_AFTER_OTA } web_after_t;

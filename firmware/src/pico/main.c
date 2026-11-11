@@ -102,8 +102,8 @@ static void net_service(void) {
     }
     if (!active) return;
 
-    w5500_udp_tx_poll(W5500_SOCK_UDP);
-
+    // (A reply still in flight is checked by w5500_udp_send_nb itself; only
+    // RECV raises INTn.)
     // INTn signals new data; a slow poll covers a missed edge.
     if (!w5500_int_asserted() && !time_reached(next_poll)) return;
     next_poll = make_timeout_time_ms(1);
@@ -198,6 +198,10 @@ static void load_settings(void) {
     if (!g_settings.psk_set) printf("security: no key set yet -- create one in the web interface\n");
 }
 
+// Core 1 (web server, login with Argon2 at about 4 KB of stack, settings,
+// OTA) gets its own stack instead of the SDK's 2 KB default.
+static uint32_t s_core1_stack[8192 / sizeof(uint32_t)];
+
 int main(void) {
     stdio_init_all();
     gpio_init(PICO_DEFAULT_LED_PIN);
@@ -210,7 +214,6 @@ int main(void) {
 
     input_state_init(&g_input);
     latency_init(&g_diag.usb, 50);
-    latency_init(&g_diag.poll_offset, 20);
     latency_init(&g_diag.rx, 5);
     bridge_init(&g_bridge, &g_input, get_rand_64(), get_rand_64(), time_us_64());
     g_bridge.allow_plaintext = PSHB_PLAINTEXT_DEBUG;
@@ -227,7 +230,7 @@ int main(void) {
 #endif
     g_running_slot = ota_running_slot();
     if (s_chip_ok) {
-        multicore_launch_core1(core1_main);
+        multicore_launch_core1_with_stack(core1_main, s_core1_stack, sizeof(s_core1_stack));
     } else {
         printf("net: W5500 not responding\n");
         atomic_store(&g_net.state, NET_STATE_CHIP_ERROR);

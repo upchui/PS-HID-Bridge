@@ -79,6 +79,9 @@ void web_server_service(void) {
             listen(sn);
             break;
         case SOCK_CLOSED:
+            // Closed by the peer (reset) while open: end the request
+            // properly, e.g. abort an interrupted firmware upload.
+            if (s_open[i]) web_conn_close(&s_app, &s_conn[i]);
             s_open[i] = false;
             socket(sn, Sn_MR_TCP, HTTP_PORT, 0x00);
             break;

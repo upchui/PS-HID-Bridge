@@ -514,7 +514,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(st["udp_port"], 45045)
         self.assertEqual(st["firmware"], VERSION)
         # Latency diagnostics are part of the status (the simulator has no USB timing).
-        for k in ("lat_usb_count", "lat_usb_p50_us", "lat_usb_p95_us", "lat_usb_max_us", "lat_poll_offset_us",
+        for k in ("lat_usb_count", "lat_usb_p50_us", "lat_usb_p95_us", "lat_usb_max_us",
                   "lat_rx_p50_us", "lat_rx_max_us", "mouse_waits"):
             self.assertEqual(st[k], 0, k)
         # Logout, then only the new password works.
@@ -621,12 +621,49 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertFalse(self.sim.wait_line("REBOOT", timeout=0.3))
 
+    def test_only_one_firmware_upload_at_a_time(self):
+        import zlib
+        self.setup_password()
+        uf2 = make_uf2(100)
+        # First upload: headers and part of the body, connection kept open.
+        first = socket.create_connection(("127.0.0.1", self.sim.http_port), timeout=5)
+        head = (f"POST /api/ota HTTP/1.1\r\nHost: x\r\nX-PSHB: 1\r\nCookie: {self.web.cookie}\r\n"
+                f"X-PSHB-CRC32: {zlib.crc32(uf2):x}\r\nContent-Length: {len(uf2)}\r\n\r\n")
+        first.sendall(head.encode() + uf2[:4096])
+        self.assertTrue(self.sim.wait_line(f"OTA BEGIN {len(uf2)}", timeout=2))
+        status, r = self.web.upload("/api/ota", uf2, zlib.crc32(uf2))
+        self.assertEqual(status, 409)
+        self.assertIn("in progress", r["error"])
+        # The interrupted upload is aborted when its connection goes away.
+        first.close()
+        time.sleep(0.2)
+        status, r = self.web.upload("/api/ota", uf2, zlib.crc32(uf2))
+        self.assertEqual((status, r), (200, {"ok": True, "reboot": True}))
+
+    def test_udp_port_rules(self):
+        self.setup_password()
+        body = {"mode": "dhcp", "udp_port": 68}
+        self.assertEqual(self.web.req("POST", "/api/network", body)[0], 400)
+        body["udp_port"] = 67
+        self.assertEqual(self.web.req("POST", "/api/network", body)[0], 400)
+        # "12abc" is not 12
+        import urllib.error
+        import urllib.request
+        req = urllib.request.Request(self.web.base + "/api/network", data=b'{"mode":"dhcp","udp_port":12abc}',
+                                     method="POST", headers={"X-PSHB": "1", "Cookie": self.web.cookie,
+                                                             "Content-Type": "application/json"})
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req, timeout=5)
+        self.assertEqual(e.exception.code, 400)
+        # 80 is a TCP port: no conflict for UDP input.
+        self.assertEqual(self.web.req("POST", "/api/network", {"mode": "dhcp", "udp_port": 80})[0], 200)
+
     def test_firmware_upload_needs_login(self):
         import zlib
         uf2 = make_uf2(4)
         status, _ = self.web.upload("/api/ota", uf2, zlib.crc32(uf2))
         self.assertIn(status, (0, 401))
-        self.assertFalse(self.sim.wait_line("OTA BEGIN", timeout=0.3))
+        self.assertFalse(self.sim.wait_line(f"OTA BEGIN {len(uf2)}", timeout=0.3))
 
     def test_settings_survive_restart(self):
         self.setup_password()

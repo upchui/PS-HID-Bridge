@@ -46,9 +46,25 @@ TEST(reader_rejects_garbage) {
     CHECK(!jr_str("{\"a\":\"\x01\"}", 8, "a", s, sizeof(s)));
 }
 
+TEST(reader_checks_what_follows_a_value) {
+    long long v;
+#define J(s) s, sizeof(s) - 1
+    CHECK(!jr_int(J("{\"a\":12abc}"), "a", &v));
+    CHECK(!jr_int(J("{\"a\":12 3}"), "a", &v));
+    CHECK(!jr_int(J("{\"b\":truex,\"a\":1}"), "a", &v));
+    CHECK(jr_int(J("{\"a\": 12 }"), "a", &v) && v == 12);
+    CHECK(jr_int(J("{\"a\":-7,\"b\":1}"), "a", &v) && v == -7);
+    // Too long or out of range: rejected, never truncated.
+    CHECK(!jr_int(J("{\"a\":0000000000000000000000045045}"), "a", &v));
+    CHECK(!jr_int(J("{\"a\":99999999999999999999}"), "a", &v));
+    CHECK(jr_int(J("{\"a\":9223372036854775807}"), "a", &v) && v == 9223372036854775807LL);
+#undef J
+}
+
 int main(void) {
     RUN(writer);
     RUN(reader);
     RUN(reader_rejects_garbage);
+    RUN(reader_checks_what_follows_a_value);
     return TEST_SUMMARY();
 }

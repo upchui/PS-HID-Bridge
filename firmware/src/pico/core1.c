@@ -194,7 +194,6 @@ static void be_status(void *ctx, web_status_t *out) {
     out->lat_usb_p50_us = latency_percentile(&g_diag.usb, 50);
     out->lat_usb_p95_us = latency_percentile(&g_diag.usb, 95);
     out->lat_usb_max_us = g_diag.usb.max_us;
-    out->lat_poll_offset_us = latency_percentile(&g_diag.poll_offset, 50);
     out->lat_rx_p50_us = latency_percentile(&g_diag.rx, 50);
     out->lat_rx_max_us = g_diag.rx.max_us;
     out->mouse_waits = g_diag.mouse_waits;
@@ -324,7 +323,8 @@ void core1_main(void) {
         }
 
         if (s_ota_activate) {
-            sleep_ms(50);  // let the response leave the chip
+            s_ota_activate = false;  // returns only if the image is not ready
+            sleep_ms(50);            // let the response leave the chip
             ota_activate();
         }
 

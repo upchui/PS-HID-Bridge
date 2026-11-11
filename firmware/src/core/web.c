@@ -15,13 +15,21 @@
 // ---------------------------------------------------------------- helpers
 
 bool web_parse_ip(const char *s, uint8_t out[4]) {
-    unsigned v[4];
-    char tail;
-    if (sscanf(s, "%u.%u.%u.%u%c", &v[0], &v[1], &v[2], &v[3], &tail) != 4) return false;
+    // Exactly a.b.c.d: digits only (no spaces or signs), 1-3 digits, <= 255.
+    uint8_t v[4];
     for (int i = 0; i < 4; i++) {
-        if (v[i] > 255) return false;
-        out[i] = (uint8_t)v[i];
+        unsigned n = 0;
+        int digits = 0;
+        while (*s >= '0' && *s <= '9') {
+            n = n * 10 + (unsigned)(*s++ - '0');
+            if (++digits > 3 || n > 255) return false;
+        }
+        if (digits == 0) return false;
+        v[i] = (uint8_t)n;
+        if (i < 3 && *s++ != '.') return false;
     }
+    if (*s != '\0') return false;
+    memcpy(out, v, 4);
     return true;
 }
 
@@ -198,11 +206,14 @@ static void sessions_clear(web_app_t *app) {
 
 // ---------------------------------------------------------------- handlers
 
-static bool save_apply(web_app_t *app, web_conn_t *c) {
-    if (!app->be->save(app->be->ctx, app->settings)) {
+// Store `next` and only then make it the current settings: after a failed
+// save, what runs and what is in flash still agree.
+static bool save_apply(web_app_t *app, web_conn_t *c, const pshb_settings_t *next) {
+    if (!app->be->save(app->be->ctx, next)) {
         respond_error(c, 500, "Saving to flash failed");
         return false;
     }
+    *app->settings = *next;
     app->be->apply(app->be->ctx, app->settings);
     return true;
 }
@@ -283,8 +294,10 @@ static void h_password(web_app_t *app, web_conn_t *c) {
     } else {
         uint8_t salt[16];
         app->be->random(app->be->ctx, salt, sizeof(salt));
-        password_set(app->settings, new_pw, salt);
-        if (save_apply(app, c)) respond_ok(c);
+        pshb_settings_t next = *app->settings;
+        password_set(&next, new_pw, salt);
+        if (save_apply(app, c, &next)) respond_ok(c);
+        crypto_wipe(&next, sizeof(next));
     }
     crypto_wipe(new_pw, sizeof(new_pw));
 }
@@ -342,7 +355,6 @@ static void h_status(web_app_t *app, web_conn_t *c) {
     jw_int(&w, "lat_usb_p50_us", st.lat_usb_p50_us);
     jw_int(&w, "lat_usb_p95_us", st.lat_usb_p95_us);
     jw_int(&w, "lat_usb_max_us", st.lat_usb_max_us);
-    jw_int(&w, "lat_poll_offset_us", st.lat_poll_offset_us);
     jw_int(&w, "lat_rx_p50_us", st.lat_rx_p50_us);
     jw_int(&w, "lat_rx_max_us", st.lat_rx_max_us);
     jw_int(&w, "mouse_waits", st.mouse_waits);
@@ -359,8 +371,9 @@ static void h_network(web_app_t *app, web_conn_t *c) {
         respond_error(c, 400, "Mode and UDP port are required");
         return;
     }
-    if (port < 1 || port > 65535 || port == 80) {
-        respond_error(c, 400, "UDP port must be between 1 and 65535 (not 80)");
+    // 67/68: DHCP (the board's DHCP client listens on 68 and would get the input).
+    if (port < 1 || port > 65535 || port == 67 || port == 68) {
+        respond_error(c, 400, "UDP port must be between 1 and 65535 (not 67 or 68, used by DHCP)");
         return;
     }
     s.udp_port = (uint16_t)port;
@@ -390,8 +403,7 @@ static void h_network(web_app_t *app, web_conn_t *c) {
         respond_error(c, 400, "Mode must be dhcp or static");
         return;
     }
-    *app->settings = s;
-    if (!save_apply(app, c)) return;
+    if (!save_apply(app, c, &s)) return;
     json_writer_t w;
     jw_begin(&w, c->dyn, sizeof(c->dyn));
     jw_bool(&w, "ok", true);
@@ -401,9 +413,12 @@ static void h_network(web_app_t *app, web_conn_t *c) {
 }
 
 static void h_psk_generate(web_app_t *app, web_conn_t *c) {
-    app->be->random(app->be->ctx, app->settings->psk, sizeof(app->settings->psk));
-    app->settings->psk_set = 1;
-    if (!save_apply(app, c)) return;
+    pshb_settings_t next = *app->settings;
+    app->be->random(app->be->ctx, next.psk, sizeof(next.psk));
+    next.psk_set = 1;
+    bool saved = save_apply(app, c, &next);
+    crypto_wipe(&next, sizeof(next));
+    if (!saved) return;
     char hex[65];
     hex_encode(app->settings->psk, 32, hex);
     json_writer_t w;
@@ -420,11 +435,13 @@ static void h_psk_set(web_app_t *app, web_conn_t *c) {
         respond_error(c, 400, "The key must consist of 64 hex digits");
         return;
     }
-    memcpy(app->settings->psk, key, 32);
-    app->settings->psk_set = 1;
+    pshb_settings_t next = *app->settings;
+    memcpy(next.psk, key, 32);
+    next.psk_set = 1;
     crypto_wipe(key, sizeof(key));
     crypto_wipe(hex, sizeof(hex));
-    if (save_apply(app, c)) respond_ok(c);
+    if (save_apply(app, c, &next)) respond_ok(c);
+    crypto_wipe(&next, sizeof(next));
 }
 
 static void h_allowed_sender(web_app_t *app, web_conn_t *c) {
@@ -442,9 +459,10 @@ static void h_allowed_sender(web_app_t *app, web_conn_t *c) {
         return;
     }
     if (prefix == 0) memset(v, 0, sizeof(v));  // "/0" = any sender
-    memcpy(app->settings->allowed_ip, v, 4);
-    app->settings->allowed_host_bits = prefix ? (uint8_t)(32 - prefix) : 0;
-    if (save_apply(app, c)) respond_ok(c);
+    pshb_settings_t next = *app->settings;
+    memcpy(next.allowed_ip, v, 4);
+    next.allowed_host_bits = prefix ? (uint8_t)(32 - prefix) : 0;
+    if (save_apply(app, c, &next)) respond_ok(c);
 }
 
 static const web_asset_t *find_asset(const char *path) {
@@ -593,12 +611,17 @@ static bool ota_start(web_app_t *app, web_conn_t *c) {
         respond_error(c, 400, "Checksum (X-PSHB-CRC32) missing");
         return false;
     }
+    if (app->ota_owner && app->ota_owner != c) {
+        respond_error(c, 409, "Another firmware update is in progress");
+        return false;
+    }
     char err[96] = "Update not possible";
     if (!app->be->ota_begin || !app->be->ota_begin(app->be->ctx, r->content_length, err, sizeof(err))) {
         respond_error(c, 400, err);
         return false;
     }
     c->ota = true;
+    app->ota_owner = c;  // until this connection is closed
     return true;
 }
 
@@ -681,6 +704,7 @@ void web_conn_sent(web_app_t *app, web_conn_t *c, size_t n) {
 void web_conn_close(web_app_t *app, web_conn_t *c) {
     if (c->ota && !c->responding) app->be->ota_abort(app->be->ctx);
     c->ota = false;
+    if (app->ota_owner == c) app->ota_owner = NULL;
 }
 
 bool web_conn_done(const web_conn_t *c) {

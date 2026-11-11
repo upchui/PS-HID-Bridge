@@ -10,7 +10,6 @@
 
 typedef struct {
     latency_hist_t usb;          // packet arrival -> report fetched by the host
-    latency_hist_t poll_offset;  // start of the USB frame (SOF) -> report fetched
     latency_hist_t rx;           // packet noticed -> applied (SPI + decryption)
     uint32_t mouse_waits;        // motion arrived while the last report was not fetched yet
 } pshb_diag_t;

@@ -81,6 +81,12 @@ void input_state_drop_motion(input_state_t *s) {
     s->dx = s->dy = s->wheel = s->pan = 0;
 }
 
+void input_state_collapse(input_state_t *s) {
+    s->kbd_n = s->btn_n = 0;
+    input_state_mark_dirty(s);  // queues exactly the current state
+    input_state_drop_motion(s);
+}
+
 void input_state_mark_dirty(input_state_t *s) {
     if (s->kbd_n == 0) push_kbd(s);
     if (s->btn_n == 0) push_buttons(s);

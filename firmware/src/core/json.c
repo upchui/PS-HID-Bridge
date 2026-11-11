@@ -1,5 +1,6 @@
 #include "json.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -188,15 +189,15 @@ static bool find(const char *json, size_t len, const char *key, cur_t *val, vtyp
         cur_t start = c;
         vtype_t t;
         if (!skip_value(&c, &t)) return false;
+        ws(&c);
+        // A value ends at ',' or '}' ("12abc" is not the number 12).
+        if (c.p >= c.end || (*c.p != ',' && *c.p != '}')) return false;
         if (strcmp(k, key) == 0) {
             *val = start;
             *type = t;
             return true;
         }
-        ws(&c);
-        if (c.p >= c.end) return false;
         if (*c.p == '}') return false;
-        if (*c.p != ',') return false;
         c.p++;
     }
 }
@@ -212,16 +213,18 @@ bool jr_int(const char *json, size_t len, const char *key, long long *out) {
     cur_t v;
     vtype_t t;
     if (!find(json, len, key, &v, &t) || t != V_NUM) return false;
-    char num[24];
+    char num[21];  // "-" and 19 digits
     size_t n = 0;
-    while (v.p < v.end && n + 1 < sizeof(num) && ((*v.p >= '0' && *v.p <= '9') || *v.p == '-')) {
+    while (v.p < v.end && ((*v.p >= '0' && *v.p <= '9') || *v.p == '-')) {
+        if (n + 1 >= sizeof(num)) return false;  // too long: never truncate
         num[n++] = *v.p++;
     }
     num[n] = '\0';
     if (n == 0 || (v.p < v.end && (*v.p == '.' || *v.p == 'e' || *v.p == 'E'))) return false;
     char *endp;
+    errno = 0;
     *out = strtoll(num, &endp, 10);
-    return *endp == '\0';
+    return *endp == '\0' && errno != ERANGE;
 }
 
 bool jr_bool(const char *json, size_t len, const char *key, bool *out) {
