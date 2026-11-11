@@ -24,7 +24,11 @@ use crate::rt;
 use crate::transport::{KeyState, LatencyStats, Link, LinkConfig};
 use crate::trigger::{Action, Combo, KeyAlt};
 
-const RESCAN: Duration = Duration::from_secs(2);
+/// Device list check: after hot-plug events (settled), else rarely as a
+/// fallback; regularly only where /dev/input cannot be watched.
+const HOTPLUG_SETTLE: Duration = Duration::from_millis(200);
+const RESCAN_FALLBACK: Duration = Duration::from_secs(30);
+const RESCAN_POLL: Duration = Duration::from_secs(2);
 const STATUS: Duration = Duration::from_millis(250);
 
 pub enum ServiceCmd {
@@ -146,12 +150,11 @@ pub fn describe_state(s: &KeyState) -> String {
         .filter(|(bit, _)| s.mods & bit != 0)
         .map(|(_, n)| n.to_string())
         .collect();
-    for &u in s.keys.iter().filter(|u| **u != 0) {
-        parts.push(if u == 0x01 {
-            "too many keys".into()
-        } else {
-            keymap::usage_name(u)
-        });
+    if s.keys.contains(&0x01) {
+        // Rollover: the keyboard report has 0x01 in every slot.
+        parts.push("too many keys".into());
+    } else {
+        parts.extend(s.keys.iter().filter(|u| **u != 0).map(|u| keymap::usage_name(*u)));
     }
     let buttons: Vec<&str> = [
         (0x01, "left"),
@@ -180,16 +183,15 @@ struct Runner {
     link: Arc<Link>,
     specs: Vec<String>,
     sink: Sink,
-    waker: Arc<Waker>,
     guard: GrabGuard,
-    inputs: Option<InputSet>,
-    /// Grab state the engine asked for (re-applied after a rescan).
-    want_grab: bool,
+    inputs: InputSet,
+    next_rescan: Instant,
     realtime: bool,
-    open: Vec<DeviceInfo>,
     blocked: usize,
     recording: Option<BTreeSet<u16>>,
     record_pressed: BTreeSet<u16>,
+    /// Window focus that changed while recording (applied afterwards).
+    pending_focus: Option<bool>,
     identify: bool,
     last_identify: Option<Instant>,
     last_status: ServiceStatus,
@@ -200,20 +202,20 @@ struct Runner {
 
 impl Runner {
     fn new(engine: Engine, link: Arc<Link>, specs: Vec<String>, sink: Sink, waker: Arc<Waker>) -> Self {
+        let guard = GrabGuard::default();
         Self {
             ctl: Controller::new(engine, link.clone()),
             link,
             specs,
             sink,
-            waker,
-            guard: GrabGuard::default(),
-            inputs: None,
-            want_grab: false,
+            inputs: InputSet::new(waker, guard.clone()),
+            guard,
+            next_rescan: Instant::now(),
             realtime: false,
-            open: Vec::new(),
             blocked: 0,
             recording: None,
             record_pressed: BTreeSet::new(),
+            pending_focus: None,
             identify: false,
             last_identify: None,
             last_status: ServiceStatus::default(),
@@ -237,12 +239,7 @@ impl Runner {
     /// device that cannot be grabbed switches the bridge off again.
     fn apply_grab(&mut self) {
         while let Some(on) = self.ctl.take_grab_request() {
-            self.want_grab = on;
-            let failed = match &mut self.inputs {
-                Some(i) => i.set_grab(on),
-                None => Vec::new(),
-            };
-            for f in failed {
+            for f in self.inputs.set_grab(on) {
                 if let InputMsg::GrabFailed { path, error } = f {
                     self.emit(ServiceEvent::Error(format!(
                         "{} cannot be grabbed exclusively: {error}",
@@ -261,8 +258,15 @@ impl Runner {
         self.apply_grab();
     }
 
-    /// (Re)open the selected devices if the set of available ones changed.
+    /// Open newly selected devices and close vanished ones; devices that
+    /// stay open keep their grab.
     fn rescan(&mut self) {
+        self.next_rescan = Instant::now()
+            + if self.inputs.watches_hotplug() {
+                RESCAN_FALLBACK
+            } else {
+                RESCAN_POLL
+            };
         let list = match input::list_devices() {
             Ok(l) => l,
             Err(e) => {
@@ -273,39 +277,36 @@ impl Runner {
         let selected = input::select(&list.devices, &self.specs);
         let wanted: Vec<DeviceInfo> = selected.iter().filter(|d| d.accessible).cloned().collect();
         self.blocked = selected.len() - wanted.len();
-        let paths = |v: &[DeviceInfo]| v.iter().map(|d| d.path.clone()).collect::<Vec<_>>();
-        let complete = self.inputs.as_ref().is_some_and(|i| i.len() == self.open.len());
-        if paths(&wanted) == paths(&self.open) && complete {
-            return;
+        let mut msgs = Vec::new();
+        self.inputs.update(&wanted, &mut msgs);
+        self.handle_msgs(&mut msgs);
+    }
+
+    fn handle_msgs(&mut self, msgs: &mut Vec<InputMsg>) {
+        let mut grab_failed = false;
+        for m in msgs.drain(..) {
+            match m {
+                InputMsg::Event { dev, event, ts_us } => self.handle_input(dev, event, ts_us),
+                InputMsg::Gone { .. } | InputMsg::Hotplug => {
+                    self.next_rescan = self.next_rescan.min(Instant::now() + HOTPLUG_SETTLE);
+                }
+                InputMsg::OpenFailed { path, error } => {
+                    self.emit(ServiceEvent::Error(format!(
+                        "Opening {}: {error}",
+                        path.display()
+                    )));
+                }
+                InputMsg::GrabFailed { path, error } => {
+                    self.emit(ServiceEvent::Error(format!(
+                        "{} cannot be grabbed exclusively: {error}",
+                        path.display()
+                    )));
+                    grab_failed = true;
+                }
+            }
         }
-        // Close the old set first (it releases its grab).
-        self.inputs = None;
-        match InputSet::open(&wanted, self.waker.clone(), self.guard.clone()) {
-            Ok(mut set) => {
-                // The bridge may be on while a device comes back: grab it too.
-                let failed = if self.want_grab {
-                    set.set_grab(true)
-                } else {
-                    Vec::new()
-                };
-                self.inputs = Some(set);
-                self.open = wanted;
-                for f in &failed {
-                    if let InputMsg::GrabFailed { path, error } = f {
-                        self.emit(ServiceEvent::Error(format!(
-                            "{} cannot be grabbed exclusively: {error}",
-                            path.display()
-                        )));
-                    }
-                }
-                if !failed.is_empty() {
-                    self.command(Action::Off);
-                }
-            }
-            Err(e) => {
-                self.emit(ServiceEvent::Error(format!("Opening device: {e}")));
-                self.open.clear();
-            }
+        if grab_failed {
+            self.command(Action::Off);
         }
     }
 
@@ -334,7 +335,7 @@ impl Runner {
             packets_per_second: pps,
             input_latency: self.link.input_latency(),
             realtime: self.realtime && self.link.timer_is_realtime(),
-            devices_open: self.open.len(),
+            devices_open: self.inputs.len(),
             devices_blocked: self.blocked,
         };
         if status != self.last_status {
@@ -344,7 +345,13 @@ impl Runner {
     }
 
     fn handle_input(&mut self, dev: usize, event: Event, ts_us: Option<u64>) {
-        if let Some(rec) = &mut self.recording {
+        // Releases of keys held since before the recording still belong to
+        // the engine (it would keep them pressed otherwise).
+        let engine_release =
+            matches!(event, Event::Key { code, down: false } if !self.record_pressed.contains(&code));
+        if let Some(rec) = &mut self.recording
+            && !engine_release
+        {
             if let Event::Key { code, down } = event {
                 if down {
                     rec.insert(code);
@@ -359,6 +366,7 @@ impl Runner {
                         let text = normalize_modifiers(&combo.to_text());
                         self.recording = None;
                         self.emit(ServiceEvent::Recorded(text));
+                        self.apply_pending_focus();
                     }
                 }
             }
@@ -373,7 +381,7 @@ impl Runner {
             && self
                 .last_identify
                 .is_none_or(|t| t.elapsed() > Duration::from_millis(300))
-            && let Some(d) = self.open.get(dev)
+            && let Some(d) = self.inputs.info(dev)
         {
             self.last_identify = Some(Instant::now());
             self.emit(ServiceEvent::Identified(d.path.clone()));
@@ -387,17 +395,34 @@ impl Runner {
         }
     }
 
+    fn focus(&mut self, focused: bool) {
+        if self.recording.is_some() {
+            // Never let the window rule grab while a trigger is recorded.
+            self.pending_focus = Some(focused);
+            return;
+        }
+        let n = self.ctl.handle(Event::Focus(focused), Instant::now(), None);
+        self.apply_grab();
+        self.notices(n);
+    }
+
+    fn apply_pending_focus(&mut self) {
+        if let Some(f) = self.pending_focus.take() {
+            self.focus(f);
+        }
+    }
+
     fn shutdown(&mut self) {
         self.ctl.shutdown();
         self.apply_grab();
-        self.inputs = None;
+        let mut msgs = Vec::new();
+        self.inputs.update(&[], &mut msgs);
     }
 
     fn run(mut self, rx: Receiver<ServiceCmd>) {
         self.realtime = rt::make_current_thread_realtime(rt::PRIORITY).is_ok();
         self.rescan();
         let watchdog = Watchdog::start(self.link.clone(), self.guard.clone(), Duration::from_secs(1));
-        let mut next_rescan = Instant::now() + RESCAN;
         let mut next_status = Instant::now();
         let mut msgs = Vec::new();
         loop {
@@ -412,11 +437,7 @@ impl Runner {
                         return;
                     }
                     Ok(ServiceCmd::Action(a)) => self.command(a),
-                    Ok(ServiceCmd::Focus(f)) => {
-                        let n = self.ctl.handle(Event::Focus(f), Instant::now(), None);
-                        self.apply_grab();
-                        self.notices(n);
-                    }
+                    Ok(ServiceCmd::Focus(f)) => self.focus(f),
                     Ok(ServiceCmd::Record(on)) => {
                         if on {
                             // Never record while the PS5 gets the keys.
@@ -424,6 +445,9 @@ impl Runner {
                         }
                         self.recording = on.then(BTreeSet::new);
                         self.record_pressed.clear();
+                        if !on {
+                            self.apply_pending_focus();
+                        }
                     }
                     Ok(ServiceCmd::Identify(on)) => self.identify = on,
                     Ok(ServiceCmd::MouseCurve(c)) => self.ctl.engine.set_mouse_curve(c),
@@ -433,21 +457,11 @@ impl Runner {
             }
             // Input (or a wake-up for a command), until the next periodic job
             let now = Instant::now();
-            let timeout = next_rescan.min(next_status).saturating_duration_since(now);
-            match &mut self.inputs {
-                Some(set) => set.wait(timeout, &mut msgs),
-                None => self.waker.wait(timeout),
-            }
-            for m in msgs.drain(..) {
-                match m {
-                    InputMsg::Event { dev, event, ts_us } => self.handle_input(dev, event, ts_us),
-                    InputMsg::Gone { .. } => next_rescan = Instant::now(),
-                    InputMsg::GrabFailed { .. } => {}
-                }
-            }
+            let timeout = self.next_rescan.min(next_status).saturating_duration_since(now);
+            self.inputs.wait(timeout, &mut msgs);
+            self.handle_msgs(&mut msgs);
             let now = Instant::now();
-            if now >= next_rescan {
-                next_rescan = now + RESCAN;
+            if now >= self.next_rescan {
                 self.rescan();
             }
             if now >= next_status {

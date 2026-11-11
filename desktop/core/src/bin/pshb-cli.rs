@@ -426,10 +426,11 @@ fn cmd_run(
                     }
                     apply_grab(&mut ctl, &mut inputs);
                 }
+                // Its keys were released just before (InputSet sends key-ups).
                 InputMsg::Gone { path, error } => {
                     eprintln!("Device {} disconnected: {error}", path.display());
                 }
-                InputMsg::GrabFailed { .. } => {}
+                InputMsg::GrabFailed { .. } | InputMsg::OpenFailed { .. } | InputMsg::Hotplug => {}
             }
         }
         if inputs.is_empty() {

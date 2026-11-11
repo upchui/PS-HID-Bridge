@@ -159,9 +159,11 @@ pub fn select(devices: &[DeviceInfo], specs: &[String]) -> Vec<DeviceInfo> {
 }
 
 pub enum InputMsg {
-    /// An event from device number `dev` (index into the list given to
-    /// [`InputSet::open`]); `ts_us`: kernel timestamp on the monotonic clock
-    /// (see [`crate::clock`]), if the device could be switched to it.
+    /// An event from device `dev` (a stable id, see [`InputSet::info`]);
+    /// `ts_us`: kernel timestamp on the monotonic clock (see
+    /// [`crate::clock`]), if the device could be switched to it. When a
+    /// device is closed, key-up events (without timestamp) release whatever
+    /// it still held.
     Event {
         dev: usize,
         event: Event,
@@ -169,8 +171,13 @@ pub enum InputMsg {
     },
     /// The device disappeared or failed and was closed.
     Gone { path: PathBuf, error: String },
+    /// A device could not be opened (it stays closed until the next update).
+    OpenFailed { path: PathBuf, error: String },
     /// Grabbing failed (e.g. another program holds the device).
     GrabFailed { path: PathBuf, error: String },
+    /// Device nodes in /dev/input appeared, disappeared or changed their
+    /// permissions: time to look at the device list again.
+    Hotplug,
 }
 
 const EVIOCGRAB: libc::c_ulong = 0x4004_4590; // _IOW('E', 0x90, int)
@@ -270,11 +277,53 @@ impl GrabGuard {
 }
 
 struct Open {
-    index: usize,
+    /// Stable id (events carry it; indices change when devices come and go).
+    id: usize,
     info: DeviceInfo,
     dev: Device,
     /// Timestamps are on the monotonic clock.
     mono: bool,
+    /// Keys and buttons currently held on this device.
+    pressed: Vec<u16>,
+}
+
+/// Notices device nodes appearing, disappearing or changing permissions in
+/// /dev/input (inotify), so new devices are picked up at once without
+/// scanning sysfs all the time.
+struct Hotplug {
+    fd: OwnedFd,
+}
+
+impl Hotplug {
+    fn new() -> io::Result<Self> {
+        // SAFETY: plain syscall; the result is checked.
+        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: fd is a fresh descriptor that nothing else owns.
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        let mask = libc::IN_CREATE | libc::IN_DELETE | libc::IN_ATTRIB;
+        // SAFETY: valid descriptor and NUL-terminated path.
+        if unsafe { libc::inotify_add_watch(fd.as_raw_fd(), c"/dev/input".as_ptr(), mask) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self { fd })
+    }
+
+    fn drain(&self) {
+        let mut buf = [0u8; 4096];
+        // SAFETY: reads into a valid buffer from our non-blocking descriptor.
+        while unsafe { libc::read(self.fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) } > 0 {}
+    }
+}
+
+fn pollfd(fd: RawFd) -> libc::pollfd {
+    libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    }
 }
 
 /// The open input devices. One thread waits on all of them at once and
@@ -282,31 +331,40 @@ struct Open {
 /// grab changes immediately.
 pub struct InputSet {
     devices: Vec<Open>,
+    next_id: usize,
     waker: Arc<Waker>,
     guard: GrabGuard,
+    hotplug: Option<Hotplug>,
+    /// Devices, then the waker, then the hot-plug watch (kept between waits).
+    pfds: Vec<libc::pollfd>,
 }
 
 impl InputSet {
-    pub fn open(devices: &[DeviceInfo], waker: Arc<Waker>, guard: GrabGuard) -> io::Result<Self> {
-        let mut open = Vec::new();
-        for (index, info) in devices.iter().enumerate() {
-            let dev = Device::open(&info.path)?;
-            dev.set_nonblocking(true)?;
-            let mono = ioctl_int(dev.as_raw_fd(), EVIOCSCLOCKID, libc::CLOCK_MONOTONIC).is_ok();
-            open.push(Open {
-                index,
-                info: info.clone(),
-                dev,
-                mono,
-            });
-        }
-        guard.set_fds(&open);
+    /// No devices yet (see [`update`](Self::update)); watches /dev/input for
+    /// hot-plugging if the system allows it.
+    pub fn new(waker: Arc<Waker>, guard: GrabGuard) -> Self {
+        guard.set_fds(&[]);
         guard.0.grabbed.store(false, Ordering::Release);
-        Ok(Self {
-            devices: open,
+        let mut set = Self {
+            devices: Vec::new(),
+            next_id: 0,
             waker,
             guard,
-        })
+            hotplug: Hotplug::new().ok(),
+            pfds: Vec::new(),
+        };
+        set.devices_changed();
+        set
+    }
+
+    /// Exactly these devices; fails if one of them cannot be opened.
+    pub fn open(devices: &[DeviceInfo], waker: Arc<Waker>, guard: GrabGuard) -> io::Result<Self> {
+        let mut set = Self::new(waker, guard);
+        for info in devices {
+            set.add(info)?;
+        }
+        set.devices_changed();
+        Ok(set)
     }
 
     pub fn len(&self) -> usize {
@@ -315,6 +373,105 @@ impl InputSet {
 
     pub fn is_empty(&self) -> bool {
         self.devices.is_empty()
+    }
+
+    /// Hot-plugging is noticed by itself ([`InputMsg::Hotplug`]); without
+    /// it the caller has to look at the device list regularly.
+    pub fn watches_hotplug(&self) -> bool {
+        self.hotplug.is_some()
+    }
+
+    /// The device behind an event's `dev`.
+    pub fn info(&self, dev: usize) -> Option<&DeviceInfo> {
+        self.devices.iter().find(|d| d.id == dev).map(|d| &d.info)
+    }
+
+    fn add(&mut self, info: &DeviceInfo) -> io::Result<()> {
+        let dev = Device::open(&info.path)?;
+        dev.set_nonblocking(true)?;
+        let mono = ioctl_int(dev.as_raw_fd(), EVIOCSCLOCKID, libc::CLOCK_MONOTONIC).is_ok();
+        self.devices.push(Open {
+            id: self.next_id,
+            info: info.clone(),
+            dev,
+            mono,
+            pressed: Vec::new(),
+        });
+        self.next_id += 1;
+        Ok(())
+    }
+
+    /// A device was closed: key-up events for what it still held (unless
+    /// another open device holds the same key).
+    fn release_keys(&self, closed: Open, out: &mut Vec<InputMsg>) {
+        for code in closed.pressed {
+            if !self.devices.iter().any(|d| d.pressed.contains(&code)) {
+                out.push(InputMsg::Event {
+                    dev: closed.id,
+                    event: Event::Key { code, down: false },
+                    ts_us: None,
+                });
+            }
+        }
+    }
+
+    /// Bring the open devices in line with `wanted` (compared by path).
+    /// Devices that stay keep their descriptor and grab; closed ones release
+    /// their keys; new ones are grabbed if the others are.
+    pub fn update(&mut self, wanted: &[DeviceInfo], out: &mut Vec<InputMsg>) {
+        let mut changed = false;
+        let mut i = 0;
+        while i < self.devices.len() {
+            if wanted.iter().any(|w| w.path == self.devices[i].info.path) {
+                i += 1;
+                continue;
+            }
+            let closed = self.devices.remove(i);
+            if self.guard.is_grabbed() {
+                let _ = ioctl_int(closed.dev.as_raw_fd(), EVIOCGRAB, 0);
+            }
+            self.release_keys(closed, out);
+            changed = true;
+        }
+        let grabbed = self.guard.is_grabbed();
+        for info in wanted {
+            if self.devices.iter().any(|d| d.info.path == info.path) {
+                continue;
+            }
+            match self.add(info) {
+                Ok(()) => {
+                    changed = true;
+                    let d = self.devices.last().expect("just added");
+                    if grabbed && let Err(e) = ioctl_int(d.dev.as_raw_fd(), EVIOCGRAB, 1) {
+                        out.push(InputMsg::GrabFailed {
+                            path: info.path.clone(),
+                            error: e.to_string(),
+                        });
+                    }
+                }
+                // Gone again between listing and opening: the next hot-plug
+                // event brings the list up to date.
+                Err(e) if e.kind() == io::ErrorKind::NotFound || e.raw_os_error() == Some(libc::ENODEV) => {}
+                Err(e) => out.push(InputMsg::OpenFailed {
+                    path: info.path.clone(),
+                    error: e.to_string(),
+                }),
+            }
+        }
+        if changed {
+            self.devices_changed();
+        }
+    }
+
+    fn devices_changed(&mut self) {
+        self.guard.set_fds(&self.devices);
+        self.pfds.clear();
+        self.pfds
+            .extend(self.devices.iter().map(|d| pollfd(d.dev.as_raw_fd())));
+        self.pfds.push(pollfd(self.waker.fd.as_raw_fd()));
+        if let Some(h) = &self.hotplug {
+            self.pfds.push(pollfd(h.fd.as_raw_fd()));
+        }
     }
 
     /// Grab (true) or release every device. Returns the devices that could
@@ -337,69 +494,82 @@ impl InputSet {
         failed
     }
 
-    /// Wait up to `timeout` for input (or [`Waker::wake`]) and append what
-    /// arrived to `out`.
+    /// Wait up to `timeout` for input, hot-plugging or [`Waker::wake`] and
+    /// append what arrived to `out`.
     pub fn wait(&mut self, timeout: Duration, out: &mut Vec<InputMsg>) {
-        let mut pfds: Vec<libc::pollfd> = self
-            .devices
-            .iter()
-            .map(|d| libc::pollfd {
-                fd: d.dev.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            })
-            .collect();
-        pfds.push(libc::pollfd {
-            fd: self.waker.fd.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        });
         // SAFETY: valid pollfd array for the duration of the call.
-        let r = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, poll_ms(timeout)) };
+        let r = unsafe {
+            libc::poll(
+                self.pfds.as_mut_ptr(),
+                self.pfds.len() as libc::nfds_t,
+                poll_ms(timeout),
+            )
+        };
         if r <= 0 {
             return;
         }
-        if pfds.last().is_some_and(|p| p.revents != 0) {
+        let n = self.devices.len();
+        if self.pfds[n].revents != 0 {
             self.waker.clear();
         }
+        if let Some(h) = &self.hotplug
+            && self.pfds[n + 1].revents != 0
+        {
+            h.drain();
+            out.push(InputMsg::Hotplug);
+        }
         let mut gone = Vec::new();
-        for (i, p) in pfds[..self.devices.len()].iter().enumerate() {
-            if p.revents == 0 {
+        for i in 0..n {
+            if self.pfds[i].revents == 0 {
                 continue;
             }
-            let d = &mut self.devices[i];
-            match d.dev.fetch_events() {
+            let Open {
+                id,
+                dev,
+                mono,
+                pressed,
+                ..
+            } = &mut self.devices[i];
+            match dev.fetch_events() {
                 Ok(events) => {
                     for ev in events {
-                        if let Some(event) = map_event(&ev) {
-                            let ts_us = d.mono.then(|| {
-                                ev.timestamp()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|t| t.as_micros() as u64)
-                                    .unwrap_or(0)
-                            });
-                            out.push(InputMsg::Event {
-                                dev: d.index,
-                                event,
-                                ts_us,
-                            });
+                        let Some(event) = map_event(&ev) else {
+                            continue;
+                        };
+                        if let Event::Key { code, down } = event {
+                            if !down {
+                                pressed.retain(|c| *c != code);
+                            } else if !pressed.contains(&code) {
+                                pressed.push(code);
+                            }
                         }
+                        let ts_us = mono.then(|| {
+                            ev.timestamp()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|t| t.as_micros() as u64)
+                                .unwrap_or(0)
+                        });
+                        out.push(InputMsg::Event {
+                            dev: *id,
+                            event,
+                            ts_us,
+                        });
                     }
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
                 Err(e) => gone.push((i, e.to_string())),
             }
         }
+        if gone.is_empty() {
+            return;
+        }
         for (i, error) in gone.into_iter().rev() {
             let d = self.devices.remove(i);
-            out.push(InputMsg::Gone {
-                path: d.info.path,
-                error,
-            });
+            let path = d.info.path.clone();
+            self.release_keys(d, out);
+            out.push(InputMsg::Gone { path, error });
         }
-        if self.devices.len() + 1 != pfds.len() {
-            self.guard.set_fds(&self.devices);
-        }
+        self.devices_changed();
     }
 }
 
