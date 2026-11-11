@@ -31,7 +31,7 @@ Every commit on `main` is built and tested automatically and published as a pre-
 ## Quick start
 
 1. **Get the files:** download them from the latest release, or build them yourself with `make submodules && make all` (see "Building"; the first run takes long because of Qt).
-2. **Flash the board:** hold BOOTSEL and plug the board into the PC via USB; the drive `RP2350` appears. First copy `out/ps-hid-bridge-pt.uf2` onto it (partition table; the board comes back as a drive afterwards), then `out/ps-hid-bridge.uf2`.
+2. **Flash the board:** hold BOOTSEL and plug the board into the PC via USB; the drive `RP2350` appears. First copy `out/ps-hid-bridge-pt.uf2` onto it (partition table; the board comes back as a drive afterwards), then `out/ps-hid-bridge.uf2`. Or let the program do it: `pshb-cli flash` (see "Flashing over USB from the PC").
 3. **Connect the board:** network cable, USB to the PlayStation. Look up the IP in your router (`ps-hid-bridge-XXXXXX`) and open it in the browser.
 4. **Web interface:** log in with `ps-hid-bridge`, set your own password, generate a key under "Security".
 5. **App:** start `out/PS-HID-Bridge-x86_64.AppImage`. The wizard asks for the board address and key, the devices, the keyboard type and the trigger.
@@ -109,6 +109,8 @@ pshb-cli update --check                            # installed and newest versio
 pshb-cli update                                    # replace pshb-cli with the newest release
 pshb-cli update --firmware                         # install the newest firmware on the board
 pshb-cli update --firmware --file ps-hid-bridge.uf2  # ... or a file
+pshb-cli flash                                     # first installation over USB (BOOTSEL), see below
+pshb-cli flash --image erase                       # recovery images: firmware, hidtest, hidtest-mouse8, erase
 ```
 
 Key names in combinations follow the **position on a US keyboard** (`Z` is the `Y` key on a German keyboard). Modifiers: `Ctrl`, `Alt`, `AltGr`, `Shift`, `Super`; mouse buttons: `Mouse4`, `Mouse5`, `MouseMiddle`. The German names of earlier versions (`Strg`, `Umschalt`, `Maus4` …) are still accepted.
@@ -163,6 +165,16 @@ The desktop app and `pshb-cli update` install the newest release themselves (see
 - **App and CLI** replace their own file (written next to it, then renamed over it).
 - **Board firmware** goes to the board over HTTP, signed with the pre-shared key instead of the web password: the board hands out a one-time challenge, and the app sends a MAC over the challenge and the whole file (see [SPEC.md](protocol/SPEC.md), "Firmware update with the key"). Then it waits until the board runs the new version; if the board returned to the old one, it says so.
 - The app looks for updates at start and every six hours and only installs on a click; `pshb-cli config set --update-check off` (or the switch in the app) turns the check off.
+
+### Flashing over USB from the PC
+
+For the first installation or for recovery, `pshb-cli flash` (and the app, see below) do what is described under "Quick start" by hand: hold BOOTSEL while connecting the board to the PC via USB, and the board shows up as the drive `RP2350`. The program finds that drive through UDisks2 (the service file managers use; no root needed), mounts it if necessary, checks `INFO_UF2.TXT`, copies the files and waits for the board to take them:
+
+- `--image first-install` (default): partition table, then — after the board came back as a drive — the firmware.
+- `--image firmware`, `hidtest`, `hidtest-mouse8`, `erase`: see "Other images" (`erase` asks first, unless `--yes`).
+- The files come from the newest release (checked against `SHA256SUMS`); `--file X.uf2` uses your own file instead (for `first-install` it replaces the firmware, the partition table still comes from the release). Only UF2 files for the RP2350 are accepted.
+
+If the board is not found: use a USB cable with data lines, hold BOOTSEL *while* plugging in, and check that `udisks2` runs (`systemctl status udisks2`).
 
 ### Factory reset and recovery
 

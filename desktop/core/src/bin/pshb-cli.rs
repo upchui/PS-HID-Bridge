@@ -21,6 +21,7 @@ use pshb_core::script;
 use pshb_core::transport::{KeyState, Link, LinkConfig};
 use pshb_core::trigger::{Action, Trigger};
 use pshb_core::update::{self, Version};
+use pshb_core::usbflash::{self, Image};
 
 #[derive(Parser)]
 #[command(name = "pshb-cli", version = pshb_core::VERSION, about = "PS HID Bridge – command line")]
@@ -108,6 +109,20 @@ enum Command {
         #[command(subcommand)]
         cmd: ConfigCmd,
     },
+    /// Install the firmware (or a recovery image) over USB: hold BOOTSEL
+    /// while connecting the board to this PC
+    Flash {
+        /// What to install
+        #[arg(long, value_enum, default_value_t = FlashImage::FirstInstall)]
+        image: FlashImage,
+        /// UF2 file instead of the newest release's (for first-install it
+        /// replaces the firmware; the partition table comes from the release)
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Do not ask before erasing the board
+        #[arg(long)]
+        yes: bool,
+    },
     /// Look for a newer release and install it: this program, or with
     /// --firmware the board's firmware (signed with the key)
     Update {
@@ -126,6 +141,32 @@ enum Command {
         #[arg(long, default_value_t = 80)]
         http_port: u16,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum FlashImage {
+    /// Partition table, then the firmware
+    FirstInstall,
+    /// Firmware only
+    Firmware,
+    /// HID test image (no network, the mouse moves in a square)
+    Hidtest,
+    /// HID test image with 8-bit mouse axes
+    HidtestMouse8,
+    /// Erase the whole flash
+    Erase,
+}
+
+impl FlashImage {
+    fn image(self) -> Image {
+        match self {
+            FlashImage::FirstInstall => Image::FirstInstall,
+            FlashImage::Firmware => Image::Firmware,
+            FlashImage::Hidtest => Image::HidTest,
+            FlashImage::HidtestMouse8 => Image::HidTestMouse8,
+            FlashImage::Erase => Image::Erase,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -578,6 +619,37 @@ fn cmd_send(
     Ok(())
 }
 
+fn cmd_flash(image: Image, file: Option<&Path>, yes: bool) -> Result<(), String> {
+    if image == Image::Erase && !yes {
+        eprint!("This erases the board's firmware and settings. Type \"erase\" to continue: ");
+        let mut answer = String::new();
+        std::io::stdin()
+            .read_line(&mut answer)
+            .map_err(|e| e.to_string())?;
+        if answer.trim() != "erase" {
+            return Err("Nothing was erased.".into());
+        }
+    }
+    let own = match file {
+        Some(f) => {
+            let data = std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?;
+            let name = f
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "firmware.uf2".into());
+            Some((name, data))
+        }
+        None => None,
+    };
+    println!("{}", image.description());
+    let mut say = |msg: &str| println!("{msg}");
+    let files = usbflash::files_for(image, own, &mut say)?;
+    let cancel = AtomicBool::new(false);
+    usbflash::flash(&files, &mut say, &cancel)?;
+    println!("{}", image.done_message());
+    Ok(())
+}
+
 /// Download progress on standard error, in steps of 10 %.
 fn progress_printer(what: &str) -> impl FnMut(u64, u64) + '_ {
     let mut shown = 0;
@@ -840,6 +912,7 @@ fn main() -> ExitCode {
             file,
             http_port,
         } => cmd_update(&ctx, board, *check, *firmware, file.as_deref(), *http_port),
+        Command::Flash { image, file, yes } => cmd_flash(image.image(), file.as_deref(), *yes),
     };
     match res {
         Ok(()) => ExitCode::SUCCESS,
