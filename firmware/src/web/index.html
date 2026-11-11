@@ -8,10 +8,13 @@
 <script src="/app.js" defer></script>
 </head>
 <body>
+<!-- icons:begin -->
+<svg hidden><symbol id="i-gamepad" viewBox="0 0 24 24"><path d="M7 7h10a5 5 0 0 1 4.9 6l-.8 4a2.5 2.5 0 0 1-4.3 1.2L15 16H9l-1.8 2.2A2.5 2.5 0 0 1 2.9 17l-.8-4A5 5 0 0 1 7 7zM7 10v4M5 12h4M15.5 11h.01M17.5 13h.01"/></symbol><symbol id="i-status" viewBox="0 0 24 24"><path d="M4 16a8 8 0 1 1 16 0M12 16l4-5M10.5 16a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0Z"/></symbol><symbol id="i-network" viewBox="0 0 24 24"><path d="M10 3h4a1 1 0 0 1 1 1v3a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1ZM4 16h4a1 1 0 0 1 1 1v3a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1ZM16 16h4a1 1 0 0 1 1 1v3a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1ZM12 8v4M6 16v-4h12v4"/></symbol><symbol id="i-key" viewBox="0 0 24 24"><path d="M4 15a4 4 0 1 0 8 0a4 4 0 1 0 -8 0ZM11 12l9-9M17 6l3 3M15 8l2 2"/></symbol><symbol id="i-board" viewBox="0 0 24 24"><path d="M8 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2v-8a2 2 0 0 1 2 -2ZM9.5 9.5h5v5h-5ZM9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol><symbol id="i-latency" viewBox="0 0 24 24"><path d="M4 13a8 8 0 1 0 16 0a8 8 0 1 0 -16 0ZM12 13V9M10 2h4M12 2v3"/></symbol><symbol id="i-update" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/></symbol><symbol id="i-warning" viewBox="0 0 24 24"><path d="M12 3l10 18H2zM12 10v5M12 18h.01"/></symbol><symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v8M7.5 6.5a7 7 0 1 0 9 0"/></symbol></svg>
+<!-- icons:end -->
 <header class="top">
-  <h1>PS HID Bridge</h1>
+  <div class="brand"><span class="logo"><svg class="i"><use href="#i-gamepad"/></svg></span><h1>PS HID Bridge</h1></div>
   <span id="pill" class="pill" hidden></span>
-  <button id="logout" class="link" hidden>Log out</button>
+  <button id="logout" class="ghost" hidden>Log out</button>
 </header>
 
 <main>
@@ -19,18 +22,18 @@
 
   <!-- Login -->
   <section id="v-login" class="card narrow" hidden>
-    <h2>Log in</h2>
+    <h2><svg class="i"><use href="#i-key"/></svg>Log in</h2>
     <form id="f-login">
       <label>Password <input type="password" name="password" autocomplete="current-password" required autofocus></label>
       <button type="submit">Log in</button>
     </form>
-    <p class="hint">The factory password is <code>ps-hid-bridge</code>. You have to change it at the first login.</p>
+    <p class="hint">Factory password: <code>ps-hid-bridge</code> (to be changed at the first login).</p>
   </section>
 
   <!-- Forced password change -->
   <section id="v-first" class="card narrow" hidden>
-    <h2>Set your own password</h2>
-    <p>The board still uses the factory password. Please choose your own now (8 to 64 characters).</p>
+    <h2><svg class="i"><use href="#i-key"/></svg>Set your own password</h2>
+    <p class="hint">The board still uses the factory password. Choose your own, 8 to 64 characters.</p>
     <form id="f-first">
       <label>Factory password <input type="password" name="old" autocomplete="current-password" required></label>
       <label>New password <input type="password" name="new" autocomplete="new-password" minlength="8" maxlength="64" required></label>
@@ -41,79 +44,75 @@
 
   <!-- Main view -->
   <div id="v-main" hidden>
-    <nav class="tabs" role="tablist">
-      <button class="tab" data-tab="status" aria-selected="true">Status</button>
-      <button class="tab" data-tab="network">Network</button>
-      <button class="tab" data-tab="security">Security</button>
-      <button class="tab" data-tab="system">System</button>
+    <nav class="tabs">
+      <a class="tab" href="#status"><svg class="i"><use href="#i-status"/></svg>Status</a>
+      <a class="tab" href="#network"><svg class="i"><use href="#i-network"/></svg>Network</a>
+      <a class="tab" href="#security"><svg class="i"><use href="#i-key"/></svg>Security</a>
+      <a class="tab" href="#system"><svg class="i"><use href="#i-board"/></svg>System</a>
     </nav>
 
     <section id="t-status" class="tabpane">
+      <div class="card hero">
+        <span id="h-icon" class="badge"><svg class="i"><use href="#i-gamepad"/></svg></span>
+        <div><p class="big" id="s-input">–</p><p class="sub" id="s-usb">–</p></div>
+      </div>
+      <a id="s-nokey" class="banner warn" href="#security" hidden><svg class="i"><use href="#i-warning"/></svg>No key yet: generate one under Security.</a>
       <div class="grid">
-        <div class="card"><h3>Input</h3><p class="big" id="s-input">–</p><p class="sub" id="s-usb">–</p></div>
-        <div class="card"><h3>Network</h3><p class="big" id="s-ip">–</p><p class="sub" id="s-net">–</p></div>
-        <div class="card"><h3>Firmware</h3><p class="big" id="s-fw">–</p><p class="sub" id="s-uptime">–</p></div>
+        <div class="card"><h3><svg class="i"><use href="#i-network"/></svg>Network</h3><p class="big" id="s-ip">–</p><p class="sub" id="s-net">–</p></div>
+        <div class="card"><h3><svg class="i"><use href="#i-board"/></svg>Firmware</h3><p class="big" id="s-fw">–</p><p class="sub" id="s-uptime">–</p></div>
+        <div class="card" title="From the packet to the report fetched by the PlayStation, since the board started. The PlayStation fetches at most one report per millisecond.">
+          <h3><svg class="i"><use href="#i-latency"/></svg>Latency</h3><p class="big" id="s-lat">–</p><p class="sub" id="s-lat-sub">–</p></div>
       </div>
       <div class="card">
         <h3>Packets</h3>
-        <table class="kv">
-          <tr><th>Valid</th><td id="s-ok">–</td></tr>
-          <tr><th>Bad signature</th><td id="s-auth">–</td></tr>
-          <tr><th>Replayed / wrong session</th><td id="s-replay">–</td></tr>
-          <tr><th>Unknown sender</th><td id="s-filtered">–</td></tr>
-          <tr><th>Malformed</th><td id="s-malformed">–</td></tr>
-        </table>
+        <div class="counts">
+          <div><b id="s-ok">–</b>valid</div>
+          <div><b id="s-auth">–</b>bad signature</div>
+          <div><b id="s-replay">–</b>replayed</div>
+          <div><b id="s-filtered">–</b>unknown sender</div>
+          <div><b id="s-malformed">–</b>malformed</div>
+        </div>
       </div>
-      <div class="card">
-        <h3>Details</h3>
+      <details class="card">
+        <summary>Details</summary>
         <table class="kv">
           <tr><th>MAC address</th><td id="s-mac">–</td></tr>
           <tr><th>Gateway / DNS</th><td id="s-gw">–</td></tr>
           <tr><th>UDP port</th><td id="s-port">–</td></tr>
           <tr><th>Key</th><td id="s-psk">–</td></tr>
           <tr><th>Sender filter</th><td id="s-allowed">–</td></tr>
-        </table>
-      </div>
-      <div class="card">
-        <h3>Latency</h3>
-        <table class="kv">
-          <tr><th>Packet → report fetched by the PlayStation</th><td id="s-lat-usb">–</td></tr>
+          <tr><th>Reports to the PlayStation</th><td id="s-lat-n">–</td></tr>
           <tr><th>Receive and decrypt</th><td id="s-lat-rx">–</td></tr>
           <tr><th>Mouse motion that had to wait</th><td id="s-lat-waits">–</td></tr>
         </table>
-        <p class="hint">Measured on the board since it started. The PlayStation fetches at most one report per millisecond.</p>
-      </div>
+      </details>
     </section>
 
     <section id="t-network" class="tabpane" hidden>
-      <div class="card">
-        <h2>Network</h2>
-        <form id="f-network">
-          <fieldset class="radios">
-            <label><input type="radio" name="mode" value="dhcp"> Automatic (DHCP)</label>
-            <label><input type="radio" name="mode" value="static"> Static address</label>
-          </fieldset>
-          <div id="static-fields">
-            <label>IP address <input name="ip" inputmode="decimal" placeholder="192.168.1.50"></label>
-            <label>Subnet mask <input name="mask" inputmode="decimal" placeholder="255.255.255.0"></label>
-            <label>Gateway <input name="gateway" inputmode="decimal" placeholder="192.168.1.1"></label>
-            <label>DNS server <input name="dns" inputmode="decimal" placeholder="192.168.1.1"></label>
-          </div>
-          <label>UDP port for input <input name="udp_port" type="number" min="1" max="65535" required></label>
-          <p class="hint">The board restarts after saving. With a static address it is then reachable at the new IP.</p>
-          <button type="submit">Save and restart</button>
-        </form>
-      </div>
+      <form id="f-network" class="card">
+        <h2><svg class="i"><use href="#i-network"/></svg>Network</h2>
+        <div class="seg">
+          <label><input type="radio" name="mode" value="dhcp"><span>Automatic (DHCP)</span></label>
+          <label><input type="radio" name="mode" value="static"><span>Static address</span></label>
+        </div>
+        <div id="static-fields" class="cols">
+          <label>IP address <input name="ip" inputmode="decimal" placeholder="192.168.1.50"></label>
+          <label>Subnet mask <input name="mask" inputmode="decimal" placeholder="255.255.255.0"></label>
+          <label>Gateway <input name="gateway" inputmode="decimal" placeholder="192.168.1.1"></label>
+          <label>DNS server <input name="dns" inputmode="decimal" placeholder="192.168.1.1"></label>
+        </div>
+        <div class="cols"><label>UDP port for input <input name="udp_port" type="number" min="1" max="65535" required></label></div>
+        <div class="row"><button type="submit">Save and restart</button><span class="hint">The board restarts with the new settings.</span></div>
+      </form>
     </section>
 
     <section id="t-security" class="tabpane" hidden>
       <div class="card">
-        <h2>Pre-shared key</h2>
-        <p>The app encrypts all input with this key. App and board need the same key.</p>
-        <p>Status: <strong id="psk-state">–</strong></p>
+        <h2><svg class="i"><use href="#i-key"/></svg>Key <span id="psk-state" class="pill">–</span></h2>
+        <p class="hint">The app encrypts all input with it; app and board need the same key.</p>
         <button id="b-psk-gen">Generate new key</button>
         <div id="psk-show" class="keybox" hidden>
-          <p><strong>New key</strong> – shown only now. Paste it into the app under “Board”:</p>
+          <p><strong>New key</strong>, shown only now. Paste it into the app under “Board”:</p>
           <code id="psk-value"></code>
           <button id="b-psk-copy" class="secondary">Copy</button>
         </div>
@@ -125,44 +124,41 @@
           </form>
         </details>
       </div>
-      <div class="card">
+      <form id="f-allowed" class="card">
         <h2>Sender filter</h2>
-        <p>Only accept packets from this IP address or subnet (e.g. <code>192.168.1.0/24</code> for 192.168.1.0 – 192.168.1.255). Leave empty to accept any address.</p>
-        <form id="f-allowed">
-          <label>Allowed sender (IP or subnet) <input name="ip" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="e.g. 192.168.1.20 or 192.168.1.0/24"></label>
+        <p class="hint">Accept input only from this IP address or subnet, e.g. <code>192.168.1.0/24</code>. Empty: any sender.</p>
+        <div class="inline">
+          <input name="ip" aria-label="Allowed sender" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="any sender">
           <button type="submit">Save</button>
-        </form>
-      </div>
-      <div class="card">
-        <h2>Change password</h2>
-        <form id="f-password">
+        </div>
+      </form>
+      <form id="f-password" class="card">
+        <h2>Password</h2>
+        <div class="cols">
           <label>Current password <input type="password" name="old" autocomplete="current-password" required></label>
           <label>New password <input type="password" name="new" autocomplete="new-password" minlength="8" maxlength="64" required></label>
           <label>Repeat <input type="password" name="new2" autocomplete="new-password" minlength="8" maxlength="64" required></label>
-          <button type="submit">Change password</button>
-        </form>
-      </div>
+        </div>
+        <button type="submit">Change password</button>
+      </form>
     </section>
 
     <section id="t-system" class="tabpane" hidden>
-      <div class="card">
-        <h2>Firmware update</h2>
-        <p id="fw-update" class="hint" hidden></p>
-        <p>Current: <strong id="fw-current">–</strong>. The new firmware (<code>ps-hid-bridge.uf2</code>) is written to the second slot and only kept after it started successfully. If it does not start properly, the board returns to the previous version after a restart.</p>
-        <form id="f-ota">
-          <label>UF2 file <input type="file" name="file" accept=".uf2" required></label>
-          <progress id="ota-progress" max="100" value="0" hidden></progress>
-          <button type="submit">Upload and install</button>
-        </form>
-      </div>
-      <div class="card">
-        <h2>Restart</h2>
-        <p>The board restarts. Input is interrupted for a few seconds.</p>
+      <form id="f-ota" class="card">
+        <h2><svg class="i"><use href="#i-update"/></svg>Firmware <span id="fw-current" class="pill">–</span></h2>
+        <p id="fw-update" class="banner" hidden></p>
+        <label>UF2 file (<code>ps-hid-bridge.uf2</code>) <input type="file" name="file" accept=".uf2" required></label>
+        <progress id="ota-progress" max="100" value="0" hidden></progress>
+        <button type="submit">Upload and install</button>
+        <p class="hint">Written to the second slot and kept only once it has started; otherwise the board returns to the previous version.</p>
+      </form>
+      <div class="card row">
+        <div><h2><svg class="i"><use href="#i-power"/></svg>Restart</h2><p class="hint">Input stops for a few seconds.</p></div>
         <button id="b-reboot" class="secondary">Restart</button>
       </div>
       <div class="card danger">
-        <h2>Factory reset</h2>
-        <p>Erases password, key and network settings. Afterwards the factory password applies again and the app needs a new key. Alternatively: hold the BOOTSEL button on the board for 5 seconds.</p>
+        <h2><svg class="i"><use href="#i-warning"/></svg>Factory reset</h2>
+        <p class="hint">Erases password, key and network settings; the app then needs a new key. Also possible: hold BOOTSEL on the board for 5 seconds.</p>
         <button id="b-reset" class="danger">Reset to factory settings</button>
         <div id="reset-confirm" class="confirm" hidden>
           <p>Really reset everything?</p>

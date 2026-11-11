@@ -7,6 +7,9 @@ let lastStatus = null;
 // Newest release on GitHub (asked by this browser, not by the board).
 const RELEASES = "https://api.github.com/repos/upchui/PS-HID-Bridge/releases?per_page=10";
 let updateChecked = false;
+// Tabs live in the address (#network), so reloading keeps the tab.
+const TABS = ["status", "network", "security", "system"];
+const tabName = () => (TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "status");
 
 async function api(path, body) {
   const opt = { credentials: "same-origin", headers: {} };
@@ -83,7 +86,7 @@ async function checkForUpdate() {
     const a = document.createElement("a");
     a.href = best.asset.browser_download_url;
     a.textContent = "download ps-hid-bridge.uf2";
-    p.append(a, " and upload it below, or update from the desktop app (Board page).");
+    p.append(a, " and upload it below, or update from the desktop app (Firmware & updates).");
     p.hidden = false;
   } catch (e) {
     /* offline or blocked: no hint */
@@ -91,11 +94,13 @@ async function checkForUpdate() {
 }
 
 function selectTab(name) {
-  for (const b of document.querySelectorAll(".tab")) {
-    b.setAttribute("aria-selected", b.dataset.tab === name ? "true" : "false");
+  for (const a of document.querySelectorAll(".tab")) {
+    if (a.getAttribute("href") === "#" + name) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
   }
   for (const p of document.querySelectorAll(".tabpane")) p.hidden = p.id !== "t-" + name;
-  message("");
+  if (lastStatus && name !== "status") fillForms(lastStatus);
+  if (name === "system") checkForUpdate();
 }
 
 function fmtUptime(ms) {
@@ -108,43 +113,49 @@ function fmtUptime(ms) {
   return `${m} min ${s} s`;
 }
 
-function setPill(st) {
-  const p = $("pill");
-  p.hidden = false;
-  if (!st.usb_mounted) { p.textContent = "PlayStation not connected"; p.className = "pill bad"; }
-  else if (st.usb_suspended) { p.textContent = "PlayStation in rest mode"; p.className = "pill warn"; }
-  else if (st.input_active) { p.textContent = "Input active"; p.className = "pill ok"; }
-  else { p.textContent = "Ready"; p.className = "pill ok"; }
+// [title, explanation, state colour]
+function boardState(st) {
+  if (!st.usb_mounted) return ["PlayStation not connected", "Connect the board to the PlayStation's USB port.", "bad"];
+  if (st.usb_suspended) return ["PlayStation in rest mode", "USB is connected, the PlayStation sleeps.", "warn"];
+  if (st.input_active) return ["Input active", "The app is sending input.", "ok"];
+  return ["Ready", "Waiting for input from the app.", "accent"];
 }
 
 function renderStatus(st) {
   lastStatus = st;
-  setPill(st);
-  $("s-input").textContent = st.input_active ? "Active" : "None";
-  $("s-usb").textContent = !st.usb_mounted ? "USB: not connected"
-    : st.usb_suspended ? "USB: rest mode" : "USB: connected";
+  const [title, text, level] = boardState(st);
+  const p = $("pill");
+  p.hidden = false;
+  p.textContent = title;
+  p.className = "pill " + level;
+  $("s-input").textContent = title;
+  $("s-usb").textContent = text;
+  $("h-icon").className = "badge " + level;
+  $("s-nokey").hidden = st.psk_set;
   $("s-ip").textContent = st.ip;
   $("s-net").textContent = `${st.net_state} · ${st.ip_mode === "static" ? "static address" : "DHCP"}`;
   $("s-fw").textContent = st.firmware;
-  $("s-uptime").textContent = `Up for ${fmtUptime(st.uptime_ms)} · slot ${st.partition}`;
-  $("fw-current").textContent = `${st.firmware} (slot ${st.partition})`;
+  $("s-uptime").textContent = `up ${fmtUptime(st.uptime_ms)} · slot ${st.partition}`;
+  $("fw-current").textContent = `${st.firmware} · slot ${st.partition}`;
   const ms = (us) => (us / 1000).toFixed(2) + " ms";
-  $("s-lat-usb").textContent = st.lat_usb_count
-    ? `median ${ms(st.lat_usb_p50_us)}, 95 % below ${ms(st.lat_usb_p95_us)}, max ${ms(st.lat_usb_max_us)} (${st.lat_usb_count} reports)`
-    : "–";
+  $("s-lat").textContent = st.lat_usb_count ? ms(st.lat_usb_p50_us) : "–";
+  $("s-lat-sub").textContent = st.lat_usb_count
+    ? `median · 95 % below ${ms(st.lat_usb_p95_us)}` : "no input yet";
+  $("s-lat-n").textContent = st.lat_usb_count ? `${st.lat_usb_count}, slowest ${ms(st.lat_usb_max_us)}` : "–";
   $("s-lat-rx").textContent = st.lat_rx_max_us ? `median ${st.lat_rx_p50_us} µs, max ${st.lat_rx_max_us} µs` : "–";
   $("s-lat-waits").textContent = st.mouse_waits;
-  $("s-ok").textContent = st.rx_ok;
-  $("s-auth").textContent = st.rx_auth_fail;
-  $("s-replay").textContent = st.rx_replay;
-  $("s-filtered").textContent = st.rx_filtered;
-  $("s-malformed").textContent = st.rx_malformed;
+  for (const [id, n, bad] of [["s-ok", st.rx_ok, false], ["s-auth", st.rx_auth_fail, true],
+    ["s-replay", st.rx_replay, true], ["s-filtered", st.rx_filtered, true], ["s-malformed", st.rx_malformed, true]]) {
+    $(id).textContent = n;
+    $(id).parentElement.className = bad && n > 0 ? "warn" : "";
+  }
   $("s-mac").textContent = st.mac;
   $("s-gw").textContent = `${st.gateway} / ${st.dns}`;
   $("s-port").textContent = st.udp_port;
   $("s-psk").textContent = st.psk_set ? "set" : "missing – generate one under “Security”";
   $("s-allowed").textContent = st.allowed_sender || "any sender";
   $("psk-state").textContent = st.psk_set ? "set" : "no key yet";
+  $("psk-state").className = "pill " + (st.psk_set ? "ok" : "warn");
 }
 
 function fillForms(st) {
@@ -161,6 +172,7 @@ function fillForms(st) {
 
 function updateStaticFields() {
   const isStatic = $("f-network").mode.value === "static";
+  $("static-fields").hidden = !isStatic;
   for (const el of $("static-fields").querySelectorAll("input")) el.disabled = !isStatic;
 }
 
@@ -187,8 +199,9 @@ function stopStatus() {
 
 async function enterMain() {
   show("v-main");
-  selectTab("status");
+  selectTab(tabName());
   await refreshStatus(true);
+  if (tabName() === "system") checkForUpdate();
   startStatus();
 }
 
@@ -380,13 +393,11 @@ function init() {
     try { await api("/api/logout", {}); } catch (e) { /* ignore */ }
     showLogin();
   });
-  for (const b of document.querySelectorAll(".tab")) {
-    b.addEventListener("click", () => {
-      selectTab(b.dataset.tab);
-      if (lastStatus && b.dataset.tab !== "status") fillForms(lastStatus);
-      if (b.dataset.tab === "system") checkForUpdate();
-    });
-  }
+  window.addEventListener("hashchange", () => {
+    if ($("v-main").hidden) return;
+    message("");
+    selectTab(tabName());
+  });
 
   api("/api/state").then((st) => {
     if (!st.logged_in) showLogin();

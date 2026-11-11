@@ -13,7 +13,6 @@ Usage: tools/gen_icons.py [--check]
 
 import argparse
 import os
-import re
 import sys
 import xml.etree.ElementTree as ET
 
@@ -22,8 +21,7 @@ ICONS = os.path.join(ROOT, "desktop", "ui", "icons")
 QML_OUT = os.path.join(ROOT, "desktop", "ui", "qml", "Icons.qml")
 WEB_HTML = os.path.join(ROOT, "firmware", "src", "web", "index.html")
 # Icons the web interface uses (keep its size small).
-WEB_ICONS = ["status", "network", "key", "board", "update", "gamepad", "check", "warning", "error",
-             "external", "power", "latency", "download"]
+WEB_ICONS = ["gamepad", "status", "network", "key", "board", "latency", "update", "warning", "power"]
 NS = "{http://www.w3.org/2000/svg}"
 
 
@@ -63,16 +61,10 @@ def load():
         if not name.endswith(".svg"):
             continue
         root = ET.parse(os.path.join(ICONS, name)).getroot()
-        stroke, fill, inner = [], [], []
+        stroke, fill = [], []
         for el in root:
-            d = to_path(el)
-            if el.get("fill") not in (None, "none"):
-                fill.append(d)
-            else:
-                stroke.append(d)
-            inner.append(ET.tostring(el, encoding="unicode").replace(f' xmlns:ns0="{NS[1:-1]}"', "")
-                         .replace("ns0:", ""))
-        icons[name[:-4]] = {"s": "".join(stroke), "f": "".join(fill), "svg": "".join(inner)}
+            (fill if el.get("fill") not in (None, "none") else stroke).append(to_path(el))
+        icons[name[:-4]] = {"s": "".join(stroke), "f": "".join(fill)}
     return icons
 
 
@@ -90,12 +82,16 @@ def qml(icons):
 
 
 def web_sprite(icons):
+    # Stroke and fill come from the CSS class "i" (currentColor), so each
+    # symbol is just its path data.
     syms = []
     for name in WEB_ICONS:
-        body = re.sub(r'fill="#000"', 'fill="currentColor"', icons[name]["svg"])
+        d = icons[name]
+        body = f'<path d="{d["s"]}"/>' if d["s"] else ""
+        if d["f"]:
+            body += f'<path d="{d["f"]}" fill="currentColor"/>'
         syms.append(f'<symbol id="i-{name}" viewBox="0 0 24 24">{body}</symbol>')
-    return ('<svg xmlns="http://www.w3.org/2000/svg" hidden>'
-            "<defs>" + "".join(syms) + "</defs></svg>")
+    return '<svg hidden>' + "".join(syms) + "</svg>"
 
 
 def main():

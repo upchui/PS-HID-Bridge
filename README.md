@@ -133,10 +133,10 @@ focus on              # window rule: the window has the focus
 
 ### Web interface
 
-At `http://<board IP>/`:
+At `http://<board IP>/`, light or dark like the browser. The tab is part of the address (`#status`, `#network`, `#security`, `#system`), so a reload or a bookmark opens it directly.
 
 - **Login:** factory password `ps-hid-bridge`. On the first login you must set your own password (8–64 characters). After three failed attempts the waiting time grows up to 64 seconds.
-- **Status:** connection to the PlayStation, network, firmware and slot, packet counters.
+- **Status:** state of the PlayStation connection and input, tiles for network, firmware and slot, and latency, packet counters; more under "Details".
 - **Network:** DHCP or static address, UDP port. Saving restarts the board.
 - **Security:** generate a pre-shared key (shown exactly once) or enter an existing one, sender filter (one address such as `192.168.1.20` or a subnet such as `192.168.1.0/24`), change the password.
 - **System:** firmware update, restart, factory reset.
