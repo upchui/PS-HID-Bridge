@@ -138,6 +138,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=$(make -s print-release-tag)
+          # GITHUB_TOKEN may not tag a commit whose workflow files differ from
+          # main's (403 "Resource not accessible by integration"). That only
+          # happens when a newer commit with workflow changes is on main
+          # already, and its own run publishes the newer release.
+          git fetch -q origin main
+          if ! git diff --quiet "$GITHUB_SHA" FETCH_HEAD -- .github/workflows; then
+            echo "::notice::main has newer workflow files; $tag is skipped, the newer run releases"
+            exit 0
+          fi
           # The number repeats after a force-push or rebase: never move an
           # existing release to another commit.
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
