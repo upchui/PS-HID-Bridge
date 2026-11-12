@@ -1,6 +1,8 @@
 # Every commit on main: build firmware, CLI and AppImage, run every test and
-# publish the result as a GitHub pre-release "v<major.minor>.<commit count>"
-# (tools/version.sh), so every release has a higher version.
+# publish the result as a GitHub release "v<major.minor.patch>"
+# (tools/version.sh), so every release has a higher version. Releases are
+# full releases (not pre-releases): the app finds the newest one through
+# github.com/<repo>/releases/latest, which skips pre-releases.
 
 name: Release
 
@@ -83,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # version = commit count; release notes need the tags
+          fetch-depth: 0 # version counts commits; release notes need the tags
 
       - name: Fetch submodules
         run: make submodules
@@ -133,7 +135,7 @@ jobs:
           cp out/pshb-cli release/pshb-cli-x86_64-linux
           (cd release && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
 
-      - name: Publish pre-release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -161,6 +163,6 @@ jobs:
             echo "$tag exists already, replacing its files"
             gh release upload "$tag" release/* --clobber
           else
-            gh release create "$tag" release/* --prerelease --target "$GITHUB_SHA" \
+            gh release create "$tag" release/* --latest --target "$GITHUB_SHA" \
               --title "$tag" --notes-file notes.md
           fi

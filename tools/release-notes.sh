@@ -1,5 +1,5 @@
 #!/bin/bash
-# Release notes for an automatic pre-release: the commits since the previous
+# Release notes for an automatic release: the commits since the previous
 # build and a short guide to the files.
 # Usage: tools/release-notes.sh TAG
 set -euo pipefail
@@ -10,7 +10,6 @@ repo=${GITHUB_REPOSITORY:-upchui/PS-HID-Bridge}
 prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD~1 2>/dev/null || true)
 
 echo "Automatic build of commit $(git rev-parse --short HEAD) on \`main\`."
-echo "Pre-releases are built from every commit and have only been tested automatically."
 echo
 echo "## Changes"
 echo
