@@ -1,6 +1,9 @@
 #include "json.h"
 #include "mini_test.h"
 
+#include <limits.h>
+#include <stdio.h>
+
 TEST(writer) {
     char buf[128];
     json_writer_t w;
@@ -16,6 +19,25 @@ TEST(writer) {
     jw_begin(&w, tiny, sizeof(tiny));
     jw_str(&w, "long", "value");
     CHECK_EQ_U(jw_end(&w), 0);  // overflow detected
+}
+
+TEST(writer_int_roundtrip) {
+    static const long long vals[] = {0, 1, -1, 45045, 4294967295LL, 4294967296LL,
+                                     LLONG_MAX, LLONG_MIN};
+    static const char *const want[] = {"0", "1", "-1", "45045", "4294967295", "4294967296",
+                                       "9223372036854775807", "-9223372036854775808"};
+    for (size_t i = 0; i < sizeof(vals) / sizeof(vals[0]); i++) {
+        char buf[64], exp[64];
+        json_writer_t w;
+        jw_begin(&w, buf, sizeof(buf));
+        jw_int(&w, "v", vals[i]);
+        size_t n = jw_end(&w);
+        CHECK(n > 0);
+        snprintf(exp, sizeof(exp), "{\"v\":%s}", want[i]);
+        CHECK(strcmp(buf, exp) == 0);
+        long long back;
+        CHECK(jr_int(buf, n, "v", &back) && back == vals[i]);
+    }
 }
 
 TEST(reader) {
@@ -63,6 +85,7 @@ TEST(reader_checks_what_follows_a_value) {
 
 int main(void) {
     RUN(writer);
+    RUN(writer_int_roundtrip);
     RUN(reader);
     RUN(reader_rejects_garbage);
     RUN(reader_checks_what_follows_a_value);

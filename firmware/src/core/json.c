@@ -61,10 +61,19 @@ void jw_str(json_writer_t *w, const char *k, const char *val) {
 }
 
 void jw_int(json_writer_t *w, const char *k, long long val) {
-    char num[24];
-    snprintf(num, sizeof(num), "%lld", val);
+    // Formatted by hand: the printf the Pico SDK links mishandles "%lld"
+    // (every value came out shifted left by 32 bits on the RP2350).
+    char num[21];  // "-" + 19 digits + NUL
+    char *p = num + sizeof(num);
+    *--p = '\0';
+    unsigned long long mag = val < 0 ? 0ULL - (unsigned long long)val : (unsigned long long)val;
+    do {
+        *--p = (char)('0' + mag % 10);
+        mag /= 10;
+    } while (mag);
+    if (val < 0) *--p = '-';
     key(w, k);
-    puts_(w, num);
+    puts_(w, p);
 }
 
 void jw_bool(json_writer_t *w, const char *k, bool val) {
