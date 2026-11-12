@@ -3,7 +3,7 @@
 //! replace this program, and install firmware on the board signed with the
 //! key (protocol/SPEC.md, "Firmware update with the key").
 //!
-//! Only api.github.com and GitHub's download servers are contacted (HTTPS),
+//! Only github.com and GitHub's download servers are contacted (HTTPS),
 //! and the board in the local network (HTTP, signed).
 
 use std::fmt;
@@ -17,7 +17,6 @@ use blake2::Blake2bMac;
 use blake2::digest::common::KeyInit;
 use blake2::digest::consts::U32;
 use blake2::digest::{FixedOutput, Update};
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 pub const REPO: &str = "upchui/PS-HID-Bridge";
@@ -32,7 +31,7 @@ pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 const OTA_KEY_LABEL: &[u8] = b"pshb-ota-key-v1";
 const OTA_MAC_LABEL: &[u8] = b"pshb-ota-v1";
 
-/// MAJOR.MINOR.PATCH (the patch is the commit count).
+/// MAJOR.MINOR.PATCH (the patch counts the commits since MAJOR.MINOR changed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version(pub u32, pub u32, pub u32);
 
@@ -73,7 +72,6 @@ impl fmt::Display for Version {
 pub struct Asset {
     pub name: String,
     pub url: String,
-    pub size: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -81,63 +79,44 @@ pub struct Release {
     pub version: Version,
     /// Release page on GitHub.
     pub page: String,
-    pub assets: Vec<Asset>,
+    /// Git tag, e.g. "v1.0.3".
+    pub tag: String,
 }
 
 impl Release {
-    pub fn asset(&self, name: &str) -> Option<&Asset> {
-        self.assets.iter().find(|a| a.name == name)
+    /// A file of the release (whether it exists shows when it is downloaded).
+    pub fn asset(&self, name: &str) -> Asset {
+        Asset {
+            name: name.to_string(),
+            url: format!("https://github.com/{REPO}/releases/download/{}/{name}", self.tag),
+        }
     }
 }
 
-#[derive(Deserialize)]
-struct GhRelease {
-    tag_name: String,
-    #[serde(default)]
-    draft: bool,
-    html_url: String,
-    #[serde(default)]
-    assets: Vec<GhAsset>,
+/// Upper limit for a download whose size the server does not announce.
+const MAX_DOWNLOAD: u64 = 256 << 20;
+
+/// The release a `Location` of `https://github.com/{REPO}/releases/latest`
+/// points to (`…/releases/tag/v1.0.3`); None for anything else (no release
+/// yet: GitHub then sends the list of releases).
+pub fn release_from_location(location: &str) -> Option<Release> {
+    let prefix = format!("https://github.com/{REPO}/releases/tag/");
+    let tag = location.strip_prefix(&prefix)?;
+    let version = Version::parse(tag)?;
+    Some(Release {
+        version,
+        page: location.to_string(),
+        tag: tag.to_string(),
+    })
 }
 
-#[derive(Deserialize)]
-struct GhAsset {
-    name: String,
-    browser_download_url: String,
-    size: u64,
-}
-
-/// The newest release in a GitHub API answer (drafts ignored; pre-releases
-/// count, since every commit is one).
-pub fn pick_latest(json: &str) -> Result<Release, String> {
-    let list: Vec<GhRelease> = serde_json::from_str(json).map_err(|e| format!("GitHub answer: {e}"))?;
-    list.into_iter()
-        .filter(|r| !r.draft)
-        .filter_map(|r| {
-            Some(Release {
-                version: Version::parse(&r.tag_name)?,
-                page: r.html_url,
-                assets: r
-                    .assets
-                    .into_iter()
-                    .map(|a| Asset {
-                        name: a.name,
-                        url: a.browser_download_url,
-                        size: a.size,
-                    })
-                    .collect(),
-            })
-        })
-        .max_by_key(|r| r.version)
-        .ok_or_else(|| "No release found on GitHub.".into())
-}
-
-fn agent(timeout: Duration) -> ureq::Agent {
+fn agent(timeout: Duration, follow_redirects: bool) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(10)))
         .timeout_global(Some(timeout))
         .user_agent(format!("ps-hid-bridge/{}", crate::VERSION))
         .http_status_as_error(false)
+        .max_redirects(if follow_redirects { 10 } else { 0 })
         .build()
         .into()
 }
@@ -149,36 +128,46 @@ fn http_error(e: ureq::Error) -> String {
     }
 }
 
-/// The newest release on GitHub.
+/// The newest release on GitHub. Asks github.com where "latest" points to
+/// instead of using api.github.com, whose limit of 60 requests per hour is
+/// shared by everything behind the same internet address.
 pub fn latest_release() -> Result<Release, String> {
-    let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=10");
-    let mut resp = agent(Duration::from_secs(30))
+    let url = format!("https://github.com/{REPO}/releases/latest");
+    let resp = agent(Duration::from_secs(30), false)
         .get(&url)
-        .header("Accept", "application/vnd.github+json")
         .call()
         .map_err(http_error)?;
-    if resp.status() != 200 {
-        return Err(format!("GitHub answered {} (rate limit?)", resp.status()));
+    if !resp.status().is_redirection() {
+        return Err(format!("GitHub answered {}", resp.status()));
     }
-    let text = resp
-        .body_mut()
-        .with_config()
-        .limit(4 << 20)
-        .read_to_string()
-        .map_err(http_error)?;
-    pick_latest(&text)
+    let location = resp
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    release_from_location(location).ok_or_else(|| "No release found on GitHub.".into())
 }
 
-/// Download an asset; `progress(done, total)` while it arrives.
+/// Download an asset; `progress(done, total)` while it arrives (total 0 if
+/// the server does not say).
 pub fn download(asset: &Asset, progress: &mut dyn FnMut(u64, u64)) -> Result<Vec<u8>, String> {
-    let mut resp = agent(Duration::from_secs(600))
+    let mut resp = agent(Duration::from_secs(600), true)
         .get(&asset.url)
         .call()
         .map_err(http_error)?;
+    if resp.status() == 404 {
+        return Err(format!("{} is missing in the release.", asset.name));
+    }
     if resp.status() != 200 {
         return Err(format!("Download of {} failed: {}", asset.name, resp.status()));
     }
-    let mut data = Vec::with_capacity(asset.size as usize);
+    let total = resp.body().content_length().unwrap_or(0);
+    let limit = if total > 0 {
+        total.saturating_mul(2)
+    } else {
+        MAX_DOWNLOAD
+    };
+    let mut data = Vec::with_capacity(total.min(MAX_DOWNLOAD) as usize);
     let mut reader = resp.body_mut().as_reader();
     let mut buf = [0u8; 64 * 1024];
     loop {
@@ -189,10 +178,10 @@ pub fn download(asset: &Asset, progress: &mut dyn FnMut(u64, u64)) -> Result<Vec
             break;
         }
         data.extend_from_slice(&buf[..n]);
-        if data.len() as u64 > asset.size.max(1) * 2 {
+        if data.len() as u64 > limit {
             return Err(format!("Download of {}: more data than announced", asset.name));
         }
-        progress(data.len() as u64, asset.size);
+        progress(data.len() as u64, total);
     }
     Ok(data)
 }
@@ -220,16 +209,14 @@ pub fn download_verified(
     name: &str,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<Vec<u8>, String> {
-    let missing = |n: &str| format!("Release {} has no {n}.", release.version);
-    let sums = release.asset(SUMS_ASSET).ok_or_else(|| missing(SUMS_ASSET))?;
-    let asset = release.asset(name).ok_or_else(|| missing(name))?;
-    let sums = String::from_utf8(download(sums, &mut |_, _| {})?).map_err(|_| "SHA256SUMS is not text")?;
+    let sums = download(&release.asset(SUMS_ASSET), &mut |_, _| {})?;
+    let sums = String::from_utf8(sums).map_err(|_| "SHA256SUMS is not text")?;
     let want = parse_sums(&sums)
         .into_iter()
         .find(|(n, _)| n == name)
         .map(|(_, h)| h)
         .ok_or_else(|| format!("{name} is not listed in SHA256SUMS."))?;
-    let data = download(asset, progress)?;
+    let data = download(&release.asset(name), progress)?;
     if sha256(&data) != want {
         return Err(format!("{name}: checksum does not match, download discarded."));
     }
@@ -307,7 +294,7 @@ pub fn board_ota(host: &str, http_port: u16, psk: &[u8; 32], image: &[u8]) -> Re
     } else {
         format!("http://{host}:{http_port}")
     };
-    let agent = agent(Duration::from_secs(120));
+    let agent = agent(Duration::from_secs(120), true);
     let mut resp = agent
         .get(format!("{base}/api/ota/challenge"))
         .call()
@@ -359,20 +346,21 @@ mod tests {
     }
 
     #[test]
-    fn newest_release_is_picked() {
-        let json = r#"[
-            {"tag_name": "v0.9.30", "draft": true, "html_url": "d", "assets": []},
-            {"tag_name": "v0.9.27", "html_url": "https://x/v0.9.27", "prerelease": true,
-             "assets": [{"name": "ps-hid-bridge.uf2", "browser_download_url": "https://x/a.uf2", "size": 5}]},
-            {"tag_name": "v0.9.0-build.15", "html_url": "b", "assets": []},
-            {"tag_name": "nightly", "html_url": "n", "assets": []}
-        ]"#;
-        let r = pick_latest(json).unwrap();
-        assert_eq!(r.version, Version(0, 9, 27));
-        assert_eq!(r.asset(FIRMWARE_ASSET).unwrap().size, 5);
-        assert!(r.asset(APPIMAGE_ASSET).is_none());
-        assert!(pick_latest("[]").is_err());
-        assert!(pick_latest("{}").is_err());
+    fn latest_release_from_redirect() {
+        let tag_url = format!("https://github.com/{REPO}/releases/tag/v1.0.3");
+        let r = release_from_location(&tag_url).unwrap();
+        assert_eq!(r.version, Version(1, 0, 3));
+        assert_eq!(r.tag, "v1.0.3");
+        assert_eq!(
+            r.asset(FIRMWARE_ASSET).url,
+            format!("https://github.com/{REPO}/releases/download/v1.0.3/ps-hid-bridge.uf2")
+        );
+        // No release yet: GitHub points to the list of releases.
+        assert!(release_from_location(&format!("https://github.com/{REPO}/releases")).is_none());
+        let nightly = format!("https://github.com/{REPO}/releases/tag/nightly");
+        assert!(release_from_location(&nightly).is_none());
+        assert!(release_from_location("https://example.com/releases/tag/v1.0.3").is_none());
+        assert!(release_from_location("").is_none());
     }
 
     #[test]
