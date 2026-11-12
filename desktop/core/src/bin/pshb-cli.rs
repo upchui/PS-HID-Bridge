@@ -483,6 +483,7 @@ fn cmd_run(
     let mut msgs = Vec::new();
     let mut next_stats = Instant::now() + Duration::from_secs(5);
     let mut stats_total = 0;
+    let mut resyncs = 0;
     while !STOP.load(Ordering::Acquire) {
         watchdog.feed();
         inputs.wait(Duration::from_millis(100), &mut msgs);
@@ -503,6 +504,12 @@ fn cmd_run(
                 | InputMsg::OpenFailed { .. }
                 | InputMsg::Hotplug => {}
             }
+        }
+        if inputs.resyncs() != resyncs {
+            resyncs = inputs.resyncs();
+            eprintln!(
+                "Input events were lost (reader fell behind) and corrected from the key state ({resyncs} so far)."
+            );
         }
         if inputs.is_empty() {
             result = Err("All devices disconnected.".into());

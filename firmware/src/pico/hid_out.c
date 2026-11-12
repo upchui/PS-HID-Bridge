@@ -64,6 +64,8 @@ void hid_out_service(void) {
         input_state_take_kbd_report(s_state, report);
         if (tud_hid_n_report(ITF_KEYBOARD, 0, report, sizeof(report))) {
             armed(ITF_KEYBOARD, input_state_kbd_pending(s_state));
+        } else {
+            input_state_mark_dirty(s_state);  // never lose the newest state
         }
     }
 
@@ -75,6 +77,8 @@ void hid_out_service(void) {
         if (tud_hid_n_report(ITF_MOUSE, 0, report, (uint16_t)len)) {
             armed(ITF_MOUSE, input_state_mouse_pending(s_state));
             usb_timing_armed(&s_mouse_timing, now);
+        } else {
+            input_state_mark_dirty(s_state);  // never lose the newest state
         }
     }
 }

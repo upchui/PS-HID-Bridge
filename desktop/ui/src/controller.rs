@@ -57,6 +57,7 @@ pub mod qobject {
         #[qproperty(QString, devices_json)]
         #[qproperty(i32, devices_blocked)]
         #[qproperty(i32, devices_open)]
+        #[qproperty(i32, input_resyncs)]
         #[qproperty(QString, triggers_json)]
         #[qproperty(bool, window_rule_enabled)]
         #[qproperty(QString, window_rule)]
@@ -203,6 +204,7 @@ pub struct AppControllerRust {
     devices_json: QString,
     devices_blocked: i32,
     devices_open: i32,
+    input_resyncs: i32,
     triggers_json: QString,
     window_rule_enabled: bool,
     window_rule: QString,
@@ -305,6 +307,7 @@ impl Default for AppControllerRust {
             devices_json: QString::from("[]"),
             devices_blocked: 0,
             devices_open: 0,
+            input_resyncs: 0,
             triggers_json: QString::from("[]"),
             window_rule_enabled: false,
             window_rule: QString::default(),
@@ -594,6 +597,8 @@ impl qobject::AppController {
         self.as_mut().set_packets_per_second(st.packets_per_second as i32);
         self.as_mut().set_devices_open(st.devices_open as i32);
         self.as_mut().set_devices_blocked(st.devices_blocked as i32);
+        self.as_mut()
+            .set_input_resyncs(st.input_resyncs.min(i32::MAX as u64) as i32);
         if let Some(p) = &st.board {
             self.as_mut()
                 .set_board_firmware(QString::from(&p.fw_version_string()));

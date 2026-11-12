@@ -10,9 +10,10 @@ use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
-use evdev::{Device, EventType};
+use evdev::raw_stream::RawDevice;
+use evdev::{EventType, InputEvent, SynchronizationCode};
 
 use crate::engine::Event;
 
@@ -207,6 +208,29 @@ fn set_clock_id(fd: RawFd, clock: libc::c_int) -> io::Result<()> {
     }
 }
 
+fn set_nonblocking(fd: RawFd) -> io::Result<()> {
+    // SAFETY: plain fcntl calls on a valid descriptor.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Open an event node for reading without blocking; true if its timestamps
+/// are on the monotonic clock.
+fn open_device(path: &Path) -> io::Result<(RawDevice, bool)> {
+    let dev = RawDevice::open(path)?;
+    set_nonblocking(dev.as_raw_fd())?;
+    let mono = set_clock_id(dev.as_raw_fd(), libc::CLOCK_MONOTONIC).is_ok();
+    Ok((dev, mono))
+}
+
+/// Keys and buttons the kernel says are held right now (EVIOCGKEY).
+fn held_keys(dev: &RawDevice) -> Option<Vec<u16>> {
+    dev.get_key_state().ok().map(|s| s.iter().map(|k| k.0).collect())
+}
+
 /// EVIOCGRAB: unlike EVIOCSCLOCKID the kernel uses the argument's *value*
 /// (0 = release, anything else = grab). A pointer is never 0, so passing
 /// one turns every release into a second grab that fails with EBUSY.
@@ -369,11 +393,14 @@ struct Open {
     /// Stable id (events carry it; indices change when devices come and go).
     id: usize,
     info: DeviceInfo,
-    dev: Device,
+    dev: RawDevice,
     /// Timestamps are on the monotonic clock.
     mono: bool,
     /// Keys and buttons currently held on this device.
     pressed: Vec<u16>,
+    /// The kernel dropped events: skip up to the end of that frame, then
+    /// compare with the kernel's key state (see [`process_events`]).
+    dropping: bool,
 }
 
 impl Open {
@@ -381,10 +408,10 @@ impl Open {
     /// (and with it any grab it holds) is closed once its duplicates in the
     /// [`GrabGuard`] are gone, see [`InputSet::devices_changed`].
     fn reopen(&mut self) -> io::Result<()> {
-        let dev = Device::open(&self.info.path)?;
-        dev.set_nonblocking(true)?;
-        self.mono = set_clock_id(dev.as_raw_fd(), libc::CLOCK_MONOTONIC).is_ok();
+        let (dev, mono) = open_device(&self.info.path)?;
         self.dev = dev;
+        self.mono = mono;
+        self.dropping = false;
         Ok(())
     }
 }
@@ -439,7 +466,15 @@ pub struct InputSet {
     hotplug: Option<Hotplug>,
     /// Devices, then the waker, then the hot-plug watch (kept between waits).
     pfds: Vec<libc::pollfd>,
+    /// How often key events had to be corrected from the kernel's key state.
+    resyncs: u64,
+    /// Next comparison of every device with the kernel's key state.
+    next_check: Instant,
 }
+
+/// How often every device is compared with the kernel's key state, as a
+/// safety net for releases that got lost on the way.
+const KEY_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 
 impl InputSet {
     /// No devices yet (see [`update`](Self::update)); watches /dev/input for
@@ -454,6 +489,8 @@ impl InputSet {
             guard,
             hotplug: Hotplug::new().ok(),
             pfds: Vec::new(),
+            resyncs: 0,
+            next_check: Instant::now() + KEY_CHECK_INTERVAL,
         };
         set.devices_changed();
         set
@@ -477,6 +514,12 @@ impl InputSet {
         self.devices.is_empty()
     }
 
+    /// How often events were lost (the kernel dropped them, or a release
+    /// went missing) and were corrected from the kernel's key state.
+    pub fn resyncs(&self) -> u64 {
+        self.resyncs
+    }
+
     /// Hot-plugging is noticed by itself ([`InputMsg::Hotplug`]); without
     /// it the caller has to look at the device list regularly.
     pub fn watches_hotplug(&self) -> bool {
@@ -489,15 +532,14 @@ impl InputSet {
     }
 
     fn add(&mut self, info: &DeviceInfo) -> io::Result<()> {
-        let dev = Device::open(&info.path)?;
-        dev.set_nonblocking(true)?;
-        let mono = set_clock_id(dev.as_raw_fd(), libc::CLOCK_MONOTONIC).is_ok();
+        let (dev, mono) = open_device(&info.path)?;
         self.devices.push(Open {
             id: self.next_id,
             info: info.clone(),
             dev,
             mono,
             pressed: Vec::new(),
+            dropping: false,
         });
         self.next_id += 1;
         Ok(())
@@ -616,9 +658,37 @@ impl InputSet {
         failed
     }
 
+    /// Safety net: a key the kernel no longer holds is released here, even
+    /// if its release event got lost somewhere (only releases: a key held
+    /// since before the device was opened stays with the desktop).
+    fn check_keys(&mut self, out: &mut Vec<InputMsg>) {
+        self.next_check = Instant::now() + KEY_CHECK_INTERVAL;
+        for d in &mut self.devices {
+            if d.pressed.is_empty() || d.dropping {
+                continue;
+            }
+            let Some(held) = held_keys(&d.dev) else {
+                continue;
+            };
+            let released = release_missing(&mut d.pressed, &held);
+            if released.is_empty() {
+                continue;
+            }
+            self.resyncs += 1;
+            for event in released.into_iter().chain([Event::Sync]) {
+                out.push(InputMsg::Event {
+                    dev: d.id,
+                    event,
+                    ts_us: None,
+                });
+            }
+        }
+    }
+
     /// Wait up to `timeout` for input, hot-plugging or [`Waker::wake`] and
     /// append what arrived to `out`.
     pub fn wait(&mut self, timeout: Duration, out: &mut Vec<InputMsg>) {
+        let timeout = timeout.min(self.next_check.saturating_duration_since(Instant::now()));
         // SAFETY: valid pollfd array for the duration of the call.
         let r = unsafe {
             libc::poll(
@@ -627,6 +697,9 @@ impl InputSet {
                 poll_ms(timeout),
             )
         };
+        if Instant::now() >= self.next_check {
+            self.check_keys(out);
+        }
         if r <= 0 {
             return;
         }
@@ -650,36 +723,32 @@ impl InputSet {
                 dev,
                 mono,
                 pressed,
+                dropping,
                 ..
             } = &mut self.devices[i];
-            match dev.fetch_events() {
-                Ok(events) => {
-                    for ev in events {
-                        let Some(event) = map_event(&ev) else {
-                            continue;
-                        };
-                        if let Event::Key { code, down } = event {
-                            if !down {
-                                pressed.retain(|c| *c != code);
-                            } else if !pressed.contains(&code) {
-                                pressed.push(code);
-                            }
-                        }
-                        let ts_us = mono.then(|| {
-                            ev.timestamp()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|t| t.as_micros() as u64)
-                                .unwrap_or(0)
-                        });
-                        out.push(InputMsg::Event {
-                            dev: *id,
-                            event,
-                            ts_us,
-                        });
-                    }
+            let events: Vec<InputEvent> = match dev.fetch_events() {
+                Ok(events) => events.collect(),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(e) => {
+                    gone.push((i, e.to_string()));
+                    continue;
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-                Err(e) => gone.push((i, e.to_string())),
+            };
+            let mut got = Vec::with_capacity(events.len());
+            if process_events(events, pressed, dropping, || held_keys(dev), &mut got) {
+                self.resyncs += 1;
+            }
+            for (event, ts) in got {
+                let ts_us = ts.filter(|_| *mono).map(|t| {
+                    t.duration_since(std::time::UNIX_EPOCH)
+                        .map(|t| t.as_micros() as u64)
+                        .unwrap_or(0)
+                });
+                out.push(InputMsg::Event {
+                    dev: *id,
+                    event,
+                    ts_us,
+                });
             }
         }
         if gone.is_empty() {
@@ -728,9 +797,281 @@ fn map_event(ev: &evdev::InputEvent) -> Option<Event> {
     }
 }
 
+/// Keys in `pressed` that are not in `held`: removed, as release events.
+fn release_missing(pressed: &mut Vec<u16>, held: &[u16]) -> Vec<Event> {
+    let mut released = Vec::new();
+    pressed.retain(|&code| {
+        let keep = held.contains(&code);
+        if !keep {
+            released.push(Event::Key { code, down: false });
+        }
+        keep
+    });
+    released
+}
+
+/// Bring `pressed` in line with `held` (the kernel's key state): the key
+/// events that were missed, releases first.
+fn resync(pressed: &mut Vec<u16>, held: &[u16]) -> Vec<Event> {
+    let mut missed = release_missing(pressed, held);
+    for &code in held {
+        if !pressed.contains(&code) {
+            pressed.push(code);
+            missed.push(Event::Key { code, down: true });
+        }
+    }
+    missed
+}
+
+/// Turn one batch of raw events from a device into engine events (with the
+/// kernel's timestamp; None for corrected ones) and keep `pressed` up to
+/// date. Returns true if events had been lost and were corrected.
+///
+/// When a reader falls behind, the kernel drops its queued events and
+/// sends SYN_DROPPED. Everything up to the next SYN_REPORT is then an
+/// incomplete frame and is skipped; after it, the kernel's key state
+/// (`held_keys`, EVIOCGKEY) tells which presses and releases were lost.
+/// This is done right away: a release lost this way must not wait for the
+/// next event of the device.
+fn process_events(
+    events: impl IntoIterator<Item = InputEvent>,
+    pressed: &mut Vec<u16>,
+    dropping: &mut bool,
+    mut held_keys: impl FnMut() -> Option<Vec<u16>>,
+    out: &mut Vec<(Event, Option<SystemTime>)>,
+) -> bool {
+    let mut resynced = false;
+    for ev in events {
+        if ev.event_type() == EventType::SYNCHRONIZATION {
+            if ev.code() == SynchronizationCode::SYN_DROPPED.0 {
+                *dropping = true;
+                continue;
+            }
+            if *dropping && ev.code() == SynchronizationCode::SYN_REPORT.0 {
+                *dropping = false;
+                resynced = true;
+                if let Some(held) = held_keys() {
+                    out.extend(resync(pressed, &held).into_iter().map(|e| (e, None)));
+                }
+                out.push((Event::Sync, None));
+                continue;
+            }
+        }
+        if *dropping {
+            continue;
+        }
+        let Some(event) = map_event(&ev) else {
+            continue;
+        };
+        if let Event::Key { code, down } = event {
+            if !down {
+                pressed.retain(|c| *c != code);
+            } else if !pressed.contains(&code) {
+                pressed.push(code);
+            }
+        }
+        out.push((event, Some(ev.timestamp())));
+    }
+    resynced
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LEFT: u16 = BTN_LEFT as u16;
+    const KEY_W: u16 = 17;
+
+    fn key(code: u16, value: i32) -> InputEvent {
+        InputEvent::new(EventType::KEY.0, code, value)
+    }
+    fn rel(code: u16, value: i32) -> InputEvent {
+        InputEvent::new(EventType::RELATIVE.0, code, value)
+    }
+    fn syn(code: SynchronizationCode) -> InputEvent {
+        InputEvent::new(EventType::SYNCHRONIZATION.0, code.0, 0)
+    }
+    fn report() -> InputEvent {
+        syn(SynchronizationCode::SYN_REPORT)
+    }
+
+    /// Engine events of one batch; `held`: what the kernel reports when asked.
+    fn run(
+        events: Vec<InputEvent>,
+        pressed: &mut Vec<u16>,
+        dropping: &mut bool,
+        held: &[u16],
+    ) -> (Vec<Event>, bool, usize) {
+        let mut asked = 0;
+        let mut out = Vec::new();
+        let resynced = process_events(
+            events,
+            pressed,
+            dropping,
+            || {
+                asked += 1;
+                Some(held.to_vec())
+            },
+            &mut out,
+        );
+        (out.into_iter().map(|(e, _)| e).collect(), resynced, asked)
+    }
+
+    #[test]
+    fn events_pass_through_without_drops() {
+        let (mut pressed, mut dropping) = (Vec::new(), false);
+        let (ev, resynced, asked) = run(
+            vec![
+                key(LEFT, 1),
+                rel(0, 5),
+                report(),
+                key(LEFT, 2),
+                key(LEFT, 0),
+                report(),
+            ],
+            &mut pressed,
+            &mut dropping,
+            &[],
+        );
+        assert_eq!(
+            ev,
+            vec![
+                Event::Key {
+                    code: LEFT,
+                    down: true
+                },
+                Event::Rel { axis: 0, value: 5 },
+                Event::Sync,
+                // value 2 (auto-repeat) is dropped
+                Event::Key {
+                    code: LEFT,
+                    down: false
+                },
+                Event::Sync,
+            ]
+        );
+        assert!(!resynced);
+        assert_eq!(asked, 0);
+        assert!(pressed.is_empty());
+    }
+
+    #[test]
+    fn release_lost_by_the_kernel_is_delivered_at_once() {
+        // Left button held, then the reader falls behind: the kernel drops
+        // the queue (with the release) and sends SYN_DROPPED plus the newest
+        // event of an incomplete frame.
+        let (mut pressed, mut dropping) = (Vec::new(), false);
+        run(vec![key(LEFT, 1), report()], &mut pressed, &mut dropping, &[]);
+        assert_eq!(pressed, vec![LEFT]);
+        let (ev, resynced, asked) = run(
+            vec![
+                syn(SynchronizationCode::SYN_DROPPED),
+                rel(0, 3),
+                report(),
+                rel(1, 4),
+                report(),
+            ],
+            &mut pressed,
+            &mut dropping,
+            &[],
+        );
+        assert_eq!(
+            ev,
+            vec![
+                Event::Key {
+                    code: LEFT,
+                    down: false
+                },
+                Event::Sync,
+                // the incomplete frame (rel 0) is skipped, the next one is not
+                Event::Rel { axis: 1, value: 4 },
+                Event::Sync,
+            ]
+        );
+        assert!(resynced);
+        assert_eq!(asked, 1);
+        assert!(pressed.is_empty());
+        assert!(!dropping);
+    }
+
+    #[test]
+    fn press_lost_by_the_kernel_is_added() {
+        let (mut pressed, mut dropping) = (vec![KEY_W], false);
+        let (ev, _, _) = run(
+            vec![syn(SynchronizationCode::SYN_DROPPED), report()],
+            &mut pressed,
+            &mut dropping,
+            &[LEFT, KEY_W],
+        );
+        assert_eq!(
+            ev,
+            vec![
+                Event::Key {
+                    code: LEFT,
+                    down: true
+                },
+                Event::Sync
+            ]
+        );
+        assert_eq!(pressed, vec![KEY_W, LEFT]);
+    }
+
+    #[test]
+    fn drop_across_two_batches() {
+        // SYN_DROPPED at the end of one read, the rest of the frame in the next.
+        let (mut pressed, mut dropping) = (vec![LEFT], false);
+        let (ev, resynced, asked) = run(
+            vec![syn(SynchronizationCode::SYN_DROPPED), rel(0, 1)],
+            &mut pressed,
+            &mut dropping,
+            &[],
+        );
+        assert!(ev.is_empty() && !resynced && asked == 0 && dropping);
+        let (ev, resynced, asked) = run(vec![key(LEFT, 0), report()], &mut pressed, &mut dropping, &[]);
+        assert_eq!(
+            ev,
+            vec![
+                Event::Key {
+                    code: LEFT,
+                    down: false
+                },
+                Event::Sync
+            ]
+        );
+        assert!(resynced && asked == 1 && !dropping);
+    }
+
+    #[test]
+    fn resync_and_release_missing() {
+        let mut pressed = vec![LEFT, KEY_W];
+        assert_eq!(resync(&mut pressed, &[LEFT, KEY_W]), vec![]);
+        assert_eq!(
+            resync(&mut pressed, &[KEY_W, 30]),
+            vec![
+                Event::Key {
+                    code: LEFT,
+                    down: false
+                },
+                Event::Key { code: 30, down: true }
+            ]
+        );
+        assert_eq!(pressed, vec![KEY_W, 30]);
+        // The safety net only releases.
+        assert_eq!(
+            release_missing(&mut pressed, &[LEFT]),
+            vec![
+                Event::Key {
+                    code: KEY_W,
+                    down: false
+                },
+                Event::Key {
+                    code: 30,
+                    down: false
+                }
+            ]
+        );
+        assert!(pressed.is_empty());
+    }
 
     #[test]
     fn capability_bitmaps() {

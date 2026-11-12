@@ -42,7 +42,7 @@ Every commit on `main` is built and tested automatically and published as a rele
 `out/PS-HID-Bridge-x86_64.AppImage` runs on current Linux systems (built against glibc 2.34) under Wayland and X11. It follows the desktop's light or dark mode; the switch at the bottom of the sidebar picks light, automatic or dark. Changes are saved as soon as they are valid, there is no "Save" button.
 
 - **Wizard** on first start: board (address, key, connection test; or first install the firmware over USB) → devices and keyboard type → trigger → live test that shows what reaches the PlayStation. "Run setup again" in the sidebar starts it again.
-- **Status:** bridge on/off, the keys that currently go to the PlayStation, tiles for the board, the PlayStation (connected/rest mode), the round trip to the board (median, 95th percentile, history) and the path from input to network, plus "Release all keys", "Pause" and "Reconnect".
+- **Status:** bridge on/off, the keys that currently go to the PlayStation, tiles for the board, the PlayStation (connected/rest mode), the round trip to the board (median, 95th percentile, history) and the path from input to network, plus "Release all keys", "Pause" and "Reconnect". If the app fell behind for a moment and the kernel dropped input events (fast mice send several thousand per second), the app compares with the real key state right away, so no button stays held on the PlayStation; the page then shows "N× input corrected". As a safety net it also does that every 250 ms.
 - **Input:** keyboards and mice, grouped per device, selected ones first; "Identify" marks the device you are typing on, "Set up access" appears for devices the user may not read. The keyboard type (ISO or ANSI), and mouse sensitivity and acceleration with a curve preview (the default is the raw values).
 - **Triggers:** key combination, mouse button (`Mouse4`, `Mouse5`), *Hold* (bridge on only while pressed) and *Double tap*; each with the action Toggle, Switch on, Switch off, Pause or Release all. "Record" takes over the combination you press. Also the window rule (see below).
 - **Board:** address and key, connection state, "Open web interface".
@@ -274,6 +274,12 @@ Grabbing and releasing the devices is tested against virtual devices (uinput) th
 
 ```sh
 cd desktop && cargo test -p pshb-core --test grab_release -- --ignored --test-threads=1
+```
+
+The same goes for [`dropped_events.rs`](desktop/core/tests/dropped_events.rs): a virtual mouse holds the left button while far more events arrive than the kernel queues for a reader that lags behind, and the release gets lost in the overflow; it must still reach the engine at once.
+
+```sh
+cd desktop && cargo test -p pshb-core --test dropped_events -- --ignored --test-threads=1
 ```
 
 ## Directories

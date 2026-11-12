@@ -254,6 +254,15 @@ AppPage {
                     text: AppController.devicesBlocked > 0 ? AppController.devicesBlocked + " without access"
                           : AppController.devicesOpen + " device interface(s)"
                 }
+                Pill {
+                    visible: AppController.inputResyncs > 0
+                    level: "warn"
+                    text: AppController.inputResyncs + "× input corrected"
+                }
+                HelpHint {
+                    visible: AppController.inputResyncs > 0
+                    text: "The kernel dropped input events because the app fell behind for a moment (or a release went missing). The app compared with the real key state and released or pressed what was lost, so no key stays stuck. If this count rises often, set up real-time priority (see README)."
+                }
             }
         }
     }

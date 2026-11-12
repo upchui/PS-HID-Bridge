@@ -66,6 +66,9 @@ pub struct ServiceStatus {
     /// Selected devices that are open / that exist but cannot be opened.
     pub devices_open: usize,
     pub devices_blocked: usize,
+    /// How often lost input events (e.g. a button release) were corrected
+    /// from the kernel's key state.
+    pub input_resyncs: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -338,6 +341,7 @@ impl Runner {
             realtime: self.realtime && self.link.timer_is_realtime(),
             devices_open: self.inputs.len(),
             devices_blocked: self.blocked,
+            input_resyncs: self.inputs.resyncs(),
         };
         if status != self.last_status {
             self.last_status = status.clone();
