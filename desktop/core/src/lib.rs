@@ -26,7 +26,7 @@ pub mod update;
 pub mod usbflash;
 
 /// Version of the desktop software (shared by the CLI and the GUI):
-/// MAJOR.MINOR.<commit count>, passed in by the Makefile as PSHB_VERSION
+/// MAJOR.MINOR.PATCH, passed in by the Makefile as PSHB_VERSION
 /// (tools/version.sh). A plain `cargo build` marks itself as a dev build.
 pub const VERSION: &str = match option_env!("PSHB_VERSION") {
     Some(v) if !v.is_empty() => v,

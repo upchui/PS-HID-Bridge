@@ -29,7 +29,7 @@ SESSION = 0x1122334455667788
 # How long to wait when NO answer is expected (an answer takes well under
 # a millisecond on localhost; waiting longer only makes the tests slower).
 NO_ANSWER = 0.2
-# The version the simulator must report: MAJOR.MINOR.<commit count> (from
+# The version the simulator must report: MAJOR.MINOR.PATCH (from
 # make, or computed the same way).
 VERSION = os.environ.get("PSHB_VERSION") or subprocess.run(
     ["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)), "version.sh")],

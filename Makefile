@@ -43,7 +43,7 @@ endif
 FW_BUILD   := .cache/build/firmware
 HOST_BUILD := .cache/build/host
 
-# Version MAJOR.MINOR.<commit count> (tools/version.sh) and the commit date,
+# Version MAJOR.MINOR.PATCH (tools/version.sh) and the commit date,
 # passed to every build container (desktop version, AppStream metainfo).
 PSHB_VERSION := $(shell tools/version.sh)
 PSHB_DATE    := $(shell git log -1 --format=%cs 2>/dev/null)
@@ -120,7 +120,8 @@ submodules:
 check-pins:
 	@tools/check-pins.sh
 
-# The file VERSION holds MAJOR.MINOR; the last part is the commit count.
+# The file VERSION holds MAJOR.MINOR; the last part counts the commits since
+# VERSION was changed.
 check-version:
 	@tools/version.sh >/dev/null
 

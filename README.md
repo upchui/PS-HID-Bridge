@@ -13,20 +13,20 @@ The packet format is described in [protocol/SPEC.md](protocol/SPEC.md). If no va
 
 ## Status
 
-All parts are implemented and tested automatically: unit tests, shared protocol test vectors and a board simulator that runs the real firmware core on the PC. **Nothing has been checked on real hardware yet**; the checklist for that is under "Bring-up on real hardware" below.
+**Version 1.0: works on real hardware** (WIZnet W5500-EVB-Pico2 on a PlayStation, desktop app on Linux). Besides that, every part is tested automatically on each commit: unit tests, shared protocol test vectors and a board simulator that runs the real firmware core on the PC. The checklist under "Checks on real hardware" below is the way to check a new board or a bigger change.
 
 | Part | Status |
 |---|---|
-| Firmware: USB HID (keyboard, mouse with 5 buttons, both wheels) | ✅ host tests |
-| Firmware: network (W5500, DHCP/static IP), encrypted protocol, failsafe | ✅ simulator |
-| Board web interface (password, key, network, update) | ✅ simulator |
-| Firmware update over the network (A/B with fallback) | ✅ simulator; the boot ROM part can only be checked on hardware |
+| Firmware: USB HID (keyboard, mouse with 5 buttons, both wheels) | ✅ real hardware, host tests |
+| Firmware: network (W5500, DHCP/static IP), encrypted protocol, failsafe | ✅ real hardware, simulator |
+| Board web interface (password, key, network, update) | ✅ real hardware, simulator |
+| Firmware update over the network (A/B with fallback) | ✅ simulator |
 | Command line tool `pshb-cli` | ✅ |
-| Desktop app (Kirigami, setup wizard, triggers, tray) | ✅ offscreen self-test |
+| Desktop app (Kirigami, setup wizard, triggers, tray) | ✅ real hardware, offscreen self-test |
 
 ## Download
 
-Every commit on `main` is built and tested automatically and published as a pre-release on the [releases page](https://github.com/upchui/PS-HID-Bridge/releases), named after its version, e.g. `v0.9.16`. Each release contains the AppImage, the command line tool (`pshb-cli-x86_64-linux`), all firmware images and `SHA256SUMS`. The last part of the version is the number of commits, so every commit has a higher version than the one before; the app, `pshb-cli --version` and the firmware (web interface, "Status" page of the app) all show the same version.
+Every commit on `main` is built and tested automatically and published as a release on the [releases page](https://github.com/upchui/PS-HID-Bridge/releases), named after its version, e.g. `v1.0.3`; the newest one is marked "Latest". Each release contains the AppImage, the command line tool (`pshb-cli-x86_64-linux`), all firmware images and `SHA256SUMS`. The last part of the version is the number of commits since the version (`1.0`) was raised, so every commit has a higher version than the one before; the app, `pshb-cli --version` and the firmware (web interface, "Status" page of the app) all show the same version.
 
 ## Quick start
 
@@ -151,7 +151,7 @@ LED: blinks slowly = no USB host, blinks fast = USB present but no IP yet, stead
 
 ### Firmware update over the network
 
-Web interface → System → upload `ps-hid-bridge.uf2`. The board writes the new firmware into the second slot (A/B), checks checksum and content and starts it "on trial". Only when it has started by itself and reaches the network chip is it accepted permanently. If it does not start properly, the board returns to the previous version after a restart. Every new firmware carries a higher version (its last part is the number of commits); the boot ROM always starts the newer one.
+Web interface → System → upload `ps-hid-bridge.uf2`. The board writes the new firmware into the second slot (A/B), checks checksum and content and starts it "on trial". Only when it has started by itself and reaches the network chip is it accepted permanently. If it does not start properly, the board returns to the previous version after a restart. Every new firmware carries a higher version; the boot ROM always starts the newer one.
 
 This needs the partition table from the first installation (`ps-hid-bridge-pt.uf2`).
 
@@ -161,7 +161,7 @@ The System page shows when a newer firmware is available (your browser asks GitH
 
 The desktop app and `pshb-cli update` install the newest release themselves (see "Command line tool"; for the app: section "Updates" on the board page):
 
-- **Where from:** the releases of [upchui/PS-HID-Bridge](https://github.com/upchui/PS-HID-Bridge/releases), asked at `api.github.com` over HTTPS. Every download is checked against the release's `SHA256SUMS` before it is used.
+- **Where from:** the releases of [upchui/PS-HID-Bridge](https://github.com/upchui/PS-HID-Bridge/releases), found through `github.com/upchui/PS-HID-Bridge/releases/latest` over HTTPS (not the GitHub API, whose limit of 60 requests per hour is shared by everything behind the same internet address). Every download is checked against the release's `SHA256SUMS` before it is used.
 - **App and CLI** replace their own file (written next to it, then renamed over it).
 - **Board firmware** goes to the board over HTTP, signed with the pre-shared key instead of the web password: the board hands out a one-time challenge, and the app sends a MAC over the challenge and the whole file (see [SPEC.md](protocol/SPEC.md), "Firmware update with the key"). Then it waits until the board runs the new version; if the board returned to the old one, it says so.
 - The app looks for updates at start and every six hours and only installs on a click; `pshb-cli config set --update-check off` (or the switch in the app) turns the check off.
@@ -212,9 +212,9 @@ Measuring:
 - Board, web interface (Status): "Latency" with the time from a packet to the report fetched by the PlayStation, the receive and decrypt time, and how often mouse motion had to wait for the previous report.
 - `tools/latency_bench.py --cli out/pshb-cli --vendor VVVV --product PPPP [--load 16]` measures the app from outside: it creates a virtual mouse via `/dev/uinput`, plays the board and reports percentiles, optionally with busy processes on every core. It needs write access to `/dev/uinput` and read access to the virtual device (`--vendor`/`--product` of a device that your udev rule covers). Typical on a desktop with real-time priority: median about 0.1 ms, 99 % below 0.3 ms, also with every core busy.
 
-## Bring-up on real hardware
+## Checks on real hardware
 
-These points cannot be checked without a board. The order is chosen so that each step builds on the previous one:
+For a new board or a bigger firmware change. The order is chosen so that each step builds on the previous one:
 
 1. `picotool info -a` (BOOTSEL mode): RP2350A, 2 MB flash.
 2. `ps-hid-bridge-hidtest.uf2` on the PC: `lsusb -v` (1209:0001, two HID interfaces), `evtest` (the mouse moves in a square), polling rate 1000 Hz (`usbhid-dump` / usbmon).
@@ -252,10 +252,10 @@ For development builds without the web interface a key can be compiled in: `make
 
 GitHub Actions builds on GitHub-hosted runners with the same Makefile:
 
-- [`release.yml`](.github/workflows/release.yml) runs on every push to `main`: `make -j2 -O all` (every test, firmware, CLI, AppImage, AppImage self-test), then it publishes the pre-release `v<major>.<minor>.<commit count>`. Compiled Rust dependencies are cached per `Cargo.lock`. A release whose tag already exists for another commit (after a force-push) is refused.
+- [`release.yml`](.github/workflows/release.yml) runs on every push to `main`: `make -j2 -O all` (every test, firmware, CLI, AppImage, AppImage self-test), then it publishes the release `v<major>.<minor>.<patch>` and marks it as the latest. The app finds it through `github.com/…/releases/latest` (no GitHub API, so no limit of 60 requests per hour). Compiled Rust dependencies are cached per `Cargo.lock`. A release whose tag already exists for another commit (after a force-push) is refused.
 - The toolchain images are stored in the GitHub Container Registry (`ghcr.io/<owner>/pshb-*`), tagged with a hash of `versions.env` and `docker/` (`make print-toolchain-tag`). Only when that hash changes does [`toolchain.yml`](.github/workflows/toolchain.yml) rebuild them; with Qt this takes a few hours, a normal release run takes a few minutes.
 - `make PREBUILT=1 FW_IMAGE=… RUST_IMAGE=… DESKTOP_IMAGE=… APPTEST_IMAGE=… all` is what CI runs: the image targets only check that the pulled images exist.
-- The version is `MAJOR.MINOR` from the file [`VERSION`](VERSION) plus the number of commits ([`tools/version.sh`](tools/version.sh), `make print-version`). Firmware, app, CLI and metainfo get it at build time; for a bigger step (e.g. `1.0`) only `VERSION` is edited.
+- The version is `MAJOR.MINOR` from the file [`VERSION`](VERSION) plus the number of commits since `VERSION` was last changed ([`tools/version.sh`](tools/version.sh), `make print-version`): the commit that raises `VERSION` is `X.Y.0`. Firmware, app, CLI and metainfo get it at build time; for a bigger step (e.g. `1.1`) only `VERSION` is edited. The boot ROM gets it as binary version `MAJOR*256+MINOR`.`PATCH`.
 
 ## Testing without a board
 

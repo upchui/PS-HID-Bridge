@@ -212,7 +212,7 @@ impl Pong {
         }
     }
 
-    /// "major.minor.patch" from 0xMMmmpppp (patch = commit count).
+    /// "major.minor.patch" from 0xMMmmpppp (patch: commits since the last MAJOR.MINOR).
     pub fn fw_version_string(&self) -> String {
         let v = self.fw_version;
         format!("{}.{}.{}", v >> 24, (v >> 16) & 0xFF, v & 0xFFFF)

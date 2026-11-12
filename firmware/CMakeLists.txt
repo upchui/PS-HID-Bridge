@@ -12,8 +12,8 @@ set(PICO_PLATFORM rp2350-arm-s)
 
 include(${PICO_SDK_PATH}/pico_sdk_init.cmake)
 
-# Version MAJOR.MINOR.<commit count>; the commit count (PSHB_BUILD) is also
-# the binary version of the OTA images.
+# Version MAJOR.MINOR.PATCH (tools/version.sh); it is also the binary version
+# of the OTA images (PSHB_BIN_VERSION_MAJOR / PSHB_BUILD).
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/version.cmake)
 
 project(ps_hid_bridge VERSION ${PSHB_VERSION} LANGUAGES C CXX ASM)
@@ -76,12 +76,12 @@ function(pshb_add_firmware name)
         pico_hash_binary(${name})
         # What pico_set_binary_version(MAJOR .. MINOR ..) does, but only for
         # assembler sources: crt0.S embeds the version, and a define on every
-        # C file would rebuild the whole image on each commit.
-        if(PSHB_BUILD GREATER 0)
-            target_compile_definitions(${name} PRIVATE
-                $<$<COMPILE_LANGUAGE:ASM>:PICO_CRT0_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}>
-                $<$<COMPILE_LANGUAGE:ASM>:PICO_CRT0_VERSION_MINOR=${PSHB_BUILD}>)
-        endif()
+        # C file would rebuild the whole image on each commit. The boot ROM
+        # only knows two 16-bit parts, so MAJOR.MINOR becomes the first one
+        # (major * 256 + minor) and PATCH the second.
+        target_compile_definitions(${name} PRIVATE
+            $<$<COMPILE_LANGUAGE:ASM>:PICO_CRT0_VERSION_MAJOR=${PSHB_BIN_VERSION_MAJOR}>
+            $<$<COMPILE_LANGUAGE:ASM>:PICO_CRT0_VERSION_MINOR=${PSHB_BUILD}>)
     endif()
     pico_add_extra_outputs(${name})
 endfunction()

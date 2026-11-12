@@ -7,7 +7,7 @@ default-members = ["core"]
 
 [workspace.package]
 # Not the release version: that is MAJOR.MINOR from the file VERSION plus the
-# commit count (tools/version.sh), passed in as PSHB_VERSION by the Makefile.
+# commits since it changed (tools/version.sh), passed in as PSHB_VERSION by the Makefile.
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.99"

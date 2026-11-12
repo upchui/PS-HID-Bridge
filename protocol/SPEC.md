@@ -86,7 +86,7 @@ PING does not need a session id; the app learns the session from the answer.
 | 0 | 8 | t_app_us | echo from PING (0 for a session hint, see below) |
 | 8 | 4 | seq | echo from PING |
 | 12 | 8 | session_id | the board's current session |
-| 20 | 4 | fw_version | `0xMMmmpppp`: major (8 bit), minor (8 bit), patch (16 bit, the number of commits) |
+| 20 | 4 | fw_version | `0xMMmmpppp`: major (8 bit), minor (8 bit), patch (16 bit, the number of commits since MAJOR.MINOR changed) |
 | 24 | 4 | uptime_ms | time since boot |
 | 28 | 1 | status | bit 0 USB connected, bit 1 USB suspended, bit 2 failsafe active, bit 7 unencrypted debug firmware |
 | 29 | 4 | rx_ok | valid packets |
