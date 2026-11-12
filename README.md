@@ -20,7 +20,7 @@ The packet format is described in [protocol/SPEC.md](protocol/SPEC.md). If no va
 | Firmware: USB HID (keyboard, mouse with 5 buttons, both wheels) | ✅ real hardware, host tests |
 | Firmware: network (W5500, DHCP/static IP), encrypted protocol, failsafe | ✅ real hardware, simulator |
 | Board web interface (password, key, network, update) | ✅ real hardware, simulator |
-| Firmware update over the network (A/B with fallback) | ✅ simulator |
+| Firmware update over the network (A/B with fallback) | ✅ real hardware, simulator |
 | Command line tool `pshb-cli` | ✅ |
 | Desktop app (Kirigami, setup wizard, triggers, tray) | ✅ real hardware, offscreen self-test |
 
