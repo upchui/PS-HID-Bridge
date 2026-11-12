@@ -44,7 +44,7 @@ Every commit on `main` is built and tested automatically and published as a rele
 - **Wizard** on first start: board (address, key, connection test; or first install the firmware over USB) → devices and keyboard type → trigger → live test that shows what reaches the PlayStation. "Run setup again" in the sidebar starts it again.
 - **Status:** bridge on/off, the keys that currently go to the PlayStation, tiles for the board, the PlayStation (connected/rest mode), the round trip to the board (median, 95th percentile, history) and the path from input to network, plus "Release all keys", "Pause" and "Reconnect". If the app fell behind for a moment and the kernel dropped input events (fast mice send several thousand per second), the app compares with the real key state right away, so no button stays held on the PlayStation; the page then shows "N× input corrected". As a safety net it also does that every 250 ms.
 - **Input:** keyboards and mice, grouped per device, selected ones first; "Identify" marks the device you are typing on, "Set up access" appears for devices the user may not read. The keyboard type (ISO or ANSI), and mouse sensitivity and acceleration with a curve preview (the default is the raw values).
-- **Triggers:** key combination, mouse button (`Mouse4`, `Mouse5`), *Hold* (bridge on only while pressed) and *Double tap*; each with the action Toggle, Switch on, Switch off, Pause or Release all. "Record" takes over the combination you press. Also the window rule (see below).
+- **Triggers:** key combination, mouse button (`Mouse4`, `Mouse5`), *Hold* (bridge on only while pressed) and *Double tap*; each with the action Toggle, Switch on, Switch off, Pause or Release all (lets go of everything on the PlayStation, also a button the mouse still reports held, see "A mouse button stays pressed"). "Record" takes over the combination you press. Also the window rule (see below).
 - **Board:** address and key, connection state, "Open web interface".
 - **Firmware & updates:** installed and newest version of app and board firmware, "Check now", the automatic check (at start and every six hours), and "Install via USB" (see "Flashing over USB from the PC").
 - **Tray icon:** grey = board not reachable, blue = ready, green = bridge on. A click toggles. A Plasma notification appears when the bridge switches.
@@ -212,6 +212,16 @@ Measuring:
 - Board, web interface (Status): "Latency" with the time from a packet to the report fetched by the PlayStation, the receive and decrypt time, how much mouse input arrived while a report was already waiting for the PlayStation, and how long before the fetch mouse reports are filled.
 - Mouse reports are filled shortly before the PlayStation fetches them (once per millisecond), not right after the previous fetch: the board learns when the fetches happen and fills the report about 60–500 µs before (it adapts by itself), so the report carries all motion up to then. That saves up to one millisecond with continuous motion. For comparison: `make firmware FW_CMAKE_ARGS=-DPSHB_MOUSE_LATE_ARM=OFF`.
 - `tools/latency_bench.py --cli out/pshb-cli --vendor VVVV --product PPPP [--load 16]` measures the app from outside: it creates a virtual mouse via `/dev/uinput`, plays the board and reports percentiles, optionally with busy processes on every core. It needs write access to `/dev/uinput` and read access to the virtual device (`--vendor`/`--product` of a device that your udev rule covers). Typical on a desktop with real-time priority: median about 0.1 ms, 99 % below 0.3 ms, also with every core busy.
+
+## A mouse button stays pressed
+
+The status page shows what goes to the PlayStation and which device reports it ("from …"); a mouse button held for more than 3 s gets a hint. The app forwards what the kernel reports, so first find out where the button is held:
+
+1. **Kernel:** with the button stuck, `sudo evtest --query /dev/input/eventN EV_KEY BTN_LEFT` (exit code 10 = held; the node is in `pshb-cli list-devices`). Held there although you let go: the mouse, its receiver or the USB path never delivered the release, not the app.
+2. **Mouse/receiver:** `sudo cat /dev/hidrawN | xxd -c 12` shows the raw reports (first byte = buttons). A wireless receiver that sends only the release edge when you click the stuck button again (no press before it) had lost the earlier release itself. Seen with an MSI VERSA PRO WIRELESS: a release was lost when another button changed within a few hundred milliseconds.
+3. **App:** held in the app but not in the kernel is a bug: please report it with the output of `journalctl --user | grep "PS HID Bridge"`.
+
+What helps with a receiver that loses releases: the mouse wired, the receiver on a USB extension close to the mouse and away from other 2.4 GHz receivers, USB 3 ports and docks, the newest mouse and receiver firmware (vendor tool), another polling rate. To free a stuck button without clicking each one: "Release all keys" on the status page, or bind the trigger action *Release all* to a key; it lets go of everything on the PlayStation and ignores the stuck button until its next real release.
 
 ## Checks on real hardware
 

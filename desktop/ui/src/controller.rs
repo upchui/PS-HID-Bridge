@@ -70,6 +70,7 @@ pub mod qobject {
         #[qproperty(QString, recorded)]
         #[qproperty(QString, identified_path)]
         #[qproperty(QString, live_text)]
+        #[qproperty(QString, live_device)]
         #[qproperty(QString, last_error)]
         #[qproperty(bool, access_busy)]
         #[qproperty(QString, access_message)]
@@ -217,6 +218,7 @@ pub struct AppControllerRust {
     recorded: QString,
     identified_path: QString,
     live_text: QString,
+    live_device: QString,
     last_error: QString,
     access_busy: bool,
     access_message: QString,
@@ -320,6 +322,7 @@ impl Default for AppControllerRust {
             recorded: QString::default(),
             identified_path: QString::default(),
             live_text: QString::default(),
+            live_device: QString::default(),
             last_error: QString::default(),
             access_busy: false,
             access_message: QString::default(),
@@ -665,7 +668,12 @@ impl qobject::AppController {
                 self.as_mut()
                     .set_identified_path(QString::from(&path.display().to_string()));
             }
-            ServiceEvent::Live(text) => self.as_mut().set_live_text(QString::from(&text)),
+            ServiceEvent::Live { text, device } => {
+                self.as_mut().set_live_text(QString::from(&text));
+                if !device.is_empty() {
+                    self.as_mut().set_live_device(QString::from(&device));
+                }
+            }
             ServiceEvent::Error(e) => self.as_mut().set_last_error(QString::from(&e)),
         }
     }

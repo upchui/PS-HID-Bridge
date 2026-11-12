@@ -254,3 +254,35 @@ fn click_while_another_button_is_held_is_not_lost() {
     assert_eq!(pressed, vec![(BTN_LEFT, true)], "left click lost");
     assert_eq!(released, vec![(BTN_LEFT, false), (BTN_RIGHT, false)]);
 }
+
+#[test]
+#[ignore = "needs /dev/uinput and a udev rule, see the file comment"]
+fn released_all_while_the_mouse_still_reports_held() {
+    // The receiver lost the release: the kernel keeps LEFT held. After
+    // "release all" (InputSet::forget) neither the safety net nor anything
+    // else may press it again; the user's next click (the kernel passes only
+    // its release, the press is no change) ends that, and clicks work again.
+    let (mut mouse, path) = virtual_mouse();
+    let mut inputs = open(&path);
+    mouse.emit(&[InputEvent::new(EV_KEY, BTN_LEFT, 1)]).unwrap();
+    assert_eq!(
+        read_buttons(&mut inputs, Duration::from_millis(30)),
+        vec![(BTN_LEFT, true)]
+    );
+
+    inputs.forget(&[BTN_LEFT]);
+    // Two safety-net rounds: nothing comes back while the kernel still holds it.
+    assert_eq!(read_buttons(&mut inputs, Duration::from_millis(600)), vec![]);
+
+    mouse.emit(&[InputEvent::new(EV_KEY, BTN_LEFT, 0)]).unwrap();
+    assert_eq!(
+        read_buttons(&mut inputs, Duration::from_millis(30)),
+        vec![(BTN_LEFT, false)]
+    );
+    mouse.emit(&[InputEvent::new(EV_KEY, BTN_LEFT, 1)]).unwrap();
+    mouse.emit(&[InputEvent::new(EV_KEY, BTN_LEFT, 0)]).unwrap();
+    assert_eq!(
+        read_buttons(&mut inputs, Duration::from_millis(30)),
+        vec![(BTN_LEFT, true), (BTN_LEFT, false)]
+    );
+}

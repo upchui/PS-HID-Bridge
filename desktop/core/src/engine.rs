@@ -48,7 +48,7 @@ pub enum Notice {
     ReleasedAll,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     /// Grab (true) or release (false) the input devices.
     Grab(bool),
@@ -57,6 +57,11 @@ pub enum Effect {
     State(KeyState),
     Motion(i32, i32, i32, i32),
     ReleaseAll,
+    /// "Release all" forgot these keys and buttons: the device layer must
+    /// not press them again from the kernel's key state until their next
+    /// real release (a mouse whose receiver lost the release keeps
+    /// reporting the button as held).
+    Forget(Vec<u16>),
     Notice(Notice),
 }
 
@@ -316,9 +321,25 @@ impl Engine {
                 }));
             }
             Action::ReleaseAll => {
+                // Everything that went to the PlayStation is let go, also
+                // when the kernel still says it is held (a lost release in
+                // the mouse or its receiver): it is forgotten until its next
+                // real release. Suppressed keys (trigger keys, keys held
+                // since activation) stay with the desktop as before.
+                let forgotten: Vec<u16> = self
+                    .pressed
+                    .iter()
+                    .copied()
+                    .filter(|c| !self.suppressed.contains(c))
+                    .collect();
+                self.pressed.retain(|c| self.suppressed.contains(c));
                 fx.push(Effect::ReleaseAll);
+                if !forgotten.is_empty() {
+                    fx.push(Effect::Forget(forgotten));
+                }
                 fx.push(Effect::Notice(Notice::ReleasedAll));
                 self.sent = Some(KeyState::default());
+                self.update_hold();
             }
         }
     }
@@ -403,6 +424,7 @@ mod tests {
     const P: u16 = 25;
     const A: u16 = 30;
     const W: u16 = 17;
+    const R: u16 = 19;
     const ESC: u16 = 1;
 
     struct T {
@@ -708,6 +730,62 @@ mod tests {
         assert_eq!(states(&last)[0].keys, [0x01; 6]);
         let fx = t.up(36);
         assert_eq!(states(&fx)[0].keys, [0x04, 0x16, 0x07, 0x09, 0x0A, 0x0B]);
+    }
+
+    #[test]
+    fn release_all_forgets_what_was_forwarded() {
+        // A mouse whose receiver lost the release keeps reporting the
+        // button as held: "release all" lets go on the PlayStation and
+        // forgets the button, so the next event does not press it again.
+        let mut t = T::toggle();
+        t.press_combo(&[KEY_LEFTCTRL, KEY_LEFTALT, P]);
+        assert!(t.e.is_active());
+        assert_eq!(states(&t.down(BTN_LEFT))[0].buttons, 0x01);
+        t.down(W);
+        let fx = t.e.command(Action::ReleaseAll);
+        assert!(fx.contains(&Effect::ReleaseAll));
+        assert!(fx.contains(&Effect::Forget(vec![BTN_LEFT, W])));
+        // Motion and other keys go on, but the forgotten button stays released.
+        assert!(
+            states(&t.down(A))
+                .iter()
+                .all(|s| s.buttons == 0 && !s.keys.contains(&0x1a))
+        );
+        // Its real release (the kernel passes it when the user clicks again) is a no-op...
+        assert!(states(&t.up(BTN_LEFT)).is_empty());
+        // ...and the next press works again.
+        assert_eq!(states(&t.down(BTN_LEFT))[0].buttons, 0x01);
+    }
+
+    #[test]
+    fn release_all_keeps_suppressed_keys_with_the_desktop() {
+        // The key that fires a trigger is never forwarded; release all
+        // does not forget it, so its release still ends the trigger's latch.
+        let mut t = T::new(
+            vec![
+                Trigger::combo("Ctrl+Alt+P", Action::Toggle).unwrap(),
+                Trigger::combo("Ctrl+Alt+R", Action::ReleaseAll).unwrap(),
+            ],
+            false,
+        );
+        t.press_combo(&[KEY_LEFTCTRL, KEY_LEFTALT, P]);
+        t.down(BTN_LEFT);
+        t.down(KEY_LEFTCTRL);
+        t.down(KEY_LEFTALT);
+        let fx = t.down(R);
+        let forgot = fx.iter().find_map(|e| match e {
+            Effect::Forget(c) => Some(c.clone()),
+            _ => None,
+        });
+        assert_eq!(forgot, Some(vec![BTN_LEFT, KEY_LEFTCTRL, KEY_LEFTALT]));
+        t.up(R);
+        t.up(KEY_LEFTALT);
+        t.up(KEY_LEFTCTRL);
+        // The trigger can fire again (its latch was cleared by R's release).
+        t.down(BTN_LEFT);
+        t.down(KEY_LEFTCTRL);
+        t.down(KEY_LEFTALT);
+        assert!(t.down(R).iter().any(|e| matches!(e, Effect::Forget(_))));
     }
 
     #[test]

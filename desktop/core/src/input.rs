@@ -401,6 +401,10 @@ struct Open {
     /// The kernel dropped events: skip up to the end of that frame, then
     /// compare with the kernel's key state (see [`process_events`]).
     dropping: bool,
+    /// Forgotten by "release all" while the kernel still reports them held
+    /// (a mouse whose receiver lost the release): not pressed again from
+    /// the kernel's state until their next real release.
+    stale: Vec<u16>,
 }
 
 impl Open {
@@ -412,6 +416,7 @@ impl Open {
         self.dev = dev;
         self.mono = mono;
         self.dropping = false;
+        self.stale.clear();
         Ok(())
     }
 }
@@ -520,6 +525,23 @@ impl InputSet {
         self.resyncs
     }
 
+    /// "Release all" let these keys and buttons go although the kernel may
+    /// still report them held (the mouse or its receiver lost the release):
+    /// they count as released and are not pressed again from the kernel's
+    /// state until their next real release event clears the mark.
+    pub fn forget(&mut self, codes: &[u16]) {
+        for d in &mut self.devices {
+            for &code in codes {
+                if d.pressed.contains(&code) {
+                    d.pressed.retain(|c| *c != code);
+                    if !d.stale.contains(&code) {
+                        d.stale.push(code);
+                    }
+                }
+            }
+        }
+    }
+
     /// Hot-plugging is noticed by itself ([`InputMsg::Hotplug`]); without
     /// it the caller has to look at the device list regularly.
     pub fn watches_hotplug(&self) -> bool {
@@ -543,6 +565,7 @@ impl InputSet {
             mono,
             pressed,
             dropping: false,
+            stale: Vec::new(),
         });
         self.next_id += 1;
         Ok(())
@@ -676,7 +699,7 @@ impl InputSet {
             let Some(held) = held_keys(&d.dev) else {
                 continue;
             };
-            let missed = resync(&mut d.pressed, &held);
+            let missed = resync(&mut d.pressed, &mut d.stale, &held);
             if missed.is_empty() {
                 continue;
             }
@@ -703,12 +726,19 @@ impl InputSet {
                 poll_ms(timeout),
             )
         };
+        if r > 0 {
+            self.read_devices(out);
+        }
+        // After the batches: the safety net's state query deletes the key
+        // events still queued, so nothing read but unprocessed may be left.
         if Instant::now() >= self.next_check {
             self.check_keys(out);
         }
-        if r <= 0 {
-            return;
-        }
+    }
+
+    /// Read every device that poll() reported and turn its events into
+    /// messages; devices that fail are closed (their keys released).
+    fn read_devices(&mut self, out: &mut Vec<InputMsg>) {
         let n = self.devices.len();
         if self.pfds[n].revents != 0 {
             self.waker.clear();
@@ -730,6 +760,7 @@ impl InputSet {
                 mono,
                 pressed,
                 dropping,
+                stale,
                 ..
             } = &mut self.devices[i];
             let events: Vec<InputEvent> = match dev.fetch_events() {
@@ -741,7 +772,7 @@ impl InputSet {
                 }
             };
             let mut got = Vec::with_capacity(events.len());
-            if process_events(events, pressed, dropping, || held_keys(dev), &mut got) {
+            if process_events(events, pressed, stale, dropping, || held_keys(dev), &mut got) {
                 self.resyncs += 1;
             }
             for (event, ts) in got {
@@ -804,8 +835,10 @@ fn map_event(ev: &evdev::InputEvent) -> Option<Event> {
 }
 
 /// Bring `pressed` in line with `held` (the kernel's key state): the key
-/// events that were missed, releases first.
-fn resync(pressed: &mut Vec<u16>, held: &[u16]) -> Vec<Event> {
+/// events that were missed, releases first. A `stale` code (forgotten by
+/// "release all") is not pressed again while the kernel still holds it;
+/// once the kernel lets it go, the mark is cleared.
+fn resync(pressed: &mut Vec<u16>, stale: &mut Vec<u16>, held: &[u16]) -> Vec<Event> {
     let mut missed = Vec::new();
     pressed.retain(|&code| {
         let keep = held.contains(&code);
@@ -814,8 +847,9 @@ fn resync(pressed: &mut Vec<u16>, held: &[u16]) -> Vec<Event> {
         }
         keep
     });
+    stale.retain(|code| held.contains(code));
     for &code in held {
-        if !pressed.contains(&code) {
+        if !pressed.contains(&code) && !stale.contains(&code) {
             pressed.push(code);
             missed.push(Event::Key { code, down: true });
         }
@@ -842,6 +876,7 @@ fn resync(pressed: &mut Vec<u16>, held: &[u16]) -> Vec<Event> {
 fn process_events(
     events: impl IntoIterator<Item = InputEvent>,
     pressed: &mut Vec<u16>,
+    stale: &mut Vec<u16>,
     dropping: &mut bool,
     held_keys: impl FnOnce() -> Option<Vec<u16>>,
     out: &mut Vec<(Event, Option<SystemTime>)>,
@@ -866,6 +901,9 @@ fn process_events(
             continue;
         };
         if let Event::Key { code, down } = event {
+            // A real edge of a forgotten key ends its stale mark: the kernel
+            // sends one only when the key really changed.
+            stale.retain(|c| *c != code);
             if !down {
                 pressed.retain(|c| *c != code);
             } else if !pressed.contains(&code) {
@@ -878,7 +916,7 @@ fn process_events(
     // one; asking now would delete key events of that frame.
     if lost && !*dropping {
         if let Some(held) = held_keys() {
-            out.extend(resync(pressed, &held).into_iter().map(|e| (e, None)));
+            out.extend(resync(pressed, stale, &held).into_iter().map(|e| (e, None)));
         }
         out.push((Event::Sync, None));
     }
@@ -912,11 +950,23 @@ mod tests {
         dropping: &mut bool,
         held: &[u16],
     ) -> (Vec<Event>, bool, usize) {
+        let mut stale = Vec::new();
+        run_stale(events, pressed, &mut stale, dropping, held)
+    }
+
+    fn run_stale(
+        events: Vec<InputEvent>,
+        pressed: &mut Vec<u16>,
+        stale: &mut Vec<u16>,
+        dropping: &mut bool,
+        held: &[u16],
+    ) -> (Vec<Event>, bool, usize) {
         let mut asked = 0;
         let mut out = Vec::new();
         let resynced = process_events(
             events,
             pressed,
+            stale,
             dropping,
             || {
                 asked += 1;
@@ -1130,9 +1180,10 @@ mod tests {
     #[test]
     fn resync_brings_pressed_in_line() {
         let mut pressed = vec![LEFT, KEY_W];
-        assert_eq!(resync(&mut pressed, &[LEFT, KEY_W]), vec![]);
+        let mut stale = Vec::new();
+        assert_eq!(resync(&mut pressed, &mut stale, &[LEFT, KEY_W]), vec![]);
         assert_eq!(
-            resync(&mut pressed, &[KEY_W, 30]),
+            resync(&mut pressed, &mut stale, &[KEY_W, 30]),
             vec![
                 Event::Key {
                     code: LEFT,
@@ -1144,13 +1195,76 @@ mod tests {
         assert_eq!(pressed, vec![KEY_W, 30]);
         // A press the state query deleted from the queue comes back.
         assert_eq!(
-            resync(&mut pressed, &[KEY_W, 30, LEFT]),
+            resync(&mut pressed, &mut stale, &[KEY_W, 30, LEFT]),
             vec![Event::Key {
                 code: LEFT,
                 down: true
             }]
         );
         assert_eq!(pressed, vec![KEY_W, 30, LEFT]);
+    }
+
+    #[test]
+    fn forgotten_button_is_not_pressed_again_while_the_kernel_holds_it() {
+        // The receiver lost the release: the kernel keeps LEFT held. After
+        // "release all" forgot it, neither the safety net nor a resync after
+        // dropped events may press it again; the user's next click (the
+        // kernel passes only its release) ends the mark.
+        let mut pressed = vec![LEFT];
+        let mut stale = Vec::new();
+        // forget(): what InputSet::forget does per device
+        pressed.retain(|c| *c != LEFT);
+        stale.push(LEFT);
+        assert_eq!(resync(&mut pressed, &mut stale, &[LEFT]), vec![]);
+        assert!(pressed.is_empty() && stale == vec![LEFT]);
+        let (ev, _, _) = run_stale(
+            vec![syn(SynchronizationCode::SYN_DROPPED), report()],
+            &mut pressed,
+            &mut stale,
+            &mut false,
+            &[LEFT],
+        );
+        assert_eq!(ev, vec![Event::Sync]);
+        assert!(pressed.is_empty() && stale == vec![LEFT]);
+        // The release edge: passed through (the engine ignores it) and the mark is gone.
+        let (ev, _, _) = run_stale(
+            vec![key(LEFT, 0), report()],
+            &mut pressed,
+            &mut stale,
+            &mut false,
+            &[],
+        );
+        assert_eq!(
+            ev,
+            vec![
+                Event::Key {
+                    code: LEFT,
+                    down: false
+                },
+                Event::Sync
+            ]
+        );
+        assert!(stale.is_empty());
+        // From now on presses work again.
+        let (ev, _, _) = run_stale(
+            vec![key(LEFT, 1), report()],
+            &mut pressed,
+            &mut stale,
+            &mut false,
+            &[LEFT],
+        );
+        assert_eq!(
+            ev[0],
+            Event::Key {
+                code: LEFT,
+                down: true
+            }
+        );
+        assert_eq!(pressed, vec![LEFT]);
+        // The kernel letting go without an event we saw (query flushed it) also ends the mark.
+        let mut stale = vec![LEFT];
+        assert_eq!(resync(&mut Vec::new(), &mut stale, &[]), vec![]);
+        assert!(stale.is_empty());
     }
 
     #[test]

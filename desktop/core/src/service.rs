@@ -45,6 +45,10 @@ pub enum ServiceCmd {
     /// Ping more often while the latency view is visible.
     PingInterval(Duration),
     Shutdown,
+    /// Result of a device scan (internal: the scan runs on its own thread,
+    /// the input thread must not stall on sysfs).
+    #[doc(hidden)]
+    Devices(Result<input::DeviceList, String>),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -81,8 +85,12 @@ pub enum ServiceEvent {
     Recorded(String),
     /// A selected device produced a key or button press.
     Identified(PathBuf),
-    /// What the PlayStation currently receives, e.g. "Shift + A · mouse: left".
-    Live(String),
+    /// What the PlayStation currently receives, e.g. "Shift + A · mouse: left",
+    /// and the device whose event last changed it ("" for a command).
+    Live {
+        text: String,
+        device: String,
+    },
     Error(String),
 }
 
@@ -112,9 +120,10 @@ impl Service {
         let (tx, rx) = mpsc::channel();
         let devices = cfg.config.devices.clone();
         let w = waker.clone();
+        let cmds = tx.clone();
         let thread = thread::Builder::new()
             .name("pshb-service".into())
-            .spawn(move || Runner::new(Engine::new(engine_cfg), link, devices, sink, w).run(rx))
+            .spawn(move || Runner::new(Engine::new(engine_cfg), link, devices, sink, w, cmds).run(rx))
             .map_err(|e| e.to_string())?;
         Ok(Self {
             tx,
@@ -190,6 +199,10 @@ struct Runner {
     sink: Sink,
     guard: GrabGuard,
     inputs: InputSet,
+    /// Back to our own queue: the device scan thread reports through it.
+    cmds: Sender<ServiceCmd>,
+    waker: Arc<Waker>,
+    scan_running: bool,
     next_rescan: Instant,
     realtime: bool,
     blocked: usize,
@@ -209,15 +222,25 @@ struct Runner {
 }
 
 impl Runner {
-    fn new(engine: Engine, link: Arc<Link>, specs: Vec<String>, sink: Sink, waker: Arc<Waker>) -> Self {
+    fn new(
+        engine: Engine,
+        link: Arc<Link>,
+        specs: Vec<String>,
+        sink: Sink,
+        waker: Arc<Waker>,
+        cmds: Sender<ServiceCmd>,
+    ) -> Self {
         let guard = GrabGuard::default();
         Self {
             ctl: Controller::new(engine, link.clone()),
             link,
             specs,
             sink,
-            inputs: InputSet::new(waker, guard.clone()),
+            inputs: InputSet::new(waker.clone(), guard.clone()),
             guard,
+            cmds,
+            waker,
+            scan_running: false,
             next_rescan: Instant::now(),
             realtime: false,
             blocked: 0,
@@ -245,9 +268,14 @@ impl Runner {
         }
     }
 
-    /// Apply what the engine asked for: grab or release the devices. A
-    /// device that cannot be grabbed switches the bridge off again.
-    fn apply_grab(&mut self) {
+    /// Apply what the engine asked for: keys forgotten by "release all",
+    /// and grab or release the devices. A device that cannot be grabbed
+    /// switches the bridge off again.
+    fn apply_requests(&mut self) {
+        let forgotten = self.ctl.take_forgotten();
+        if !forgotten.is_empty() {
+            self.inputs.forget(&forgotten);
+        }
         while let Some(on) = self.ctl.take_grab_request() {
             let problems = self.inputs.set_grab(on);
             self.report_grab_problems(&problems);
@@ -270,11 +298,28 @@ impl Runner {
     fn command(&mut self, action: Action) {
         let n = self.ctl.command(action);
         self.notices(n);
-        self.apply_grab();
+        self.apply_requests();
+        self.update_live("");
     }
 
-    /// Open newly selected devices and close vanished ones; devices that
-    /// stay open keep their grab.
+    /// Tell the GUI when what the PlayStation receives has changed;
+    /// `device`: the device whose event caused it ("" for a command).
+    fn update_live(&mut self, device: &str) {
+        let live = self.ctl.last_state();
+        if live != self.last_live {
+            self.last_live = live;
+            if let Some(s) = live {
+                self.emit(ServiceEvent::Live {
+                    text: describe_state(&s),
+                    device: device.to_string(),
+                });
+            }
+        }
+    }
+
+    /// Look at the device list again (on its own thread: walking sysfs
+    /// takes a few milliseconds, long enough for the kernel to drop input
+    /// events of a fast mouse); [`Self::devices_listed`] applies the result.
     fn rescan(&mut self) {
         self.next_rescan = Instant::now()
             + if self.inputs.watches_hotplug() {
@@ -282,7 +327,24 @@ impl Runner {
             } else {
                 RESCAN_POLL
             };
-        let list = match input::list_devices() {
+        if self.scan_running {
+            return;
+        }
+        let cmds = self.cmds.clone();
+        let waker = self.waker.clone();
+        let spawned = thread::Builder::new().name("pshb-devices".into()).spawn(move || {
+            let list = input::list_devices().map_err(|e| e.to_string());
+            let _ = cmds.send(ServiceCmd::Devices(list));
+            waker.wake();
+        });
+        self.scan_running = spawned.is_ok();
+    }
+
+    /// Open newly selected devices and close vanished ones; devices that
+    /// stay open keep their grab.
+    fn devices_listed(&mut self, list: Result<input::DeviceList, String>) {
+        self.scan_running = false;
+        let list = match list {
             Ok(l) => l,
             Err(e) => {
                 self.emit(ServiceEvent::Error(format!("Device list: {e}")));
@@ -396,7 +458,7 @@ impl Runner {
         }
         // Forward first; everything below is for the GUI and may wait.
         let notices = self.ctl.handle(event, Instant::now(), ts_us);
-        self.apply_grab();
+        self.apply_requests();
         self.notices(notices);
         if self.identify
             && let Event::Key { down: true, .. } = event
@@ -408,13 +470,8 @@ impl Runner {
             self.last_identify = Some(Instant::now());
             self.emit(ServiceEvent::Identified(d.path.clone()));
         }
-        let live = self.ctl.last_state();
-        if live != self.last_live {
-            self.last_live = live;
-            if let Some(s) = live {
-                self.emit(ServiceEvent::Live(describe_state(&s)));
-            }
-        }
+        let device = self.inputs.info(dev).map(|d| d.name.clone()).unwrap_or_default();
+        self.update_live(&device);
     }
 
     fn focus(&mut self, focused: bool) {
@@ -424,7 +481,7 @@ impl Runner {
             return;
         }
         let n = self.ctl.handle(Event::Focus(focused), Instant::now(), None);
-        self.apply_grab();
+        self.apply_requests();
         self.notices(n);
     }
 
@@ -436,7 +493,7 @@ impl Runner {
 
     fn shutdown(&mut self) {
         self.ctl.shutdown();
-        self.apply_grab();
+        self.apply_requests();
         let mut msgs = Vec::new();
         self.inputs.update(&[], &mut msgs);
     }
@@ -475,6 +532,7 @@ impl Runner {
                     Ok(ServiceCmd::Identify(on)) => self.identify = on,
                     Ok(ServiceCmd::MouseCurve(c)) => self.ctl.engine.set_mouse_curve(c),
                     Ok(ServiceCmd::PingInterval(d)) => self.link.set_ping_interval(d),
+                    Ok(ServiceCmd::Devices(list)) => self.devices_listed(list),
                     Err(mpsc::TryRecvError::Empty) => break,
                 }
             }

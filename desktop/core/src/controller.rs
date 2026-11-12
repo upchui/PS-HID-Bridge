@@ -15,6 +15,7 @@ pub struct Controller {
     pub engine: Engine,
     link: Arc<Link>,
     grab_request: Option<bool>,
+    forgotten: Vec<u16>,
     last_state: Option<KeyState>,
 }
 
@@ -24,6 +25,7 @@ impl Controller {
             engine,
             link,
             grab_request: None,
+            forgotten: Vec::new(),
             last_state: None,
         }
     }
@@ -45,6 +47,13 @@ impl Controller {
     /// devices applies this after every call to `handle`/`command`.
     pub fn take_grab_request(&mut self) -> Option<bool> {
         self.grab_request.take()
+    }
+
+    /// Keys and buttons that "release all" forgot (see [`Effect::Forget`]):
+    /// the owner of the devices hands them to [`InputSet::forget`]
+    /// (crate::input::InputSet::forget) after every call to `handle`/`command`.
+    pub fn take_forgotten(&mut self) -> Vec<u16> {
+        std::mem::take(&mut self.forgotten)
     }
 
     /// `ts_us`: kernel timestamp of the event (for the latency statistics).
@@ -69,7 +78,11 @@ impl Controller {
                     self.link.set_state(s, ts_us);
                 }
                 Effect::Motion(dx, dy, w, p) => self.link.add_motion(dx, dy, w, p, ts_us),
-                Effect::ReleaseAll => self.link.release_all(),
+                Effect::ReleaseAll => {
+                    self.last_state = Some(KeyState::default());
+                    self.link.release_all();
+                }
+                Effect::Forget(codes) => self.forgotten.extend(codes),
                 Effect::Notice(n) => notices.push(n),
             }
         }

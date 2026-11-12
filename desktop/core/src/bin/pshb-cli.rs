@@ -465,6 +465,10 @@ fn cmd_run(
     // Grab or release as the engine asks; a device that cannot be grabbed
     // switches the bridge off again.
     let apply_grab = |ctl: &mut Controller, inputs: &mut InputSet| {
+        let forgotten = ctl.take_forgotten();
+        if !forgotten.is_empty() {
+            inputs.forget(&forgotten);
+        }
         while let Some(on) = ctl.take_grab_request() {
             let problems = inputs.set_grab(on);
             if let Some(text) = input::grab_problems(&problems) {

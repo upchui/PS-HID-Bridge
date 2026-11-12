@@ -12,6 +12,25 @@ AppPage {
 
     readonly property var triggers: JSON.parse(AppController.triggersJson)
     readonly property string level: AppController.active ? "ok" : AppController.connected ? "accent" : ""
+    // A mouse button has been held for a while: if the user is not holding
+    // it, the mouse or its wireless receiver lost the release.
+    property bool mouseHeldLong: false
+
+    Timer {
+        id: mouseHeldTimer
+        interval: 3000
+        onTriggered: page.mouseHeldLong = true
+    }
+    Connections {
+        target: AppController
+        function onLiveTextChanged() {
+            page.mouseHeldLong = false;
+            if (AppController.liveText.indexOf("mouse:") >= 0)
+                mouseHeldTimer.restart();
+            else
+                mouseHeldTimer.stop();
+        }
+    }
 
     // "Shift + A · mouse: left" -> ["Shift", "A", "mouse: left"]
     function keyChips(text) {
@@ -164,6 +183,20 @@ AppPage {
                     height: 26
                     verticalAlignment: Text.AlignVCenter
                 }
+                Controls.Label {
+                    visible: AppController.liveText !== "" && AppController.liveDevice !== ""
+                    text: "from " + AppController.liveDevice
+                    color: Style.muted
+                    height: 26
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+            }
+            Banner {
+                Layout.fillWidth: true
+                visible: AppController.active && page.mouseHeldLong
+                kind: "warn"
+                text: "A mouse button has been held for a few seconds. If you are not pressing it, the mouse or its wireless receiver lost the release: click that button once, or use \"Release all keys\" (also available as a trigger action)."
             }
         }
     }
