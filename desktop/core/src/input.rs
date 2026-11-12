@@ -533,12 +533,15 @@ impl InputSet {
 
     fn add(&mut self, info: &DeviceInfo) -> io::Result<()> {
         let (dev, mono) = open_device(&info.path)?;
+        // Keys held already stay with the desktop (no events for them), but
+        // count as held, so the safety net does not press them.
+        let pressed = held_keys(&dev).unwrap_or_default();
         self.devices.push(Open {
             id: self.next_id,
             info: info.clone(),
             dev,
             mono,
-            pressed: Vec::new(),
+            pressed,
             dropping: false,
         });
         self.next_id += 1;
@@ -658,9 +661,12 @@ impl InputSet {
         failed
     }
 
-    /// Safety net: a key the kernel no longer holds is released here, even
-    /// if its release event got lost somewhere (only releases: a key held
-    /// since before the device was opened stays with the desktop).
+    /// Safety net: compare every device that holds something with the
+    /// kernel's key state, so a release that got lost somewhere cannot keep
+    /// a key held. Runs before the next batch is read, when everything read
+    /// so far is processed. EVIOCGKEY deletes the key events still queued
+    /// (its state includes them), so the whole state is applied: presses
+    /// too, or a click queued right now would be lost.
     fn check_keys(&mut self, out: &mut Vec<InputMsg>) {
         self.next_check = Instant::now() + KEY_CHECK_INTERVAL;
         for d in &mut self.devices {
@@ -670,12 +676,12 @@ impl InputSet {
             let Some(held) = held_keys(&d.dev) else {
                 continue;
             };
-            let released = release_missing(&mut d.pressed, &held);
-            if released.is_empty() {
+            let missed = resync(&mut d.pressed, &held);
+            if missed.is_empty() {
                 continue;
             }
             self.resyncs += 1;
-            for event in released.into_iter().chain([Event::Sync]) {
+            for event in missed.into_iter().chain([Event::Sync]) {
                 out.push(InputMsg::Event {
                     dev: d.id,
                     event,
@@ -797,23 +803,17 @@ fn map_event(ev: &evdev::InputEvent) -> Option<Event> {
     }
 }
 
-/// Keys in `pressed` that are not in `held`: removed, as release events.
-fn release_missing(pressed: &mut Vec<u16>, held: &[u16]) -> Vec<Event> {
-    let mut released = Vec::new();
-    pressed.retain(|&code| {
-        let keep = held.contains(&code);
-        if !keep {
-            released.push(Event::Key { code, down: false });
-        }
-        keep
-    });
-    released
-}
-
 /// Bring `pressed` in line with `held` (the kernel's key state): the key
 /// events that were missed, releases first.
 fn resync(pressed: &mut Vec<u16>, held: &[u16]) -> Vec<Event> {
-    let mut missed = release_missing(pressed, held);
+    let mut missed = Vec::new();
+    pressed.retain(|&code| {
+        let keep = held.contains(&code);
+        if !keep {
+            missed.push(Event::Key { code, down: false });
+        }
+        keep
+    });
     for &code in held {
         if !pressed.contains(&code) {
             pressed.push(code);
@@ -829,18 +829,24 @@ fn resync(pressed: &mut Vec<u16>, held: &[u16]) -> Vec<Event> {
 ///
 /// When a reader falls behind, the kernel drops its queued events and
 /// sends SYN_DROPPED. Everything up to the next SYN_REPORT is then an
-/// incomplete frame and is skipped; after it, the kernel's key state
-/// (`held_keys`, EVIOCGKEY) tells which presses and releases were lost.
-/// This is done right away: a release lost this way must not wait for the
-/// next event of the device.
+/// incomplete frame and is skipped; the kernel's key state (`held_keys`,
+/// EVIOCGKEY) then tells which presses and releases were lost. This is done
+/// in the same call: a release lost this way must not wait for the next
+/// event of the device.
+///
+/// But only after the whole batch: EVIOCGKEY also deletes the key events
+/// still queued for this reader (they are part of the state it returns).
+/// Asked in the middle of the batch, it would delete a release while an
+/// older press from the rest of the batch is still to come, and that press
+/// would then stay held.
 fn process_events(
     events: impl IntoIterator<Item = InputEvent>,
     pressed: &mut Vec<u16>,
     dropping: &mut bool,
-    mut held_keys: impl FnMut() -> Option<Vec<u16>>,
+    held_keys: impl FnOnce() -> Option<Vec<u16>>,
     out: &mut Vec<(Event, Option<SystemTime>)>,
 ) -> bool {
-    let mut resynced = false;
+    let mut lost = false;
     for ev in events {
         if ev.event_type() == EventType::SYNCHRONIZATION {
             if ev.code() == SynchronizationCode::SYN_DROPPED.0 {
@@ -849,11 +855,7 @@ fn process_events(
             }
             if *dropping && ev.code() == SynchronizationCode::SYN_REPORT.0 {
                 *dropping = false;
-                resynced = true;
-                if let Some(held) = held_keys() {
-                    out.extend(resync(pressed, &held).into_iter().map(|e| (e, None)));
-                }
-                out.push((Event::Sync, None));
+                lost = true;
                 continue;
             }
         }
@@ -872,7 +874,15 @@ fn process_events(
         }
         out.push((event, Some(ev.timestamp())));
     }
-    resynced
+    // An incomplete frame at the end of the batch is finished in the next
+    // one; asking now would delete key events of that frame.
+    if lost && !*dropping {
+        if let Some(held) = held_keys() {
+            out.extend(resync(pressed, &held).into_iter().map(|e| (e, None)));
+        }
+        out.push((Event::Sync, None));
+    }
+    lost
 }
 
 #[cfg(test)]
@@ -978,13 +988,14 @@ mod tests {
         assert_eq!(
             ev,
             vec![
+                // the incomplete frame (rel 0) is skipped, the next one is not
+                Event::Rel { axis: 1, value: 4 },
+                Event::Sync,
+                // the state, after the whole batch
                 Event::Key {
                     code: LEFT,
                     down: false
                 },
-                Event::Sync,
-                // the incomplete frame (rel 0) is skipped, the next one is not
-                Event::Rel { axis: 1, value: 4 },
                 Event::Sync,
             ]
         );
@@ -992,6 +1003,81 @@ mod tests {
         assert_eq!(asked, 1);
         assert!(pressed.is_empty());
         assert!(!dropping);
+    }
+
+    #[test]
+    fn state_is_asked_for_after_the_whole_batch() {
+        // The read holds the dropped block and a press; the release is still
+        // in the kernel's queue. Asking for the state deletes that release,
+        // so the state must come after the press, not before it.
+        let (mut pressed, mut dropping) = (Vec::new(), false);
+        let (ev, resynced, asked) = run(
+            vec![
+                syn(SynchronizationCode::SYN_DROPPED),
+                report(),
+                key(LEFT, 1),
+                report(),
+                rel(0, 2),
+                report(),
+            ],
+            &mut pressed,
+            &mut dropping,
+            &[],
+        );
+        assert_eq!(
+            ev,
+            vec![
+                Event::Key {
+                    code: LEFT,
+                    down: true
+                },
+                Event::Sync,
+                Event::Rel { axis: 0, value: 2 },
+                Event::Sync,
+                Event::Key {
+                    code: LEFT,
+                    down: false
+                },
+                Event::Sync,
+            ]
+        );
+        assert!(resynced && asked == 1);
+        assert!(pressed.is_empty(), "left button stays held");
+    }
+
+    #[test]
+    fn several_drops_in_one_batch_ask_once() {
+        let (mut pressed, mut dropping) = (vec![LEFT], false);
+        let (ev, resynced, asked) = run(
+            vec![
+                syn(SynchronizationCode::SYN_DROPPED),
+                report(),
+                key(LEFT, 0),
+                report(),
+                syn(SynchronizationCode::SYN_DROPPED),
+                report(),
+            ],
+            &mut pressed,
+            &mut dropping,
+            &[LEFT],
+        );
+        assert_eq!(
+            ev,
+            vec![
+                Event::Key {
+                    code: LEFT,
+                    down: false
+                },
+                Event::Sync,
+                Event::Key {
+                    code: LEFT,
+                    down: true
+                },
+                Event::Sync,
+            ]
+        );
+        assert!(resynced && asked == 1);
+        assert_eq!(pressed, vec![LEFT]);
     }
 
     #[test]
@@ -1042,7 +1128,7 @@ mod tests {
     }
 
     #[test]
-    fn resync_and_release_missing() {
+    fn resync_brings_pressed_in_line() {
         let mut pressed = vec![LEFT, KEY_W];
         assert_eq!(resync(&mut pressed, &[LEFT, KEY_W]), vec![]);
         assert_eq!(
@@ -1056,21 +1142,15 @@ mod tests {
             ]
         );
         assert_eq!(pressed, vec![KEY_W, 30]);
-        // The safety net only releases.
+        // A press the state query deleted from the queue comes back.
         assert_eq!(
-            release_missing(&mut pressed, &[LEFT]),
-            vec![
-                Event::Key {
-                    code: KEY_W,
-                    down: false
-                },
-                Event::Key {
-                    code: 30,
-                    down: false
-                }
-            ]
+            resync(&mut pressed, &[KEY_W, 30, LEFT]),
+            vec![Event::Key {
+                code: LEFT,
+                down: true
+            }]
         );
-        assert!(pressed.is_empty());
+        assert_eq!(pressed, vec![KEY_W, 30, LEFT]);
     }
 
     #[test]

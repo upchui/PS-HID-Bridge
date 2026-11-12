@@ -30,6 +30,8 @@ const HOTPLUG_SETTLE: Duration = Duration::from_millis(200);
 const RESCAN_FALLBACK: Duration = Duration::from_secs(30);
 const RESCAN_POLL: Duration = Duration::from_secs(2);
 const STATUS: Duration = Duration::from_millis(250);
+/// At most one log line (journal) about input corrections per this time.
+const RESYNC_LOG_GAP: Duration = Duration::from_secs(10);
 
 pub enum ServiceCmd {
     Action(Action),
@@ -201,6 +203,9 @@ struct Runner {
     last_live: Option<KeyState>,
     last_sent: u64,
     last_sent_at: Instant,
+    /// Input corrections already written to the log, and when.
+    logged_resyncs: u64,
+    logged_at: Option<Instant>,
 }
 
 impl Runner {
@@ -225,6 +230,8 @@ impl Runner {
             last_live: None,
             last_sent: 0,
             last_sent_at: Instant::now(),
+            logged_resyncs: 0,
+            logged_at: None,
         }
     }
 
@@ -315,6 +322,16 @@ impl Runner {
     }
 
     fn status(&mut self) {
+        let resyncs = self.inputs.resyncs();
+        if resyncs != self.logged_resyncs && self.logged_at.is_none_or(|t| t.elapsed() >= RESYNC_LOG_GAP) {
+            self.logged_at = Some(Instant::now());
+            eprintln!(
+                "PS HID Bridge: input corrected {} time(s) from the kernel's key state ({resyncs} in total); \
+                 the kernel had dropped events because the input thread fell behind",
+                resyncs - self.logged_resyncs
+            );
+            self.logged_resyncs = resyncs;
+        }
         let st = self.link.status();
         let now = Instant::now();
         let dt = now.duration_since(self.last_sent_at).as_secs_f64();

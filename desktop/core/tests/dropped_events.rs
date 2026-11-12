@@ -28,6 +28,7 @@ use pshb_core::input::{DeviceInfo, GrabGuard, InputMsg, InputSet, Waker};
 const EV_KEY: u16 = 1;
 const EV_REL: u16 = 2;
 const BTN_LEFT: u16 = 0x110;
+const BTN_RIGHT: u16 = 0x111;
 
 fn mouse_id() -> (u16, u16) {
     let spec = std::env::var("PSHB_GRAB_TEST_IDS").unwrap_or_else(|_| "0db0:1fc6".into());
@@ -171,4 +172,85 @@ fn release_dropped_as_the_very_last_event_is_not_lost() {
         exact += usize::from(inputs.resyncs() > before);
     }
     assert!(exact >= 1, "no size overflowed the queue");
+}
+
+/// Open the virtual mouse in an InputSet.
+fn open(path: &std::path::Path) -> InputSet {
+    let event = path.file_name().unwrap().to_str().unwrap().to_string();
+    let info = DeviceInfo::from_sysfs(&PathBuf::from("/sys/class/input"), &event).expect("sysfs");
+    let waker = Arc::new(Waker::new().unwrap());
+    InputSet::open(&[info], waker, GrabGuard::default()).expect("open")
+}
+
+/// Read for `time`; the button events (code, down) that arrived.
+fn read_buttons(inputs: &mut InputSet, time: Duration) -> Vec<(u16, bool)> {
+    let end = Instant::now() + time;
+    let mut msgs = Vec::new();
+    let mut got = Vec::new();
+    while Instant::now() < end {
+        inputs.wait(end.saturating_duration_since(Instant::now()), &mut msgs);
+        for m in msgs.drain(..) {
+            if let InputMsg::Event {
+                event: Event::Key { code, down },
+                ..
+            } = m
+            {
+                got.push((code, down));
+            }
+        }
+    }
+    got
+}
+
+#[test]
+#[ignore = "needs /dev/uinput and a udev rule, see the file comment"]
+fn press_in_the_batch_with_its_release_still_queued() {
+    // Reading the key state (EVIOCGKEY) also removes the key events still
+    // queued for this reader. After an overflow, the first read holds the
+    // dropped block and a press, the release is still in the kernel's queue:
+    // asking for the state in the middle of that batch deletes the release,
+    // and the older press processed afterwards stays held.
+    let (mut mouse, path) = virtual_mouse();
+    let mut inputs = open(&path);
+    read_buttons(&mut inputs, Duration::from_millis(20));
+
+    // Overflow the 128-event queue exactly at a frame end: SYN_DROPPED + SYN_REPORT.
+    for _ in 0..64 {
+        mouse.emit(&[InputEvent::new(EV_REL, 0, 1)]).unwrap();
+    }
+    mouse.emit(&[InputEvent::new(EV_KEY, BTN_LEFT, 1)]).unwrap();
+    for _ in 0..20 {
+        mouse.emit(&[InputEvent::new(EV_REL, 0, 1)]).unwrap();
+    }
+    mouse.emit(&[InputEvent::new(EV_KEY, BTN_LEFT, 0)]).unwrap();
+
+    // Well before the 250 ms safety net.
+    let got = read_buttons(&mut inputs, Duration::from_millis(60));
+    println!("button events: {got:?}, resyncs {}", inputs.resyncs());
+    assert_eq!(got.last(), Some(&(BTN_LEFT, false)), "left button stays held");
+}
+
+#[test]
+#[ignore = "needs /dev/uinput and a udev rule, see the file comment"]
+fn click_while_another_button_is_held_is_not_lost() {
+    // Aiming (right held) and firing (left): the periodic comparison with
+    // the kernel's key state must not swallow a press that is still queued.
+    let (mut mouse, path) = virtual_mouse();
+    let mut inputs = open(&path);
+    mouse.emit(&[InputEvent::new(EV_KEY, BTN_RIGHT, 1)]).unwrap();
+    assert_eq!(
+        read_buttons(&mut inputs, Duration::from_millis(30)),
+        vec![(BTN_RIGHT, true)]
+    );
+
+    // Let the periodic check become due, then press left without reading.
+    thread::sleep(Duration::from_millis(300));
+    mouse.emit(&[InputEvent::new(EV_KEY, BTN_LEFT, 1)]).unwrap();
+    let pressed = read_buttons(&mut inputs, Duration::from_millis(30));
+    mouse.emit(&[InputEvent::new(EV_KEY, BTN_LEFT, 0)]).unwrap();
+    mouse.emit(&[InputEvent::new(EV_KEY, BTN_RIGHT, 0)]).unwrap();
+    let released = read_buttons(&mut inputs, Duration::from_millis(30));
+    println!("pressed: {pressed:?}, released: {released:?}");
+    assert_eq!(pressed, vec![(BTN_LEFT, true)], "left click lost");
+    assert_eq!(released, vec![(BTN_LEFT, false), (BTN_RIGHT, false)]);
 }

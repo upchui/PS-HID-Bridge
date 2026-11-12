@@ -276,7 +276,7 @@ Grabbing and releasing the devices is tested against virtual devices (uinput) th
 cd desktop && cargo test -p pshb-core --test grab_release -- --ignored --test-threads=1
 ```
 
-The same goes for [`dropped_events.rs`](desktop/core/tests/dropped_events.rs): a virtual mouse holds the left button while far more events arrive than the kernel queues for a reader that lags behind, and the release gets lost in the overflow; it must still reach the engine at once.
+The same goes for [`dropped_events.rs`](desktop/core/tests/dropped_events.rs): a virtual mouse holds the left button while far more events arrive than the kernel queues for a reader that lags behind, and the release gets lost in the overflow; it must still reach the engine at once. Reading the key state (EVIOCGKEY) also deletes the key events still queued for the reader, so the tests also check that a press read before such a query cannot stay held, and that a click while another button is held (aiming and firing) is not lost.
 
 ```sh
 cd desktop && cargo test -p pshb-core --test dropped_events -- --ignored --test-threads=1
