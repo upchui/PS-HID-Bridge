@@ -541,7 +541,8 @@ class WebTests(unittest.TestCase):
         self.assertEqual(st["firmware"], VERSION)
         # Latency diagnostics are part of the status (the simulator has no USB timing).
         for k in ("lat_usb_count", "lat_usb_p50_us", "lat_usb_p95_us", "lat_usb_max_us",
-                  "lat_rx_p50_us", "lat_rx_max_us", "mouse_waits"):
+                  "lat_rx_p50_us", "lat_rx_max_us", "mouse_inputs", "mouse_waits",
+                  "mouse_misses", "mouse_lead_us"):
             self.assertEqual(st[k], 0, k)
         # Logout, then only the new password works.
         self.assertEqual(self.web.req("POST", "/api/logout", {})[0], 200)

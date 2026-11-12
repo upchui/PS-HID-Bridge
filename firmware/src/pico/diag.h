@@ -11,7 +11,10 @@
 typedef struct {
     latency_hist_t usb;          // packet arrival -> report fetched by the host
     latency_hist_t rx;           // packet noticed -> applied (SPI + decryption)
-    uint32_t mouse_waits;        // motion arrived while the last report was not fetched yet
+    uint32_t mouse_inputs;       // packets with mouse input
+    uint32_t mouse_waits;        // ... of them arrived while a report was already armed
+    uint32_t mouse_misses;       // reports armed too late for the fetch they were meant for
+    uint32_t mouse_lead_us;      // reports are armed this long before the fetch (0 = right away)
 } pshb_diag_t;
 
 extern pshb_diag_t g_diag;

@@ -86,6 +86,16 @@ function(pshb_add_firmware name)
     pico_add_extra_outputs(${name})
 endfunction()
 
+# Mouse reports: armed shortly before the PlayStation fetches them (ON) or
+# right after the previous fetch (OFF, for comparison),
+# e.g. make firmware FW_CMAKE_ARGS=-DPSHB_MOUSE_LATE_ARM=OFF
+option(PSHB_MOUSE_LATE_ARM "Arm mouse reports shortly before the host fetches them" ON)
+if(PSHB_MOUSE_LATE_ARM)
+    add_compile_definitions(PSHB_MOUSE_LATE_ARM=1)
+else()
+    add_compile_definitions(PSHB_MOUSE_LATE_ARM=0)
+endif()
+
 # UDP receive path: burst reads (ON) or the plain ioLibrary functions (OFF),
 # e.g. make firmware FW_CMAKE_ARGS=-DPSHB_W5500_FAST_RX=OFF
 option(PSHB_W5500_FAST_RX "Receive UDP with a few SPI burst reads" ON)

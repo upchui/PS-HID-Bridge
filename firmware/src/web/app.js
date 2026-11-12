@@ -143,7 +143,11 @@ function renderStatus(st) {
     ? `median · 95 % below ${ms(st.lat_usb_p95_us)}` : "no input yet";
   $("s-lat-n").textContent = st.lat_usb_count ? `${st.lat_usb_count}, slowest ${ms(st.lat_usb_max_us)}` : "–";
   $("s-lat-rx").textContent = st.lat_rx_max_us ? `median ${st.lat_rx_p50_us} µs, max ${st.lat_rx_max_us} µs` : "–";
-  $("s-lat-waits").textContent = st.mouse_waits;
+  $("s-lat-waits").textContent = st.mouse_inputs
+    ? `${st.mouse_waits} of ${st.mouse_inputs} (${(100 * st.mouse_waits / st.mouse_inputs).toFixed(1)} %)` : "–";
+  $("s-lat-timing").textContent = st.mouse_lead_us
+    ? `filled ${st.mouse_lead_us} µs before the fetch · ${st.mouse_misses} fetches missed`
+    : "filled right after the previous fetch";
   for (const [id, n, bad] of [["s-ok", st.rx_ok, false], ["s-auth", st.rx_auth_fail, true],
     ["s-replay", st.rx_replay, true], ["s-filtered", st.rx_filtered, true], ["s-malformed", st.rx_malformed, true]]) {
     $(id).textContent = n;

@@ -197,7 +197,10 @@ static void be_status(void *ctx, web_status_t *out) {
     out->lat_usb_max_us = g_diag.usb.max_us;
     out->lat_rx_p50_us = latency_percentile(&g_diag.rx, 50);
     out->lat_rx_max_us = g_diag.rx.max_us;
+    out->mouse_inputs = g_diag.mouse_inputs;
     out->mouse_waits = g_diag.mouse_waits;
+    out->mouse_misses = g_diag.mouse_misses;
+    out->mouse_lead_us = g_diag.mouse_lead_us;
 }
 
 static bool be_save(void *ctx, const pshb_settings_t *s) {

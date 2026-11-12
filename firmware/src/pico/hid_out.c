@@ -5,6 +5,13 @@
 
 #include "diag.h"
 #include "usb_descriptors.h"
+#include "usb_timing.h"
+
+// Arm mouse reports shortly before the host fetches them (usb_timing.h)
+// instead of right after the previous fetch.
+#ifndef PSHB_MOUSE_LATE_ARM
+#define PSHB_MOUSE_LATE_ARM 1
+#endif
 
 static input_state_t *s_state;
 // Diagnostics, per interface: arrival of the oldest input that is not in a
@@ -15,9 +22,11 @@ static bool s_mouse_boot;
 static uint8_t s_leds;
 static absolute_time_t s_mounted_at;
 static bool s_mounted;
+static usb_timing_t s_mouse_timing;
 
 void hid_out_init(input_state_t *state) {
     s_state = state;
+    usb_timing_init(&s_mouse_timing);
 }
 
 void hid_out_note_input(uint64_t arrival_us) {
@@ -27,6 +36,7 @@ void hid_out_note_input(uint64_t arrival_us) {
     }
     if (input_state_mouse_pending(s_state)) {
         if (!s_pending_since[ITF_MOUSE]) s_pending_since[ITF_MOUSE] = arrival_us;
+        g_diag.mouse_inputs++;
         if (!tud_hid_n_ready(ITF_MOUSE)) g_diag.mouse_waits++;
     }
 }
@@ -45,6 +55,7 @@ void hid_out_service(void) {
         // state goes out once the host is back (no replay of old states).
         input_state_collapse(s_state);
         for (int i = 0; i < ITF_COUNT; i++) s_pending_since[i] = s_armed_since[i] = 0;
+        usb_timing_reset(&s_mouse_timing);
         return;
     }
 
@@ -56,11 +67,14 @@ void hid_out_service(void) {
         }
     }
 
-    if (input_state_mouse_pending(s_state) && tud_hid_n_ready(ITF_MOUSE)) {
+    uint64_t now = time_us_64();
+    if (input_state_mouse_pending(s_state) && tud_hid_n_ready(ITF_MOUSE) &&
+        (!PSHB_MOUSE_LATE_ARM || usb_timing_should_arm(&s_mouse_timing, now))) {
         uint8_t report[PSHB_MOUSE_REPORT_LEN];
         size_t len = input_state_take_mouse_report(s_state, report, s_mouse_boot);
         if (tud_hid_n_report(ITF_MOUSE, 0, report, (uint16_t)len)) {
             armed(ITF_MOUSE, input_state_mouse_pending(s_state));
+            usb_timing_armed(&s_mouse_timing, now);
         }
     }
 }
@@ -81,6 +95,7 @@ uint8_t hid_out_leds(void) {
 // ---------------------------------------------------------------- TinyUSB callbacks
 
 void tud_mount_cb(void) {
+    usb_timing_reset(&s_mouse_timing);
     s_mounted = true;
     s_mounted_at = get_absolute_time();
     s_mouse_boot = false;  // report protocol is the default after configuration
@@ -98,6 +113,12 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
     (void)len;
     if (instance >= ITF_COUNT) return;
     uint64_t now = time_us_64();
+    if (instance == ITF_MOUSE) {
+        if (usb_timing_fetched(&s_mouse_timing, now)) g_diag.mouse_misses++;
+#if PSHB_MOUSE_LATE_ARM
+        g_diag.mouse_lead_us = s_mouse_timing.lead_us;
+#endif
+    }
     if (s_armed_since[instance]) {
         latency_add(&g_diag.usb, (uint32_t)(now - s_armed_since[instance]));
         s_armed_since[instance] = 0;
@@ -111,6 +132,7 @@ void tud_resume_cb(void) {
 void tud_hid_set_protocol_cb(uint8_t instance, uint8_t protocol) {
     if (instance == ITF_MOUSE) {
         s_mouse_boot = (protocol == HID_PROTOCOL_BOOT);
+        usb_timing_reset(&s_mouse_timing);
     }
     input_state_mark_dirty(s_state);
 }

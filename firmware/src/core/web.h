@@ -38,7 +38,10 @@ typedef struct {
     uint32_t lat_usb_p50_us, lat_usb_p95_us;  // packet arrival -> report fetched
     uint32_t lat_usb_max_us;
     uint32_t lat_rx_p50_us, lat_rx_max_us;  // packet noticed -> applied (SPI + decryption)
-    uint32_t mouse_waits;  // motion arrived while the previous report was not fetched yet
+    uint32_t mouse_inputs;   // packets with mouse input
+    uint32_t mouse_waits;    // ... of them arrived while a report was already armed
+    uint32_t mouse_misses;   // reports armed too late for their fetch (one frame later)
+    uint32_t mouse_lead_us;  // reports are armed this long before the fetch (0 = right away)
 } web_status_t;
 
 typedef struct {

@@ -364,7 +364,10 @@ static void h_status(web_app_t *app, web_conn_t *c) {
     jw_int(&w, "lat_usb_max_us", st.lat_usb_max_us);
     jw_int(&w, "lat_rx_p50_us", st.lat_rx_p50_us);
     jw_int(&w, "lat_rx_max_us", st.lat_rx_max_us);
+    jw_int(&w, "mouse_inputs", st.mouse_inputs);
     jw_int(&w, "mouse_waits", st.mouse_waits);
+    jw_int(&w, "mouse_misses", st.mouse_misses);
+    jw_int(&w, "mouse_lead_us", st.mouse_lead_us);
     respond_json(c, 200, &w, NULL);
 }
 
