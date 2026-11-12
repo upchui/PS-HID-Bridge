@@ -18,4 +18,10 @@
 // Largest report is the 8-byte keyboard report.
 #define CFG_TUD_HID_EP_BUFSIZE 8
 
+// Events from the USB interrupt to tud_task(). With 16 (the default) a main
+// loop stalled for ~8 ms (SPI mutex held by core 1) could drop a "transfer
+// complete", which leaves that endpoint busy and the mouse dead until the
+// next bus reset.
+#define CFG_TUD_TASK_QUEUE_SZ 64
+
 #endif

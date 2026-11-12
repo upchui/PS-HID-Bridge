@@ -103,7 +103,9 @@ void tud_mount_cb(void) {
     s_mounted = true;
     s_mounted_at = get_absolute_time();
     s_mouse_boot = false;  // report protocol is the default after configuration
-    input_state_mark_dirty(s_state);
+    // A bus reset does not unmount, so states kept piling up while the host
+    // re-enumerated: send only the current state, no replay of old ones.
+    input_state_collapse(s_state);
 }
 
 void tud_umount_cb(void) {
