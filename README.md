@@ -178,7 +178,7 @@ If the board is not found: use a USB cable with data lines, hold BOOTSEL *while*
 
 ### Factory reset and recovery
 
-- **Factory reset:** in the web interface, or hold the BOOTSEL button for 5 seconds while the board is running. Password, key and network settings are erased.
+- **Factory reset:** in the web interface, or hold the BOOTSEL button for 5 seconds while the board is running, then let go: the board restarts with factory settings. Password, key and network settings are erased.
 - **Reflashing always works:** hold BOOTSEL while plugging in and copy a UF2 file.
 - **Erase everything:** copy `out/ps-hid-bridge-nuke.uf2` via BOOTSEL. It erases the whole flash and returns to the drive; then install partition table and firmware again.
 

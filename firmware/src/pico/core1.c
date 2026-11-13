@@ -35,7 +35,11 @@
 
 typedef enum { C1_NO_LINK, C1_DHCP, C1_DHCP_WAIT, C1_READY } c1_state_t;
 
-static uint8_t s_dhcp_buf[548];  // RIP_MSG_SIZE
+// ioLibrary's DHCP client reads every datagram for port 68 into this buffer
+// in one piece, as large as it arrived (up to the socket's receive buffer),
+// not only the 548 bytes of a DHCP message. Any larger datagram -- also a
+// broadcast answer meant for another device -- would overwrite what follows.
+static uint8_t s_dhcp_buf[W5500_DHCP_RX_KB * 1024];
 static volatile bool s_dhcp_assigned;
 static volatile bool s_dhcp_conflict;
 static bool s_udp_open;
@@ -56,6 +60,13 @@ static void on_dhcp_assign(void) {
     ni.dhcp = NETINFO_DHCP;
     wizchip_setnetinfo(&ni);
     s_dhcp_assigned = true;
+}
+
+// Called by our copy of dhcp.c (cmake/iolibrary.cmake) after it declined a
+// conflicting address, instead of its busy wait for a 1 s tick that only
+// this loop advances: give the DECLINE time to leave.
+void pshb_dhcp_decline_wait(void) {
+    sleep_ms(1000);
 }
 
 static void on_dhcp_conflict(void) {
@@ -288,18 +299,25 @@ static const web_backend_t k_backend = {
 
 // ---------------------------------------------------------------- BOOTSEL
 
+// Held for 5 s: erase the settings, then restart once the button is let go.
+// A restart while it is still held would start the boot ROM's USB drive
+// (BOOTSEL mode) instead of the firmware.
 static void bootsel_service(void) {
     static absolute_time_t next, pressed_since;
-    static bool pressed;
+    static bool pressed, erased;
     if (!time_reached(next)) return;
     next = make_timeout_time_ms(BOOTSEL_POLL_MS);
     bool now = bootsel_pressed();
     if (now && !pressed) pressed_since = get_absolute_time();
     pressed = now;
+    if (erased) {
+        if (!pressed) s_reboot = true;
+        return;
+    }
     if (pressed && absolute_time_diff_us(pressed_since, get_absolute_time()) > FACTORY_RESET_HOLD_MS * 1000) {
-        printf("system: BOOTSEL held, factory reset\n");
+        printf("system: BOOTSEL held, factory reset (restart when released)\n");
         settings_erase(&g_settings_flash);
-        s_reboot = true;
+        erased = true;
     }
 }
 
@@ -328,13 +346,13 @@ void core1_main(void) {
 
         if (s_ota_activate) {
             s_ota_activate = false;  // returns only if the image is not ready
-            sleep_ms(50);            // let the response leave the chip
+            web_server_drain(1000);  // let the response reach the client
             ota_activate();
         }
 
         if (s_reboot) {
             printf("system: reboot\n");
-            sleep_ms(50);  // let the last TCP segment leave the chip
+            web_server_drain(1000);  // let the last answer reach the client
             watchdog_reboot(0, 0, 0);
             for (;;) {
                 tight_loop_contents();

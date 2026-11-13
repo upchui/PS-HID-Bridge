@@ -21,6 +21,9 @@
 #define W5500_PIN_INT  21
 
 #define W5500_SOCK_DHCP 0
+// Receive buffer of the DHCP socket. The DHCP client copies a whole
+// datagram (up to this size) into its message buffer, see core1.c.
+#define W5500_DHCP_RX_KB 2
 #define W5500_SOCK_UDP  1
 #define W5500_SOCK_HTTP0 2
 #define W5500_SOCK_HTTP1 3

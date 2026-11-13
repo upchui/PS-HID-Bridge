@@ -13,4 +13,8 @@ void web_server_service(void);
 // A connection is open: call web_server_service() without pause.
 bool web_server_busy(void);
 
+// Before a reboot: wait (at most timeout_ms) until the connections being
+// closed are closed, so the last answer reaches the browser or the app.
+void web_server_drain(uint32_t timeout_ms);
+
 #endif

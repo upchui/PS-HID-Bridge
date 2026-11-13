@@ -99,7 +99,7 @@ bool w5500_port_init(void) {
     // Socket buffers in KB (16 KB each direction in total):
     // 0 DHCP, 1 input UDP, 2-3 HTTP, 4-7 unused.
     uint8_t tx[8] = {2, 2, 4, 4, 1, 1, 1, 1};
-    uint8_t rx[8] = {2, 4, 4, 4, 1, 1, 0, 0};
+    uint8_t rx[8] = {W5500_DHCP_RX_KB, 4, 4, 4, 1, 1, 0, 0};
     if (wizchip_init(tx, rx) != 0) return false;
 
     make_mac(s_mac);
