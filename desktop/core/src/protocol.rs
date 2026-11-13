@@ -17,6 +17,9 @@ pub const FLAG_RELEASE_ALL: u8 = 0x01;
 pub const STATUS_USB_MOUNTED: u8 = 0x01;
 pub const STATUS_USB_SUSPENDED: u8 = 0x02;
 pub const STATUS_FAILSAFE: u8 = 0x04;
+/// The board has no partition table: firmware updates overwrite the running
+/// firmware and there is no previous version to fall back to.
+pub const STATUS_NO_PARTITION_TABLE: u8 = 0x08;
 pub const STATUS_PLAINTEXT: u8 = 0x80;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -226,6 +226,7 @@ int main(void) {
     s_chip_ok = w5500_port_init();
     // Before the confirmation below: buying may erase the other slot.
     g_running_slot = ota_running_slot();
+    g_bridge.no_partition_table = !ota_has_partition_table();
     // After an update the bootrom runs us "on trial": confirm only once the
     // essentials work, otherwise the next reset returns to the old firmware.
 #if !PSHB_OTA_NO_CONFIRM

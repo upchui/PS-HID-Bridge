@@ -45,6 +45,7 @@ typedef struct {
 
     // maintained by the platform
     uint8_t usb_status;       // PSHB_STATUS_USB_* bits
+    bool no_partition_table;  // reported as PSHB_STATUS_NO_PARTITION_TABLE
 
     // protocol state
     uint64_t last_rx_counter; // last counter that passed authentication

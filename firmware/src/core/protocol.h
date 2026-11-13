@@ -45,6 +45,7 @@ enum {
     PSHB_STATUS_USB_MOUNTED = 0x01,
     PSHB_STATUS_USB_SUSPENDED = 0x02,
     PSHB_STATUS_FAILSAFE = 0x04,  // no valid input recently: everything released
+    PSHB_STATUS_NO_PARTITION_TABLE = 0x08,  // updates overwrite the firmware, no fallback slot
     PSHB_STATUS_PLAINTEXT = 0x80,  // debug build without encryption
 };
 

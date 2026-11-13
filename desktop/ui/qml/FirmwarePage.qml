@@ -105,6 +105,16 @@ AppPage {
         }
 
         Banner {
+            kind: "warn"
+            visible: AppController.boardNoPartitionTable
+            text: "The board has no partition table: an update overwrites the running firmware and there is no previous version to fall back to. Install it once over USB (\"First installation\"); key and settings stay."
+            actions: AppButton {
+                text: "Install via USB"
+                onClicked: usbToggle.checked = true
+            }
+        }
+
+        Banner {
             kind: AppController.updateStatus.indexOf("failed") >= 0 || AppController.updateStatus.indexOf("not") >= 0 ? "warn" : "info"
             visible: AppController.updateStatus !== ""
             text: AppController.updateStatus

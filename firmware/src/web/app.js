@@ -135,8 +135,10 @@ function renderStatus(st) {
   $("s-ip").textContent = st.ip;
   $("s-net").textContent = `${st.net_state} · ${st.ip_mode === "static" ? "static address" : "DHCP"}`;
   $("s-fw").textContent = st.firmware;
-  $("s-uptime").textContent = `up ${fmtUptime(st.uptime_ms)} · slot ${st.partition}`;
-  $("fw-current").textContent = `${st.firmware} · slot ${st.partition}`;
+  const slot = st.partition === "none" ? "no partition table" : `slot ${st.partition}`;
+  $("s-uptime").textContent = `up ${fmtUptime(st.uptime_ms)} · ${slot}`;
+  $("fw-current").textContent = `${st.firmware} · ${slot}`;
+  $("fw-nopt").hidden = st.partition !== "none";
   const ms = (us) => (us / 1000).toFixed(2) + " ms";
   $("s-lat").textContent = st.lat_usb_count ? ms(st.lat_usb_p50_us) : "–";
   $("s-lat-sub").textContent = st.lat_usb_count

@@ -52,6 +52,7 @@ pub mod qobject {
         #[qproperty(i32, packets_per_second)]
         #[qproperty(QString, board_firmware)]
         #[qproperty(QString, board_usb)]
+        #[qproperty(bool, board_no_partition_table)]
         #[qproperty(QString, board_address)]
         #[qproperty(bool, psk_set)]
         #[qproperty(QString, devices_json)]
@@ -200,6 +201,7 @@ pub struct AppControllerRust {
     packets_per_second: i32,
     board_firmware: QString,
     board_usb: QString,
+    board_no_partition_table: bool,
     board_address: QString,
     psk_set: bool,
     devices_json: QString,
@@ -304,6 +306,7 @@ impl Default for AppControllerRust {
             packets_per_second: 0,
             board_firmware: QString::default(),
             board_usb: QString::default(),
+            board_no_partition_table: false,
             board_address: QString::default(),
             psk_set: false,
             devices_json: QString::from("[]"),
@@ -606,6 +609,8 @@ impl qobject::AppController {
             self.as_mut()
                 .set_board_firmware(QString::from(&p.fw_version_string()));
             self.as_mut().set_board_usb(QString::from(usb_text(p)));
+            self.as_mut()
+                .set_board_no_partition_table(p.status & protocol::STATUS_NO_PARTITION_TABLE != 0);
             if let Some((want, _)) = self.rust().board_expected
                 && Version::of_firmware(p.fw_version) == want
             {

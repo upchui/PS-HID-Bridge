@@ -23,7 +23,12 @@ void ota_activate(void);
 // an update, confirm the image. Returns true if an update was confirmed.
 bool ota_confirm_if_trial(void);
 
-// "A", "B" or "-" (no partition table).
+// The flash has a partition table (ps-hid-bridge-pt.uf2 was installed).
+// Without one there are no slots: an update overwrites the running firmware
+// and there is nothing to fall back to.
+bool ota_has_partition_table(void);
+
+// "A", "B", "none" (no partition table) or "?" (not identified).
 const char *ota_running_slot(void);
 
 #endif

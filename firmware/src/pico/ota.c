@@ -54,6 +54,12 @@ bool ota_begin(uint32_t size, char *err, size_t cap) {
                  "No partition table. Install ps-hid-bridge-pt.uf2 once via BOOTSEL.");
         return false;
     }
+    if (!ota_has_partition_table()) {
+        // The UF2 target is then the whole flash: the update overwrites the
+        // running firmware (it runs from RAM, so that works) and there is no
+        // previous slot to fall back to. The web interface and the app warn.
+        printf("ota: no partition table, updating in place without a fallback slot\n");
+    }
     uint32_t first = (part.permissions_and_location & PICOBIN_PARTITION_LOCATION_FIRST_SECTOR_BITS) >>
                      PICOBIN_PARTITION_LOCATION_FIRST_SECTOR_LSB;
     uint32_t last = (part.permissions_and_location & PICOBIN_PARTITION_LOCATION_LAST_SECTOR_BITS) >>
@@ -110,13 +116,25 @@ bool ota_confirm_if_trial(void) {
     return r == 0;
 }
 
+bool ota_has_partition_table(void) {
+    static int s_known = -1;  // computed once: -1 unknown, 0 no, 1 yes
+    if (s_known < 0) {
+        uint32_t buf[4];
+        // 3 words after the flags: partition count, then the unpartitioned space's permissions.
+        bool ok = rom_load_partition_table(s_workarea, sizeof(s_workarea), false) == BOOTROM_OK &&
+                  rom_get_partition_table_info(buf, 4, PT_INFO_PT_INFO) >= 2 && (buf[0] & PT_INFO_PT_INFO) &&
+                  (buf[1] & 0xff) > 0;
+        s_known = ok ? 1 : 0;
+    }
+    return s_known == 1;
+}
+
 const char *ota_running_slot(void) {
-    // With a partition table the boot ROM maps the started partition at
-    // XIP_BASE (QMI address translation, window 0); the first sector of that
-    // window (4 KiB units, like flash sectors) tells which slot is running.
-    // The boot info's partition field did not give 0/1 for these images.
+    if (!ota_has_partition_table()) return "none";
+    // The boot ROM maps the started partition at XIP_BASE (QMI address
+    // translation, window 0); the first sector of that window (4 KiB units,
+    // like flash sectors) tells which slot is running.
     uint32_t base = (qmi_hw->atrans[0] & QMI_ATRANS0_BASE_BITS) >> QMI_ATRANS0_BASE_LSB;
-    if (rom_load_partition_table(s_workarea, sizeof(s_workarea), false) != BOOTROM_OK) return "-";
     for (uint32_t i = 0; i < 2; i++) {  // partitions 0 and 1: Firmware A and B (partitions/pt.json)
         uint32_t buf[3];
         int n = rom_get_partition_table_info(
@@ -126,5 +144,11 @@ const char *ota_running_slot(void) {
                          PICOBIN_PARTITION_LOCATION_FIRST_SECTOR_LSB;
         if (first == base) return i == 0 ? "A" : "B";
     }
-    return "-";  // no partition table: flashed without ps-hid-bridge-pt.uf2
+    // Fallback: the partition the boot ROM says it started.
+    boot_info_t info = {0};
+    if (rom_get_boot_info(&info)) {
+        if (info.partition == 0) return "A";
+        if (info.partition == 1) return "B";
+    }
+    return "?";
 }

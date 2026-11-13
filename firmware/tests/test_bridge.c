@@ -76,6 +76,20 @@ TEST(ping_gets_encrypted_pong) {
     CHECK(h.counter <= PSHB_TX_COUNTER_MASK);
 }
 
+TEST(pong_reports_missing_partition_table) {
+    fixture_t f;
+    setup(&f);
+    uint8_t pkt[PSHB_MAX_PACKET_LEN];
+    pshb_pong_t pong;
+    feed(&f, pkt, make_ping(pkt, KEY, 100, 1, 1), T0);
+    CHECK(decode_pong(&f, &pong));
+    CHECK(!(pong.status & PSHB_STATUS_NO_PARTITION_TABLE));
+    f.b.no_partition_table = true;
+    feed(&f, pkt, make_ping(pkt, KEY, 101, 2, 2), T0 + 1000);
+    CHECK(decode_pong(&f, &pong));
+    CHECK(pong.status & PSHB_STATUS_NO_PARTITION_TABLE);
+}
+
 TEST(input_is_applied) {
     fixture_t f;
     setup(&f);
@@ -270,6 +284,7 @@ TEST(release_all_flag) {
 
 int main(void) {
     RUN(ping_gets_encrypted_pong);
+    RUN(pong_reports_missing_partition_table);
     RUN(input_is_applied);
     RUN(replay_and_old_counter_rejected);
     RUN(forged_packet_does_not_advance_counter);

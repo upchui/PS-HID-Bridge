@@ -88,7 +88,7 @@ PING does not need a session id; the app learns the session from the answer.
 | 12 | 8 | session_id | the board's current session |
 | 20 | 4 | fw_version | `0xMMmmpppp`: major (8 bit), minor (8 bit), patch (16 bit, the number of commits since MAJOR.MINOR changed) |
 | 24 | 4 | uptime_ms | time since boot |
-| 28 | 1 | status | bit 0 USB connected, bit 1 USB suspended, bit 2 failsafe active, bit 7 unencrypted debug firmware |
+| 28 | 1 | status | bit 0 USB connected, bit 1 USB suspended, bit 2 failsafe active, bit 3 no partition table (firmware updates overwrite the running firmware, no fallback slot), bit 7 unencrypted debug firmware |
 | 29 | 4 | rx_ok | valid packets |
 | 33 | 4 | rx_auth_fail | bad tag or no key set |
 | 37 | 4 | rx_replay | counter not greater than the last one, or wrong session |

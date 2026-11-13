@@ -153,7 +153,7 @@ LED: blinks slowly = no USB host, blinks fast = USB present but no IP yet, stead
 
 Web interface → System → upload `ps-hid-bridge.uf2`. The board writes the new firmware into the second slot (A/B), checks checksum and content and starts it "on trial". Only when it has started by itself and reaches the network chip is it accepted permanently. If it does not start properly, the board returns to the previous version after a restart. Every new firmware carries a higher version; the boot ROM always starts the newer one.
 
-This needs the partition table from the first installation (`ps-hid-bridge-pt.uf2`).
+This needs the partition table from the first installation (`ps-hid-bridge-pt.uf2`). A board flashed with only `ps-hid-bridge.uf2` has none: an update then overwrites the running firmware in place (it still works, but there is no previous version to fall back to). The web interface shows "no partition table" instead of the slot and the app warns on "Firmware & updates"; install it later with "Install via USB" → "First installation" (or copy both files via BOOTSEL). Key, password and network settings stay, they live in their own flash area.
 
 The System page shows when a newer firmware is available (your browser asks GitHub; the board itself cannot reach the internet) and links the file.
 

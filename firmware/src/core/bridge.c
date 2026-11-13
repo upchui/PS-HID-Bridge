@@ -57,6 +57,7 @@ static void apply_input(bridge_t *b, const pshb_input_t *in, uint64_t now_us) {
 static uint8_t status_bits(const bridge_t *b) {
     uint8_t s = b->usb_status;
     if (b->failsafe_active) s |= PSHB_STATUS_FAILSAFE;
+    if (b->no_partition_table) s |= PSHB_STATUS_NO_PARTITION_TABLE;
     if (b->allow_plaintext) s |= PSHB_STATUS_PLAINTEXT;
     return s;
 }

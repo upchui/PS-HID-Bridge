@@ -148,6 +148,7 @@
       <form id="f-ota" class="card">
         <h2><svg class="i"><use href="#i-update"/></svg>Firmware <span id="fw-current" class="pill">–</span></h2>
         <p id="fw-update" class="banner" hidden></p>
+        <p id="fw-nopt" class="banner warn" hidden><svg class="i"><use href="#i-warning"/></svg><span>This board has no partition table: an update overwrites the running firmware and there is no previous version to fall back to. Install it once over USB: app → Firmware &amp; updates → Install via USB → First installation (key and settings stay).</span></p>
         <label>UF2 file (<code>ps-hid-bridge.uf2</code>) <input type="file" name="file" accept=".uf2" required></label>
         <progress id="ota-progress" max="100" value="0" hidden></progress>
         <button type="submit">Upload and install</button>
