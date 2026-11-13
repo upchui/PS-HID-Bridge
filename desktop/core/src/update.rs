@@ -30,6 +30,7 @@ pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 
 const OTA_KEY_LABEL: &[u8] = b"pshb-ota-key-v1";
 const OTA_MAC_LABEL: &[u8] = b"pshb-ota-v1";
+const OTA_MAC2_LABEL: &[u8] = b"pshb-ota-v2";
 
 /// MAJOR.MINOR.PATCH (the patch counts the commits since MAJOR.MINOR changed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -255,10 +256,23 @@ pub fn ota_key(psk: &[u8; 32]) -> [u8; 32] {
     blake2b_mac(psk, &[OTA_KEY_LABEL])
 }
 
-/// X-PSHB-OTA-Auth for uploading `image` after the board's challenge `nonce`.
+/// X-PSHB-OTA-Auth: the old signature over the whole file, the only one
+/// firmware before 1.0.9 checks (only after it has written the file).
 pub fn ota_mac(psk: &[u8; 32], nonce: &[u8; 16], image: &[u8]) -> [u8; 32] {
     let len = (image.len() as u32).to_le_bytes();
     blake2b_mac(&ota_key(psk), &[OTA_MAC_LABEL, nonce, &len, image])
+}
+
+/// X-PSHB-OTA-Hash: BLAKE2b-256 of the file.
+pub fn ota_hash(image: &[u8]) -> [u8; 32] {
+    <blake2::Blake2b<U32> as Digest>::digest(image).into()
+}
+
+/// X-PSHB-OTA-Auth2: signature over the file's hash, which the board checks
+/// before it writes anything (protocol/SPEC.md).
+pub fn ota_mac2(psk: &[u8; 32], nonce: &[u8; 16], image: &[u8]) -> [u8; 32] {
+    let len = (image.len() as u32).to_le_bytes();
+    blake2b_mac(&ota_key(psk), &[OTA_MAC2_LABEL, nonce, &len, &ota_hash(image)])
 }
 
 /// CRC-32 (IEEE), as the board checks it (X-PSHB-CRC32).
@@ -317,6 +331,9 @@ pub fn board_ota(host: &str, http_port: u16, psk: &[u8; 32], image: &[u8]) -> Re
         .post(format!("{base}/api/ota"))
         .header("Content-Type", "application/octet-stream")
         .header("X-PSHB-CRC32", format!("{:x}", crc32(image)))
+        .header("X-PSHB-OTA-Hash", hex(&ota_hash(image)))
+        .header("X-PSHB-OTA-Auth2", hex(&ota_mac2(psk, &nonce, image)))
+        // For boards with firmware before 1.0.9; newer ones ignore it.
         .header("X-PSHB-OTA-Auth", hex(&ota_mac(psk, &nonce, image)))
         .send(image)
         .map_err(http_error)?;
@@ -389,6 +406,15 @@ mod tests {
         assert_eq!(
             hex(&ota_mac(&psk, &[0; 16], b"abc")),
             "2bcfe7c870d03d19006a4ed146195bd15a39d7ddb6cd25eaaf1e8ae9fa4906a1"
+        );
+        // ota_hash(b"abc"), ota_mac2(bytes(range(32)), bytes(16), b"abc")
+        assert_eq!(
+            hex(&ota_hash(b"abc")),
+            "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319"
+        );
+        assert_eq!(
+            hex(&ota_mac2(&psk, &[0; 16], b"abc")),
+            "8d5efd6a6ed49b245ad596bf92a29135162ba317b6e9d0ea470f7b46a397a7cd"
         );
     }
 

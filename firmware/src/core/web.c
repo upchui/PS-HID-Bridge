@@ -14,7 +14,7 @@
 
 // Signed firmware updates (protocol/SPEC.md, "Firmware update with the key").
 #define OTA_KEY_LABEL "pshb-ota-key-v1"
-#define OTA_MAC_LABEL "pshb-ota-v1"
+#define OTA_MAC_LABEL "pshb-ota-v2"
 #define OTA_CHALLENGE_US 60000000ull
 
 // ---------------------------------------------------------------- helpers
@@ -233,17 +233,30 @@ static void h_state(web_app_t *app, web_conn_t *c, bool logged_in) {
     respond_json(c, 200, &w, NULL);
 }
 
+// After failed password checks (login or password change): answer 429 and
+// return true while the lockout lasts.
+static bool locked_out(web_app_t *app, web_conn_t *c, uint64_t t) {
+    if (t >= app->lockout_until_us) return false;
+    char msg[80];
+    snprintf(msg, sizeof(msg), "Too many failed attempts. Please wait %u s.",
+             (unsigned)((app->lockout_until_us - t) / 1000000 + 1));
+    respond_error(c, 429, msg);
+    return true;
+}
+
+static void password_failed(web_app_t *app, uint64_t t) {
+    app->failed_logins++;
+    if (app->failed_logins >= 3) {
+        uint32_t shift = app->failed_logins - 3 > 6 ? 6 : app->failed_logins - 3;
+        app->lockout_until_us = t + (1000000ull << shift);  // 1 s ... 64 s
+    }
+}
+
 static void h_login(web_app_t *app, web_conn_t *c) {
     const char *b = c->req.body;
     size_t bl = c->req.body_received;
     uint64_t t = now(app);
-    if (t < app->lockout_until_us) {
-        char msg[80];
-        snprintf(msg, sizeof(msg), "Too many failed attempts. Please wait %u s.",
-                 (unsigned)((app->lockout_until_us - t) / 1000000 + 1));
-        respond_error(c, 429, msg);
-        return;
-    }
+    if (locked_out(app, c, t)) return;
     char pw[PSHB_PASSWORD_MAX_LEN + 1];
     if (!jr_str(b, bl, "password", pw, sizeof(pw))) {
         respond_error(c, 400, "Password missing");
@@ -252,11 +265,7 @@ static void h_login(web_app_t *app, web_conn_t *c) {
     bool ok = password_verify(app->settings, pw);
     crypto_wipe(pw, sizeof(pw));
     if (!ok) {
-        app->failed_logins++;
-        if (app->failed_logins >= 3) {
-            uint32_t shift = app->failed_logins - 3 > 6 ? 6 : app->failed_logins - 3;
-            app->lockout_until_us = t + (1000000ull << shift);  // 1 s ... 64 s
-        }
+        password_failed(app, t);
         respond_error(c, 401, "Wrong password");
         return;
     }
@@ -281,9 +290,13 @@ static void h_logout(web_app_t *app, web_conn_t *c, int session) {
     respond_json(c, 200, &w, "Set-Cookie: " COOKIE_NAME "=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict\r\n");
 }
 
-static void h_password(web_app_t *app, web_conn_t *c) {
+// Change the password. Every other session ends: whoever logged in with the
+// old (e.g. the factory) password must not keep access.
+static void h_password(web_app_t *app, web_conn_t *c, int session) {
     const char *b = c->req.body;
     size_t bl = c->req.body_received;
+    uint64_t t = now(app);
+    if (locked_out(app, c, t)) return;
     char old_pw[PSHB_PASSWORD_MAX_LEN + 1], new_pw[PSHB_PASSWORD_MAX_LEN + 2];
     if (!jr_str(b, bl, "old", old_pw, sizeof(old_pw)) || !jr_str(b, bl, "new", new_pw, sizeof(new_pw))) {
         respond_error(c, 400, "Enter the current and the new password");
@@ -293,6 +306,7 @@ static void h_password(web_app_t *app, web_conn_t *c) {
     bool old_ok = password_verify(app->settings, old_pw);
     crypto_wipe(old_pw, sizeof(old_pw));
     if (!old_ok) {
+        password_failed(app, t);
         respond_error(c, 403, "Current password is wrong");
     } else if (n < PSHB_PASSWORD_MIN_LEN || n > PSHB_PASSWORD_MAX_LEN) {
         respond_error(c, 400, "The new password must be 8 to 64 characters long");
@@ -303,7 +317,13 @@ static void h_password(web_app_t *app, web_conn_t *c) {
         app->be->random(app->be->ctx, salt, sizeof(salt));
         pshb_settings_t next = *app->settings;
         password_set(&next, new_pw, salt);
-        if (save_apply(app, c, &next)) respond_ok(c);
+        if (save_apply(app, c, &next)) {
+            app->failed_logins = 0;
+            for (int i = 0; i < WEB_SESSIONS; i++) {
+                if (i != session) app->sessions[i].used = false;
+            }
+            respond_ok(c);
+        }
         crypto_wipe(&next, sizeof(next));
     }
     crypto_wipe(new_pw, sizeof(new_pw));
@@ -551,7 +571,7 @@ static void handle(web_app_t *app, web_conn_t *c) {
         return;
     }
     if (strcmp(p, "/api/password") == 0 && r->method == HTTP_POST) {
-        h_password(app, c);
+        h_password(app, c, session);
         return;
     }
     if (!app->settings->pw_set) {
@@ -628,11 +648,21 @@ static void ota_body(void *ctx, const uint8_t *data, size_t len) {
     if (!b->conn->ota_failed && !b->app->be->ota_write(b->app->be->ctx, data, len)) b->conn->ota_failed = true;
 }
 
-// Signed upload: the key must be set and the challenge fresh (it is used up
-// here, so a recorded upload cannot be sent again). Starts the MAC.
+// Signed upload: the key must be set, the challenge fresh (it is used up
+// here, so a recorded upload cannot be sent again) and the signature right,
+// all before a single byte reaches the flash. The signature covers the hash
+// of the body; the body itself is hashed while it streams in and compared
+// at the end (ota_done).
 static bool ota_signed_start(web_app_t *app, web_conn_t *c) {
+    const http_req_t *r = &c->req;
     if (!app->settings->psk_set) {
         respond_error(c, 403, "No key set on the board");
+        return false;
+    }
+    if (!r->has_ota_auth2 || !r->has_ota_hash) {
+        // The old signature (X-PSHB-OTA-Auth alone) is checked only after
+        // the whole image: by then it would be in the flash already.
+        respond_error(c, 403, "Please update the app: this board needs a newer signature for firmware updates");
         return false;
     }
     bool fresh = app->ota_nonce_until_us != 0 && now(app) < app->ota_nonce_until_us;
@@ -641,16 +671,24 @@ static bool ota_signed_start(web_app_t *app, web_conn_t *c) {
         respond_error(c, 403, "Challenge missing or expired (GET /api/ota/challenge first)");
         return false;
     }
-    uint8_t key[32];
+    uint8_t key[32], mac[32];
     ota_key(app->settings->psk, key);
-    crypto_blake2b_keyed_init(&app->ota_hash, 32, key, sizeof(key));
+    crypto_blake2b_ctx h;
+    crypto_blake2b_keyed_init(&h, 32, key, sizeof(key));
     crypto_wipe(key, sizeof(key));
-    uint32_t n = c->req.content_length;
+    uint32_t n = r->content_length;
     const uint8_t len[4] = {(uint8_t)n, (uint8_t)(n >> 8), (uint8_t)(n >> 16), (uint8_t)(n >> 24)};
-    crypto_blake2b_update(&app->ota_hash, (const uint8_t *)OTA_MAC_LABEL, strlen(OTA_MAC_LABEL));
-    crypto_blake2b_update(&app->ota_hash, app->ota_nonce, sizeof(app->ota_nonce));
-    crypto_blake2b_update(&app->ota_hash, len, sizeof(len));
-    memcpy(app->ota_mac, c->req.ota_auth, sizeof(app->ota_mac));
+    crypto_blake2b_update(&h, (const uint8_t *)OTA_MAC_LABEL, strlen(OTA_MAC_LABEL));
+    crypto_blake2b_update(&h, app->ota_nonce, sizeof(app->ota_nonce));
+    crypto_blake2b_update(&h, len, sizeof(len));
+    crypto_blake2b_update(&h, r->ota_hash, sizeof(r->ota_hash));
+    crypto_blake2b_final(&h, mac);
+    if (crypto_verify32(mac, r->ota_auth2) != 0) {
+        respond_error(c, 403, "Signature does not match (wrong key?)");
+        return false;
+    }
+    memcpy(app->ota_signed_hash, r->ota_hash, sizeof(app->ota_signed_hash));
+    crypto_blake2b_init(&app->ota_hash, 32);
     return true;
 }
 
@@ -659,7 +697,8 @@ static bool ota_signed_start(web_app_t *app, web_conn_t *c) {
 // Either logged in (web interface) or signed with the key (app, CLI).
 static bool ota_start(web_app_t *app, web_conn_t *c) {
     http_req_t *r = &c->req;
-    if (!r->has_ota_auth) {
+    bool signed_upload = r->has_ota_auth || r->has_ota_auth2 || r->has_ota_hash;
+    if (!signed_upload) {
         if (!r->csrf_header) {
             respond_error(c, 403, "Request rejected (X-PSHB header missing)");
             return false;
@@ -681,7 +720,7 @@ static bool ota_start(web_app_t *app, web_conn_t *c) {
         respond_error(c, 409, "Another firmware update is in progress");
         return false;
     }
-    if (r->has_ota_auth && !ota_signed_start(app, c)) return false;
+    if (signed_upload && !ota_signed_start(app, c)) return false;
     char err[96] = "Update not possible";
     if (!app->be->ota_begin || !app->be->ota_begin(app->be->ctx, r->content_length, err, sizeof(err))) {
         respond_error(c, 400, err);
@@ -689,18 +728,18 @@ static bool ota_start(web_app_t *app, web_conn_t *c) {
     }
     c->ota = true;
     app->ota_owner = c;  // until this connection is closed
-    app->ota_signed = r->has_ota_auth;
+    app->ota_signed = signed_upload;
     return true;
 }
 
 static void ota_done(web_app_t *app, web_conn_t *c) {
     if (app->ota_signed) {
-        uint8_t mac[32];
-        crypto_blake2b_final(&app->ota_hash, mac);
+        uint8_t hash[32];
+        crypto_blake2b_final(&app->ota_hash, hash);
         app->ota_signed = false;
-        if (crypto_verify32(mac, app->ota_mac) != 0) {
+        if (crypto_verify32(hash, app->ota_signed_hash) != 0) {
             app->be->ota_abort(app->be->ctx);
-            respond_error(c, 403, "Signature does not match (wrong key?)");
+            respond_error(c, 403, "The file does not match its signature");
             return;
         }
     }

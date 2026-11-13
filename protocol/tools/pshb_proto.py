@@ -186,6 +186,7 @@ def open_packet(key: bytes, direction: int, packet: bytes) -> tuple[int, int, by
 
 OTA_KEY_LABEL = b"pshb-ota-key-v1"
 OTA_MAC_LABEL = b"pshb-ota-v1"
+OTA_MAC2_LABEL = b"pshb-ota-v2"
 
 
 def ota_key(psk: bytes) -> bytes:
@@ -195,9 +196,23 @@ def ota_key(psk: bytes) -> bytes:
 
 
 def ota_mac(psk: bytes, nonce: bytes, image: bytes) -> bytes:
-    """X-PSHB-OTA-Auth for uploading `image` after the board's challenge `nonce`."""
+    """X-PSHB-OTA-Auth: old signature over the whole file (boards before 1.0.9 check only this)."""
     import hashlib
     h = hashlib.blake2b(key=ota_key(psk), digest_size=32)
     h.update(OTA_MAC_LABEL + nonce + struct.pack("<I", len(image)))
     h.update(image)
+    return h.digest()
+
+
+def ota_hash(image: bytes) -> bytes:
+    """X-PSHB-OTA-Hash: BLAKE2b-256 of the file."""
+    import hashlib
+    return hashlib.blake2b(image, digest_size=32).digest()
+
+
+def ota_mac2(psk: bytes, nonce: bytes, image: bytes) -> bytes:
+    """X-PSHB-OTA-Auth2: signature over the file's hash, checked before the board writes anything."""
+    import hashlib
+    h = hashlib.blake2b(key=ota_key(psk), digest_size=32)
+    h.update(OTA_MAC2_LABEL + nonce + struct.pack("<I", len(image)) + ota_hash(image))
     return h.digest()

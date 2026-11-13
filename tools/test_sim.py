@@ -557,6 +557,23 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 429)
         self.assertIn("wait", r["error"])
 
+    def test_password_change_counts_towards_the_lockout(self):
+        self.assertEqual(self.web.login("ps-hid-bridge")[0], 200)
+        for _ in range(3):
+            self.assertEqual(self.web.req("POST", "/api/password", {"old": "x", "new": NEW_PW})[0], 403)
+        status, r, _ = self.web.req("POST", "/api/password", {"old": "ps-hid-bridge", "new": NEW_PW})
+        self.assertEqual(status, 429)
+        self.assertIn("wait", r["error"])
+
+    def test_password_change_ends_other_sessions(self):
+        # Someone logged in with the factory password must not keep access afterwards.
+        other = Web(self.sim.http_port)
+        self.assertEqual(other.login("ps-hid-bridge")[0], 200)
+        self.setup_password()
+        self.assertEqual(self.web.req("GET", "/api/status")[0], 200)
+        self.assertEqual(other.req("GET", "/api/status")[0], 401)
+        self.assertEqual(other.req("POST", "/api/psk/generate", {})[0], 401)
+
     def test_generated_psk_is_used_by_the_input_path(self):
         self.setup_password()
         status, r, _ = self.web.req("POST", "/api/psk/generate", {})
@@ -667,8 +684,11 @@ class WebTests(unittest.TestCase):
         status, r = self.web.upload("/api/ota", uf2, zlib.crc32(uf2))
         self.assertEqual((status, r), (200, {"ok": True, "reboot": True}))
 
-    def signed_upload(self, image: bytes, key: bytes, nonce: bytes | None = None):
-        """POST /api/ota signed with `key` (no login); nonce from a fresh challenge unless given."""
+    def signed_upload(self, image: bytes, key: bytes, nonce: bytes | None = None, *, v2: bool = True,
+                      signed_image: bytes | None = None):
+        """POST /api/ota signed with `key` (no login) as the app does it: the signature over the
+        file's hash (v2) and the old one over the file (for boards before 1.0.9). The nonce comes
+        from a fresh challenge unless given; `signed_image` signs another file than the one sent."""
         import urllib.error
         import urllib.request
         import zlib
@@ -676,9 +696,13 @@ class WebTests(unittest.TestCase):
             status, r, _ = Web(self.sim.http_port).req("GET", "/api/ota/challenge")
             self.assertEqual(status, 200)
             nonce = bytes.fromhex(r["nonce"])
+        signed = image if signed_image is None else signed_image
         req = urllib.request.Request(f"http://127.0.0.1:{self.sim.http_port}/api/ota", data=image, method="POST")
         req.add_header("X-PSHB-CRC32", f"{zlib.crc32(image):x}")
-        req.add_header("X-PSHB-OTA-Auth", proto.ota_mac(key, nonce, image).hex())
+        if v2:
+            req.add_header("X-PSHB-OTA-Hash", proto.ota_hash(signed).hex())
+            req.add_header("X-PSHB-OTA-Auth2", proto.ota_mac2(key, nonce, signed).hex())
+        req.add_header("X-PSHB-OTA-Auth", proto.ota_mac(key, nonce, signed).hex())
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return resp.status, json.loads(resp.read() or b"{}")
@@ -699,14 +723,33 @@ class WebTests(unittest.TestCase):
         self.assertTrue(self.sim.wait_line("OTA OK 50", timeout=2))
         self.assertTrue(self.sim.wait_line("REBOOT", timeout=2))
 
-    def test_signed_upload_is_checked(self):
+    def test_signed_upload_is_checked_before_writing(self):
         key = self.setup_key()
-        uf2 = make_uf2(20)
-        # Wrong key: rejected after the data, nothing activated.
+        uf2 = make_uf2(4)
+        # Wrong key: refused before a single byte reaches the flash.
         status, r = self.signed_upload(uf2, bytes(32))
         self.assertEqual(status, 403)
         self.assertIn("Signature", r["error"])
-        self.assertFalse(self.sim.wait_line("OTA OK 20", timeout=0.2))
+        # Only the old signature (an app before 1.0.9), checked after the data: refused even with
+        # the right key, otherwise anyone could write files into the flash.
+        status, r = self.signed_upload(uf2, key, v2=False)
+        self.assertEqual(status, 403)
+        self.assertIn("update the app", r["error"])
+        self.assertFalse(self.sim.wait_line(f"OTA BEGIN {len(uf2)}", timeout=0.3))
+
+    def test_signed_upload_must_match_the_signed_hash(self):
+        key = self.setup_key()
+        uf2 = make_uf2(20)
+        other = uf2[:1000] + bytes([uf2[1000] ^ 1]) + uf2[1001:]  # one bit changed
+        status, r = self.signed_upload(uf2, key, signed_image=other)
+        self.assertEqual(status, 403)
+        self.assertIn("does not match", r["error"])
+        self.assertTrue(self.sim.wait_line("OTA ABORT", timeout=2))
+        self.assertFalse(self.sim.wait_line("REBOOT", timeout=0.3))
+
+    def test_signed_upload_is_checked(self):
+        key = self.setup_key()
+        uf2 = make_uf2(20)
         # A challenge works only once: replaying an old upload fails.
         status, r = Web(self.sim.http_port).req("GET", "/api/ota/challenge")[:2]
         nonce = bytes.fromhex(r["nonce"])

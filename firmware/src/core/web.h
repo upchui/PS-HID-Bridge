@@ -78,11 +78,12 @@ typedef struct {
     const void *ota_owner;
     // Firmware upload signed with the key (see protocol/SPEC.md): the last
     // challenge (good for one upload until ota_nonce_until_us, 0 = none),
-    // whether the running upload is signed, its MAC and the hash so far.
+    // whether the running upload is signed, the body hash its (already
+    // checked) signature covers, and the hash of the body so far.
     uint8_t ota_nonce[16];
     uint64_t ota_nonce_until_us;
     bool ota_signed;
-    uint8_t ota_mac[32];
+    uint8_t ota_signed_hash[32];
     crypto_blake2b_ctx ota_hash;
 } web_app_t;
 

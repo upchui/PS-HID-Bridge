@@ -133,10 +133,14 @@ Besides the web interface (login), the app and `pshb-cli` can install firmware o
 
 - `K_ota = BLAKE2b-256(key = PSK, message = "pshb-ota-key-v1")`: its own key, so the packet key is used for nothing else.
 - `GET /api/ota/challenge` (no login) returns `{"nonce": "<32 hex digits>"}`: 16 random bytes, valid for 60 seconds and for one upload. A new challenge replaces the previous one. Without a key on the board the answer is 403.
-- `POST /api/ota` with the UF2 file as body and the headers `X-PSHB-CRC32: <hex>` and `X-PSHB-OTA-Auth: <64 hex digits>`, where the MAC is `BLAKE2b-256(key = K_ota, message = "pshb-ota-v1" || nonce || length of the body (u32 LE) || body)`.
-- The board uses up the challenge when the upload starts, computes the MAC while the data is written to the inactive slot, and compares it (in constant time) before anything is activated. A wrong MAC gives 403 "Signature does not match"; then the usual checks follow (CRC, UF2 contents), and the board restarts into the new firmware as with an upload from the web interface.
+- `POST /api/ota` with the UF2 file as body and these headers (each MAC/hash as 64 hex digits):
+  - `X-PSHB-CRC32: <hex>`
+  - `X-PSHB-OTA-Hash`: `H = BLAKE2b-256(body)` (no key)
+  - `X-PSHB-OTA-Auth2`: `BLAKE2b-256(key = K_ota, message = "pshb-ota-v2" || nonce || length of the body (u32 LE) || H)`
+  - `X-PSHB-OTA-Auth`: `BLAKE2b-256(key = K_ota, message = "pshb-ota-v1" || nonce || length of the body (u32 LE) || body)`. This is the old signature; firmware before 1.0.9 checks only this one, newer firmware ignores it. Clients send it as long as such boards may be around.
+- The board uses up the challenge and checks `X-PSHB-OTA-Auth2` (in constant time) **before anything is written to the flash**. A wrong signature gives 403 "Signature does not match"; a request with only `X-PSHB-OTA-Auth` gives 403 "Please update the app". While the data is written to the inactive slot, the board hashes it and compares the result with `X-PSHB-OTA-Hash` before anything is activated (403 "The file does not match its signature"). Then the usual checks follow (CRC, UF2 contents), and the board restarts into the new firmware as with an upload from the web interface.
 
-The MAC covers the whole file, not only the CRC (a CRC can be forged), and the challenge makes a recorded upload worthless (no downgrade by replaying it). Whoever knows the key can install firmware, which is why the key never leaves the PC and the board's web interface.
+The signature covers the whole file through its hash, not only the CRC (a CRC can be forged), and the challenge makes a recorded upload worthless (no downgrade by replaying it). Checking it before writing matters: firmware before 1.0.9 checked the old signature only after the whole file, so anyone in the network could write a file into the flash (refused afterwards, but written). Whoever knows the key can install firmware, which is why the key never leaves the PC and the board's web interface.
 
 ## Test vectors
 

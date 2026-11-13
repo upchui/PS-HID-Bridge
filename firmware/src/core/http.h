@@ -31,8 +31,13 @@ typedef struct {
     char session[40];         // value of the pshb_session cookie
     bool has_crc;
     uint32_t crc;             // X-PSHB-CRC32 (hex)
+    // Signed firmware upload (protocol/SPEC.md), each 64 hex digits:
     bool has_ota_auth;
-    uint8_t ota_auth[32];     // X-PSHB-OTA-Auth (64 hex): MAC of a signed firmware upload
+    uint8_t ota_auth[32];     // X-PSHB-OTA-Auth: old MAC over the whole body (no longer accepted)
+    bool has_ota_auth2;
+    uint8_t ota_auth2[32];    // X-PSHB-OTA-Auth2: MAC over the body hash, checked before writing
+    bool has_ota_hash;
+    uint8_t ota_hash[32];     // X-PSHB-OTA-Hash: BLAKE2b-256 of the body
 
     // Body: buffered (<= HTTP_MAX_BODY) or streamed through a callback.
     // After the headers the parser pauses until the caller sets
