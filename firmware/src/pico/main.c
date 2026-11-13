@@ -224,12 +224,13 @@ int main(void) {
     tud_init(0);
 
     s_chip_ok = w5500_port_init();
+    // Before the confirmation below: buying may erase the other slot.
+    g_running_slot = ota_running_slot();
     // After an update the bootrom runs us "on trial": confirm only once the
     // essentials work, otherwise the next reset returns to the old firmware.
 #if !PSHB_OTA_NO_CONFIRM
     if (s_chip_ok) ota_confirm_if_trial();
 #endif
-    g_running_slot = ota_running_slot();
     if (s_chip_ok) {
         multicore_launch_core1_with_stack(core1_main, s_core1_stack, sizeof(s_core1_stack));
     } else {

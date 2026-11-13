@@ -7,6 +7,8 @@
 #include "boot/picoboot_constants.h"
 #include "hardware/flash.h"
 #include "hardware/regs/addressmap.h"
+#include "hardware/regs/qmi.h"
+#include "hardware/structs/qmi.h"
 #include "hardware/sync.h"
 #include "pico/bootrom.h"
 
@@ -109,11 +111,20 @@ bool ota_confirm_if_trial(void) {
 }
 
 const char *ota_running_slot(void) {
-    boot_info_t info = {0};
-    if (rom_get_boot_info(&info) < 0) return "-";
-    switch (info.partition) {
-    case 0: return "A";
-    case 1: return "B";
-    default: return "-";
+    // With a partition table the boot ROM maps the started partition at
+    // XIP_BASE (QMI address translation, window 0); the first sector of that
+    // window (4 KiB units, like flash sectors) tells which slot is running.
+    // The boot info's partition field did not give 0/1 for these images.
+    uint32_t base = (qmi_hw->atrans[0] & QMI_ATRANS0_BASE_BITS) >> QMI_ATRANS0_BASE_LSB;
+    if (rom_load_partition_table(s_workarea, sizeof(s_workarea), false) != BOOTROM_OK) return "-";
+    for (uint32_t i = 0; i < 2; i++) {  // partitions 0 and 1: Firmware A and B (partitions/pt.json)
+        uint32_t buf[3];
+        int n = rom_get_partition_table_info(
+            buf, 3, PT_INFO_PARTITION_LOCATION_AND_FLAGS | PT_INFO_SINGLE_PARTITION | (i << 24));
+        if (n < 2 || !(buf[0] & PT_INFO_PARTITION_LOCATION_AND_FLAGS)) continue;
+        uint32_t first = (buf[1] & PICOBIN_PARTITION_LOCATION_FIRST_SECTOR_BITS) >>
+                         PICOBIN_PARTITION_LOCATION_FIRST_SECTOR_LSB;
+        if (first == base) return i == 0 ? "A" : "B";
     }
+    return "-";  // no partition table: flashed without ps-hid-bridge-pt.uf2
 }
