@@ -109,6 +109,13 @@ pub fn files_for(
     own: Option<(String, Vec<u8>)>,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Vec<(String, Vec<u8>)>, String> {
+    if image == Image::Erase && own.is_some() {
+        // The own file would replace the erase image: the board would get
+        // that file while the user believes the flash was erased.
+        return Err(
+            "Erasing uses the erase image of the release; a file of your own is not possible here.".into(),
+        );
+    }
     let names = image.files();
     let from_release = if own.is_some() {
         &names[..names.len() - 1]
@@ -346,6 +353,13 @@ pub fn flash(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn erase_never_writes_an_own_file() {
+        let own = Some(("firmware.uf2".to_string(), block(0xE48B_FF59)));
+        let err = files_for(Image::Erase, own, &mut |_| panic!("must not download")).unwrap_err();
+        assert!(err.contains("erase image"), "{err}");
+    }
 
     fn block(family: u32) -> Vec<u8> {
         let mut b = vec![0u8; UF2_BLOCK];

@@ -139,11 +139,26 @@ AppPage {
                     }
                 }
                 AppSwitch {
+                    id: bridgeSwitch
                     enabled: AppController.connected
                     checked: AppController.active || AppController.pending
-                    onToggled: AppController.setOn(checked)
+                    onToggled: {
+                        AppController.setOn(checked);
+                        resync.restart();
+                    }
                     big: true
                     Accessible.name: "Bridge"
+
+                    // A click flips the switch at once, but the bridge may
+                    // stay off (e.g. a device that cannot be grabbed), and
+                    // then no property changes to update it: show the real
+                    // state again shortly afterwards.
+                    Timer {
+                        id: resync
+                        interval: 400
+                        onTriggered: bridgeSwitch.checked = Qt.binding(
+                            () => AppController.active || AppController.pending)
+                    }
                 }
             }
 

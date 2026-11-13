@@ -104,6 +104,14 @@ ColumnLayout {
                         Controls.ToolTip.visible: hovered
                         Controls.ToolTip.text: "Remove"
                         onClicked: {
+                            // Keep a running recording on its row: stop it if
+                            // that row goes, follow it if an earlier one goes.
+                            if (editor.recordingIndex === row.index) {
+                                AppController.recordTrigger(false);
+                                editor.recordingIndex = -1;
+                            } else if (editor.recordingIndex > row.index) {
+                                editor.recordingIndex -= 1;
+                            }
                             let copy = editor.items.slice();
                             copy.splice(row.index, 1);
                             editor.items = copy;

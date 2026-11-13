@@ -127,7 +127,7 @@ ColumnLayout {
                     text: "Erase"
                     onClicked: {
                         root.confirmErase = false;
-                        AppController.usbFlash("erase", root.file);
+                        AppController.usbFlash("erase", ""); // never an own file
                     }
                 },
                 AppButton {

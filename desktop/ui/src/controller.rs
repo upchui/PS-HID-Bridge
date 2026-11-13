@@ -468,6 +468,7 @@ impl qobject::AppController {
             None
         };
         if let Some(text) = problem {
+            self.as_mut().apply_status(ServiceStatus::default()); // no service: not on, not connected
             self.as_mut().set_status_text(QString::from(text));
             stop_service(slot);
             return;
@@ -536,6 +537,9 @@ impl qobject::AppController {
         if !self.rust().slot.is_current(generation) {
             return;
         }
+        // The old service is gone (dropped before the start): switch and
+        // tray must not keep showing it as on and connected.
+        self.as_mut().apply_status(ServiceStatus::default());
         self.as_mut().set_status_text(QString::from("Not connected"));
         self.as_mut()
             .set_last_error(QString::from(&format!("{error} (trying again)")));

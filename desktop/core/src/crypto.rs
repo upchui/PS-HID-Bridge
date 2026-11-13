@@ -89,6 +89,11 @@ pub fn check(packet: &[u8]) -> Result<Header, OpenError> {
 /// Parse a pre-shared key given as 64 hex digits (whitespace is ignored).
 pub fn parse_key_hex(text: &str) -> Result<[u8; KEY_LEN], String> {
     let digits: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    // Before any slicing by byte position: a multibyte character would
+    // otherwise make a slice end inside it (panic).
+    if !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("The key contains characters that are not hex digits.".to_string());
+    }
     if digits.len() != 2 * KEY_LEN {
         return Err(format!(
             "The key must consist of {} hex digits (found: {}).",
@@ -116,6 +121,12 @@ mod tests {
         assert!(parse_key_hex(&"zz".repeat(32)).is_err());
         let spaced = "00112233 44556677\n".repeat(4);
         assert!(parse_key_hex(&spaced).is_ok());
+        // 64 bytes with a two-byte character at an odd position: an error, no panic.
+        let umlaut = format!("{}ä{}", "a".repeat(61), "b");
+        assert_eq!(umlaut.len(), 64);
+        assert!(parse_key_hex(&umlaut).is_err());
+        // from_str_radix would take "+f" as 15.
+        assert!(parse_key_hex(&format!("+f{}", "00".repeat(31))).is_err());
     }
 
     #[test]
