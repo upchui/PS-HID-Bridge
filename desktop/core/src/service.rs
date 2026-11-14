@@ -360,8 +360,9 @@ impl Runner {
         let selected = input::select(&list.devices, &self.specs);
         let wanted: Vec<DeviceInfo> = selected.iter().filter(|d| d.accessible).cloned().collect();
         self.blocked = selected.len() - wanted.len();
+        let watch = input::watch_keyboards(&list.devices, &selected);
         let mut msgs = Vec::new();
-        self.inputs.update(&wanted, &mut msgs);
+        self.inputs.update(&wanted, &watch, &mut msgs);
         self.handle_msgs(&mut msgs);
     }
 
@@ -437,12 +438,13 @@ impl Runner {
     fn handle_input(&mut self, dev: usize, event: Event, ts_us: Option<u64>) {
         // Releases of keys held since before the recording still belong to
         // the engine (it would keep them pressed otherwise).
+        // (Keys of watched keyboards count too: a trigger may be recorded there.)
         let engine_release =
-            matches!(event, Event::Key { code, down: false } if !self.record_pressed.contains(&code));
+            matches!(event.key(), Some((code, false)) if !self.record_pressed.contains(&code));
         if let Some(rec) = &mut self.recording
             && !engine_release
         {
-            if let Event::Key { code, down } = event {
+            if let Some((code, down)) = event.key() {
                 if down {
                     rec.insert(code);
                     self.record_pressed.insert(code);
@@ -467,7 +469,7 @@ impl Runner {
         self.apply_requests();
         self.notices(notices);
         if self.identify
-            && let Event::Key { down: true, .. } = event
+            && let Some((_, true)) = event.key()
             && self
                 .last_identify
                 .is_none_or(|t| t.elapsed() > Duration::from_millis(300))
@@ -501,7 +503,7 @@ impl Runner {
         self.ctl.shutdown();
         self.apply_requests();
         let mut msgs = Vec::new();
-        self.inputs.update(&[], &mut msgs);
+        self.inputs.update(&[], &[], &mut msgs);
     }
 
     fn run(mut self, rx: Receiver<ServiceCmd>) {

@@ -51,6 +51,7 @@ Every commit on `main` is built and tested automatically and published as a rele
 - **Screen stays on:** while the bridge is on, the desktop sees no input from the grabbed mouse and keyboard and would dim the screen, turn it off and lock it. The app asks it not to (D-Bus: `org.freedesktop.ScreenSaver`, else the desktop portal's idle inhibition, e.g. on GNOME) until the bridge switches off, pauses or the app quits; Plasma lists PS HID Bridge in the power applet meanwhile. `pshb-cli run` does the same.
 - **Updates:** when a new release is out, the Status page shows a banner with "Update app" (the AppImage replaces itself, then "Restart now") and "Update board" (firmware over the network, signed with the key; the bridge must be off). See "Updates from the app and the command line".
 - **Emergency stop:** `Ctrl+Alt+Shift+Esc` always releases mouse and keyboard at once and lets go of everything on the PlayStation. This combination cannot be switched off.
+- **Every keyboard counts:** triggers and the emergency stop work on every keyboard, also on ones that are not selected (e.g. the laptop keyboard next to a gaming keyboard). Those are only watched: never grabbed, nothing of them goes to the PlayStation. The Triggers page offers "Set up access" if a keyboard cannot be read yet.
 
 The bridge only switches on once all keys are released: if the devices were grabbed while a key is down, that key would stay stuck on the desktop. *Hold* triggers are the exception, because their key is down by definition: the desktop does not see that key (or any other key held at that moment) being released, so it considers it pressed until it is pressed again. A mouse button (`Mouse4`) is therefore a better hold key than a keyboard key. The emergency stop and "Switch off" end a hold until its key is released. If the app hangs, a watchdog releases the devices after one second.
 
@@ -84,12 +85,15 @@ With the command line tool (the setting is used by the desktop app): `pshb-cli c
 
 ### Device access
 
-A normal user may not read keyboard and mouse raw. In the wizard the app sets up a udev rule **only for the selected devices** (it asks once for the administrator password):
+A normal user may not read keyboard and mouse raw. In the wizard the app sets up a udev rule for **the selected devices and every keyboard** (it asks once for the administrator password); the keyboards are needed so that triggers and the emergency stop work on all of them:
 
 ```
 # /etc/udev/rules.d/70-ps-hid-bridge.rules
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", TAG+="uaccess"
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{id/vendor}=="046d", ATTRS{id/product}=="c52b", TAG+="uaccess"
 ```
+
+This lets the logged-in user's programs read every keyboard (as with the selected devices). Remove the file to revoke it.
 
 By hand: `pshb-cli list-devices` shows vendor and product ID in the "ID" column; afterwards run `sudo udevadm control --reload && sudo udevadm trigger -s input`. The file name must start with a number below 73, otherwise `uaccess` has no effect. Alternative: `sudo usermod -aG input $USER` and log in again (access to all input devices).
 

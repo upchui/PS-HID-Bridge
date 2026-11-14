@@ -159,6 +159,25 @@ pub fn select(devices: &[DeviceInfo], specs: &[String]) -> Vec<DeviceInfo> {
         .collect()
 }
 
+/// Keyboards that are not selected but readable: only watched, so that
+/// triggers and the emergency stop work on every keyboard.
+pub fn watch_keyboards(devices: &[DeviceInfo], selected: &[DeviceInfo]) -> Vec<DeviceInfo> {
+    devices
+        .iter()
+        .filter(|d| d.keyboard && d.accessible && !selected.iter().any(|s| s.path == d.path))
+        .cloned()
+        .collect()
+}
+
+/// Keyboards that are not selected and may not be read (their triggers do
+/// not work until access is set up).
+pub fn unwatched_keyboards(devices: &[DeviceInfo], selected: &[DeviceInfo]) -> usize {
+    devices
+        .iter()
+        .filter(|d| d.keyboard && !d.accessible && !selected.iter().any(|s| s.path == d.path))
+        .count()
+}
+
 pub enum InputMsg {
     /// An event from device `dev` (a stable id, see [`InputSet::info`]);
     /// `ts_us`: kernel timestamp on the monotonic clock (see
@@ -383,6 +402,7 @@ impl GrabGuard {
     fn set_fds(&self, devices: &[Open]) {
         let fds = devices
             .iter()
+            .filter(|d| !d.watch)
             .filter_map(|d| d.dev.as_fd().try_clone_to_owned().ok())
             .collect();
         *self.0.fds.lock().unwrap() = fds;
@@ -393,6 +413,9 @@ struct Open {
     /// Stable id (events carry it; indices change when devices come and go).
     id: usize,
     info: DeviceInfo,
+    /// Only watched for triggers (a keyboard that is not selected): never
+    /// grabbed, its keys arrive as [`Event::TriggerKey`], nothing else of it.
+    watch: bool,
     dev: RawDevice,
     /// Timestamps are on the monotonic clock.
     mono: bool,
@@ -505,18 +528,24 @@ impl InputSet {
     pub fn open(devices: &[DeviceInfo], waker: Arc<Waker>, guard: GrabGuard) -> io::Result<Self> {
         let mut set = Self::new(waker, guard);
         for info in devices {
-            set.add(info)?;
+            set.add(info, false)?;
         }
         set.devices_changed();
         Ok(set)
     }
 
+    /// Open devices that are forwarded (not the ones only watched).
     pub fn len(&self) -> usize {
-        self.devices.len()
+        self.devices.iter().filter(|d| !d.watch).count()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.devices.is_empty()
+        self.len() == 0
+    }
+
+    /// Open keyboards that are only watched for triggers.
+    pub fn watched(&self) -> usize {
+        self.devices.iter().filter(|d| d.watch).count()
     }
 
     /// How often events were lost (the kernel dropped them, or a release
@@ -530,7 +559,7 @@ impl InputSet {
     /// they count as released and are not pressed again from the kernel's
     /// state until their next real release event clears the mark.
     pub fn forget(&mut self, codes: &[u16]) {
-        for d in &mut self.devices {
+        for d in self.devices.iter_mut().filter(|d| !d.watch) {
             for &code in codes {
                 if d.pressed.contains(&code) {
                     d.pressed.retain(|c| *c != code);
@@ -553,7 +582,7 @@ impl InputSet {
         self.devices.iter().find(|d| d.id == dev).map(|d| &d.info)
     }
 
-    fn add(&mut self, info: &DeviceInfo) -> io::Result<()> {
+    fn add(&mut self, info: &DeviceInfo, watch: bool) -> io::Result<()> {
         let (dev, mono) = open_device(&info.path)?;
         // Keys held already stay with the desktop (no events for them), but
         // count as held, so the safety net does not press them.
@@ -561,6 +590,7 @@ impl InputSet {
         self.devices.push(Open {
             id: self.next_id,
             info: info.clone(),
+            watch,
             dev,
             mono,
             pressed,
@@ -572,27 +602,44 @@ impl InputSet {
     }
 
     /// A device was closed: key-up events for what it still held (unless
-    /// another open device holds the same key).
+    /// another open device of the same kind, forwarded or watched, holds
+    /// the same key).
     fn release_keys(&self, closed: Open, out: &mut Vec<InputMsg>) {
         for code in closed.pressed {
-            if !self.devices.iter().any(|d| d.pressed.contains(&code)) {
+            let held_elsewhere = self
+                .devices
+                .iter()
+                .any(|d| d.watch == closed.watch && d.pressed.contains(&code));
+            if !held_elsewhere && let Some(event) = role_event(closed.watch, Event::Key { code, down: false })
+            {
                 out.push(InputMsg::Event {
                     dev: closed.id,
-                    event: Event::Key { code, down: false },
+                    event,
                     ts_us: None,
                 });
             }
         }
     }
 
-    /// Bring the open devices in line with `wanted` (compared by path).
-    /// Devices that stay keep their descriptor and grab; closed ones release
-    /// their keys; new ones are grabbed if the others are.
-    pub fn update(&mut self, wanted: &[DeviceInfo], out: &mut Vec<InputMsg>) {
+    /// Bring the open devices in line with `wanted` (forwarded) and `watch`
+    /// (keyboards only watched for triggers), compared by path; a device in
+    /// both lists is forwarded. Devices that stay keep their descriptor and
+    /// grab; closed ones (also one that changes between the two) release
+    /// their keys; new forwarded ones are grabbed if the others are.
+    pub fn update(&mut self, wanted: &[DeviceInfo], watch: &[DeviceInfo], out: &mut Vec<InputMsg>) {
+        let role = |path: &Path| {
+            if wanted.iter().any(|w| w.path == path) {
+                Some(false)
+            } else if watch.iter().any(|w| w.path == path) {
+                Some(true)
+            } else {
+                None
+            }
+        };
         let mut changed = false;
         let mut i = 0;
         while i < self.devices.len() {
-            if wanted.iter().any(|w| w.path == self.devices[i].info.path) {
+            if role(&self.devices[i].info.path) == Some(self.devices[i].watch) {
                 i += 1;
                 continue;
             }
@@ -603,15 +650,22 @@ impl InputSet {
             changed = true;
         }
         let grabbed = self.guard.is_grabbed();
-        for info in wanted {
+        let new = wanted
+            .iter()
+            .map(|i| (i, false))
+            .chain(watch.iter().map(|i| (i, true)));
+        for (info, watch) in new {
             if self.devices.iter().any(|d| d.info.path == info.path) {
                 continue;
             }
-            match self.add(info) {
+            match self.add(info, watch) {
                 Ok(()) => {
                     changed = true;
                     let d = self.devices.last().expect("just added");
-                    if grabbed && let Err(e) = ioctl_grab(d.dev.as_raw_fd(), true) {
+                    if grabbed
+                        && !watch
+                        && let Err(e) = ioctl_grab(d.dev.as_raw_fd(), true)
+                    {
                         out.push(grab_failed(info, e));
                     }
                 }
@@ -652,7 +706,7 @@ impl InputSet {
         let mut failed = Vec::new();
         if on {
             if !self.guard.is_grabbed() {
-                for d in &self.devices {
+                for d in self.devices.iter().filter(|d| !d.watch) {
                     if let Err(e) = ioctl_grab(d.dev.as_raw_fd(), true) {
                         failed.push(grab_failed(&d.info, e));
                     }
@@ -662,7 +716,7 @@ impl InputSet {
             return failed;
         }
         let mut reopened = false;
-        for d in &mut self.devices {
+        for d in self.devices.iter_mut().filter(|d| !d.watch) {
             let Err(e) = release_grab(d.dev.as_raw_fd()) else {
                 continue;
             };
@@ -705,11 +759,13 @@ impl InputSet {
             }
             self.resyncs += 1;
             for event in missed.into_iter().chain([Event::Sync]) {
-                out.push(InputMsg::Event {
-                    dev: d.id,
-                    event,
-                    ts_us: None,
-                });
+                if let Some(event) = role_event(d.watch, event) {
+                    out.push(InputMsg::Event {
+                        dev: d.id,
+                        event,
+                        ts_us: None,
+                    });
+                }
             }
         }
     }
@@ -756,6 +812,7 @@ impl InputSet {
             }
             let Open {
                 id,
+                watch,
                 dev,
                 mono,
                 pressed,
@@ -776,6 +833,9 @@ impl InputSet {
                 self.resyncs += 1;
             }
             for (event, ts) in got {
+                let Some(event) = role_event(*watch, event) else {
+                    continue;
+                };
                 let ts_us = ts.filter(|_| *mono).map(|t| {
                     t.duration_since(std::time::UNIX_EPOCH)
                         .map(|t| t.as_micros() as u64)
@@ -809,6 +869,18 @@ impl Drop for InputSet {
             self.guard.release();
         }
         self.guard.set_fds(&[]);
+    }
+}
+
+/// An event as it goes to the engine: from a keyboard that is only watched,
+/// just its keys, as [`Event::TriggerKey`] (they are never forwarded).
+fn role_event(watch: bool, event: Event) -> Option<Event> {
+    if !watch {
+        return Some(event);
+    }
+    match event {
+        Event::Key { code, down } => Some(Event::TriggerKey { code, down }),
+        _ => None,
     }
 }
 
@@ -929,6 +1001,24 @@ mod tests {
 
     const LEFT: u16 = BTN_LEFT as u16;
     const KEY_W: u16 = 17;
+
+    #[test]
+    fn watched_keyboards_only_deliver_their_keys() {
+        let key = Event::Key {
+            code: KEY_W,
+            down: true,
+        };
+        assert_eq!(role_event(false, key), Some(key));
+        assert_eq!(
+            role_event(true, key),
+            Some(Event::TriggerKey {
+                code: KEY_W,
+                down: true
+            })
+        );
+        assert_eq!(role_event(true, Event::Rel { axis: 0, value: 5 }), None);
+        assert_eq!(role_event(true, Event::Sync), None);
+    }
 
     fn key(code: u16, value: i32) -> InputEvent {
         InputEvent::new(EventType::KEY.0, code, value)

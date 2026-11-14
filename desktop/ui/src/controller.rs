@@ -57,6 +57,9 @@ pub mod qobject {
         #[qproperty(bool, psk_set)]
         #[qproperty(QString, devices_json)]
         #[qproperty(i32, devices_blocked)]
+        /// Keyboards that are not selected and may not be read: triggers
+        /// and the emergency stop do not work on them yet.
+        #[qproperty(i32, other_keyboards_blocked)]
         #[qproperty(i32, devices_open)]
         #[qproperty(i32, input_resyncs)]
         #[qproperty(QString, triggers_json)]
@@ -112,9 +115,9 @@ pub mod qobject {
         /// Select a device group by its "vvvv:pppp" id.
         #[qinvokable]
         fn set_device_selected(self: Pin<&mut AppController>, id: &QString, selected: bool);
-        /// Install the udev rule for the selected devices (asks for the
-        /// administrator password); `access_busy` meanwhile, then the
-        /// outcome in `access_message` ("" = done).
+        /// Install the udev rule for the selected devices and every keyboard
+        /// (asks for the administrator password); `access_busy` meanwhile,
+        /// then the outcome in `access_message` ("" = done).
         #[qinvokable]
         fn install_access(self: Pin<&mut AppController>);
         #[qinvokable]
@@ -206,6 +209,7 @@ pub struct AppControllerRust {
     psk_set: bool,
     devices_json: QString,
     devices_blocked: i32,
+    other_keyboards_blocked: i32,
     devices_open: i32,
     input_resyncs: i32,
     triggers_json: QString,
@@ -311,6 +315,7 @@ impl Default for AppControllerRust {
             psk_set: false,
             devices_json: QString::from("[]"),
             devices_blocked: 0,
+            other_keyboards_blocked: 0,
             devices_open: 0,
             input_resyncs: 0,
             triggers_json: QString::from("[]"),
@@ -744,6 +749,9 @@ impl qobject::AppController {
             }
         };
         let groups = group_devices(&list, self.config_ref());
+        let selected = input::select(&list, &self.config_ref().devices);
+        let unwatched = input::unwatched_keyboards(&list, &selected);
+        self.as_mut().set_other_keyboards_blocked(unwatched as i32);
         self.as_mut().rust_mut().devices = list;
         self.as_mut()
             .set_devices_json(QString::from(&serde_json::to_string(&groups).unwrap_or_default()));
@@ -803,7 +811,8 @@ impl qobject::AppController {
         let still = input::select(&self.rust().devices, &self.config_ref().devices)
             .iter()
             .filter(|d| !d.accessible)
-            .count();
+            .count()
+            + *self.other_keyboards_blocked() as usize;
         self.as_mut().set_access_message(if still > 0 {
             QString::from(
                 "Rule installed, but no access yet. Please unplug and replug the devices once, \

@@ -7,6 +7,28 @@ AppPage {
     title: "Triggers"
     subtitle: "How you switch between the desktop and the PlayStation. Changes are saved right away."
 
+    Component.onCompleted: AppController.refreshDevices()
+
+    // Triggers and the emergency stop work on every keyboard the app may
+    // read, also on keyboards that are not selected (those are never
+    // forwarded).
+    Banner {
+        kind: "warn"
+        visible: AppController.otherKeyboardsBlocked > 0
+        text: "Triggers and the emergency stop work on every keyboard, also on ones that are not selected. "
+              + AppController.otherKeyboardsBlocked + " keyboard(s) cannot be read yet; the app sets up access once (administrator password)."
+        actions: AppButton {
+            text: AppController.accessBusy ? "Setting up …" : "Set up access"
+            enabled: !AppController.accessBusy
+            onClicked: AppController.installAccess()
+        }
+    }
+    Banner {
+        kind: "error"
+        visible: AppController.accessMessage !== ""
+        text: AppController.accessMessage
+    }
+
     Card {
         title: "Keys and mouse buttons"
         icon: "bolt"

@@ -11,6 +11,9 @@
 //! * The emergency combination (Ctrl+Alt+Shift+Esc) always deactivates and
 //!   cannot be configured away.
 //! * The key that fires a trigger is never forwarded to the PlayStation.
+//! * Keyboards that are not selected are only watched ([`Event::TriggerKey`]):
+//!   their keys count for triggers and the emergency stop, but never reach
+//!   the PlayStation and never delay an activation (they are not grabbed).
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
@@ -29,12 +32,25 @@ pub const REL_WHEEL: u16 = 0x08;
 pub enum Event {
     /// Key or button; `down` false = released. Auto-repeat must be filtered out.
     Key { code: u16, down: bool },
+    /// Key of a keyboard that is only watched (not selected): it counts for
+    /// triggers and the emergency stop, and is never forwarded.
+    TriggerKey { code: u16, down: bool },
     /// Relative axis (REL_X, REL_Y, REL_WHEEL, REL_HWHEEL; others ignored).
     Rel { axis: u16, value: i32 },
     /// End of an evdev frame (SYN_REPORT).
     Sync,
     /// Window rule: whether the configured window has the focus.
     Focus(bool),
+}
+
+impl Event {
+    /// Code and direction of a key event of either kind.
+    pub fn key(&self) -> Option<(u16, bool)> {
+        match *self {
+            Event::Key { code, down } | Event::TriggerKey { code, down } => Some((code, down)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +100,8 @@ pub struct Engine {
     cfg: EngineConfig,
     emergency: Combo,
     pressed: Vec<u16>, // in press order
+    /// Held on watched keyboards (only for triggers, never forwarded).
+    watched: Vec<u16>,
     suppressed: BTreeSet<u16>,
     latched: Vec<bool>, // per trigger: fired, waiting for its keys to be released
     taps: Vec<DoubleTapState>,
@@ -108,6 +126,7 @@ impl Engine {
         Self {
             emergency: emergency_combo(),
             pressed: Vec::new(),
+            watched: Vec::new(),
             suppressed: BTreeSet::new(),
             latched: vec![false; n],
             taps: (0..n).map(|_| DoubleTapState::default()).collect(),
@@ -152,8 +171,10 @@ impl Engine {
     pub fn handle(&mut self, ev: Event, now: Instant) -> Vec<Effect> {
         let mut fx = Vec::new();
         match ev {
-            Event::Key { code, down: true } => self.key_down(code, &mut fx),
-            Event::Key { code, down: false } => self.key_up(code, now, &mut fx),
+            Event::Key { code, down: true } => self.key_down(code, false, &mut fx),
+            Event::Key { code, down: false } => self.key_up(code, false, now, &mut fx),
+            Event::TriggerKey { code, down: true } => self.key_down(code, true, &mut fx),
+            Event::TriggerKey { code, down: false } => self.key_up(code, true, now, &mut fx),
             Event::Rel { axis, value } => {
                 let i = match axis {
                     REL_X => 0,
@@ -182,17 +203,32 @@ impl Engine {
         fx
     }
 
-    fn key_down(&mut self, code: u16, fx: &mut Vec<Effect>) {
-        if self.pressed.contains(&code) {
+    /// Everything held, forwarded or only watched: what the triggers see.
+    fn all_pressed(&self) -> Vec<u16> {
+        let mut all = self.pressed.clone();
+        all.extend(self.watched.iter().filter(|c| !self.pressed.contains(c)));
+        all
+    }
+
+    fn key_down(&mut self, code: u16, watched: bool, fx: &mut Vec<Effect>) {
+        let list = if watched {
+            &mut self.watched
+        } else {
+            &mut self.pressed
+        };
+        if list.contains(&code) {
             return;
         }
-        self.pressed.push(code);
+        list.push(code);
+        let all = self.all_pressed();
 
-        if self.emergency.contains(code) && self.emergency.satisfied(&self.pressed) {
+        if self.emergency.contains(code) && self.emergency.satisfied(&all) {
             self.manual = false;
             self.block_hold();
             self.paused = self.cfg.window_rule;
-            self.suppressed.insert(code);
+            if !watched {
+                self.suppressed.insert(code);
+            }
             fx.push(Effect::ReleaseAll);
             fx.push(Effect::Notice(Notice::Emergency));
             self.update(fx);
@@ -206,20 +242,20 @@ impl Engine {
         for (i, t) in self.cfg.triggers.iter().enumerate() {
             match &t.kind {
                 TriggerKind::Combo(c) => {
-                    if !self.latched[i] && c.contains(code) && c.satisfied(&self.pressed) {
+                    if !self.latched[i] && c.contains(code) && c.satisfied(&all) {
                         self.latched[i] = true;
                         fired.push(t.action);
                     }
                 }
                 TriggerKind::DoubleTap { key, .. } => {
-                    if key.matches(code) && self.pressed.len() == 1 {
+                    if key.matches(code) && all.len() == 1 {
                         self.taps[i].clean = true;
                     }
                 }
                 TriggerKind::Hold(_) => {}
             }
         }
-        if !fired.is_empty() {
+        if !fired.is_empty() && !watched {
             self.suppressed.insert(code);
         }
         for a in fired {
@@ -230,24 +266,32 @@ impl Engine {
         self.forward(fx);
     }
 
-    fn key_up(&mut self, code: u16, now: Instant, fx: &mut Vec<Effect>) {
-        let Some(pos) = self.pressed.iter().position(|c| *c == code) else {
+    fn key_up(&mut self, code: u16, watched: bool, now: Instant, fx: &mut Vec<Effect>) {
+        let list = if watched {
+            &mut self.watched
+        } else {
+            &mut self.pressed
+        };
+        let Some(pos) = list.iter().position(|c| *c == code) else {
             return;
         };
-        self.pressed.remove(pos);
-        self.suppressed.remove(&code);
+        list.remove(pos);
+        if !watched {
+            self.suppressed.remove(&code);
+        }
+        let all = self.all_pressed();
 
         let mut fired = Vec::new();
         for (i, t) in self.cfg.triggers.iter().enumerate() {
             match &t.kind {
                 TriggerKind::Combo(c) => {
-                    if self.latched[i] && !self.pressed.iter().any(|p| c.contains(*p)) {
+                    if self.latched[i] && !all.iter().any(|p| c.contains(*p)) {
                         self.latched[i] = false;
                     }
                 }
                 TriggerKind::DoubleTap { key, window_ms } => {
                     let tap = &mut self.taps[i];
-                    if key.matches(code) && tap.clean && self.pressed.is_empty() {
+                    if key.matches(code) && tap.clean && all.is_empty() {
                         let within = tap
                             .last_tap
                             .is_some_and(|t| now.duration_since(t) <= Duration::from_millis(*window_ms));
@@ -274,8 +318,9 @@ impl Engine {
     }
 
     fn update_hold(&mut self) {
+        let all = self.all_pressed();
         let held = self.cfg.triggers.iter().any(|t| match &t.kind {
-            TriggerKind::Hold(c) => c.satisfied(&self.pressed),
+            TriggerKind::Hold(c) => c.satisfied(&all),
             _ => false,
         });
         if !held {
@@ -454,6 +499,18 @@ mod tests {
         }
         fn up(&mut self, code: u16) -> Vec<Effect> {
             self.ev(Event::Key { code, down: false })
+        }
+        /// On a keyboard that is only watched (not selected).
+        fn wdown(&mut self, code: u16) -> Vec<Effect> {
+            self.ev(Event::TriggerKey { code, down: true })
+        }
+        fn wup(&mut self, code: u16) -> Vec<Effect> {
+            self.ev(Event::TriggerKey { code, down: false })
+        }
+        fn wtap(&mut self, code: u16) -> Vec<Effect> {
+            let mut fx = self.wdown(code);
+            fx.extend(self.wup(code));
+            fx
         }
         fn tap(&mut self, code: u16) -> Vec<Effect> {
             let mut fx = self.down(code);
@@ -786,6 +843,118 @@ mod tests {
         t.down(KEY_LEFTCTRL);
         t.down(KEY_LEFTALT);
         assert!(t.down(R).iter().any(|e| matches!(e, Effect::Forget(_))));
+    }
+
+    #[test]
+    fn toggle_from_a_watched_keyboard() {
+        let mut t = T::toggle();
+        t.wdown(KEY_LEFTCTRL);
+        t.wdown(KEY_LEFTALT);
+        // Its keys are not grabbed and never forwarded: on at once, nothing to wait for.
+        let fx = t.wdown(P);
+        assert!(fx.contains(&Effect::Grab(true)));
+        assert_eq!(states(&fx), vec![KeyState::default()]);
+        for k in [P, KEY_LEFTALT, KEY_LEFTCTRL] {
+            assert!(states(&t.wup(k)).is_empty());
+        }
+        // Typing on the selected keyboard is forwarded, on the watched one not.
+        assert_eq!(states(&t.down(A))[0].keys, [0x04, 0, 0, 0, 0, 0]);
+        assert!(states(&t.wdown(W)).is_empty());
+        t.wup(W);
+        t.up(A);
+        // And off again from the watched keyboard.
+        t.wdown(KEY_LEFTCTRL);
+        t.wdown(KEY_LEFTALT);
+        assert!(t.wdown(P).contains(&Effect::Grab(false)));
+        assert!(!t.e.is_active());
+    }
+
+    #[test]
+    fn combination_across_keyboards() {
+        let mut t = T::toggle();
+        t.down(KEY_LEFTCTRL); // selected keyboard
+        t.wdown(KEY_LEFTALT);
+        let fx = t.wdown(P);
+        // Ctrl is held on a selected (soon grabbed) keyboard: wait for it.
+        assert!(fx.contains(&Effect::Notice(Notice::WaitingForRelease)));
+        t.wup(P);
+        t.wup(KEY_LEFTALT);
+        assert!(t.up(KEY_LEFTCTRL).contains(&Effect::Grab(true)));
+    }
+
+    #[test]
+    fn watched_keys_do_not_delay_activation() {
+        let mut t = T::toggle();
+        t.wdown(A); // someone holds a key on the other keyboard
+        let fx = t.press_combo(&[KEY_LEFTCTRL, KEY_LEFTALT, P]);
+        assert!(fx.contains(&Effect::Grab(true)));
+        assert_eq!(states(&fx), vec![KeyState::default()]);
+    }
+
+    #[test]
+    fn emergency_stop_from_a_watched_keyboard() {
+        let mut t = T::toggle();
+        t.press_combo(&[KEY_LEFTCTRL, KEY_LEFTALT, P]);
+        t.down(A);
+        t.wdown(KEY_LEFTCTRL);
+        t.wdown(KEY_LEFTALT);
+        t.wdown(KEY_LEFTSHIFT);
+        let fx = t.wdown(ESC);
+        assert!(fx.contains(&Effect::ReleaseAll));
+        assert!(fx.contains(&Effect::Notice(Notice::Emergency)));
+        assert!(fx.contains(&Effect::Grab(false)));
+    }
+
+    #[test]
+    fn hold_and_double_tap_from_a_watched_keyboard() {
+        let mut t = T::new(
+            vec![Trigger {
+                kind: TriggerKind::Hold(Combo::parse("Ctrl+Alt").unwrap()),
+                action: Action::On,
+            }],
+            false,
+        );
+        t.wdown(KEY_LEFTCTRL);
+        assert!(t.wdown(KEY_LEFTALT).contains(&Effect::Grab(true)));
+        assert!(t.wup(KEY_LEFTALT).contains(&Effect::Grab(false)));
+
+        let mut t = T::new(
+            vec![Trigger {
+                kind: TriggerKind::DoubleTap {
+                    key: KeyAlt(vec![KEY_LEFTCTRL]),
+                    window_ms: 300,
+                },
+                action: Action::Toggle,
+            }],
+            false,
+        );
+        t.wtap(KEY_LEFTCTRL);
+        t.wait(100);
+        assert!(t.wtap(KEY_LEFTCTRL).contains(&Effect::Grab(true)));
+    }
+
+    #[test]
+    fn release_all_keeps_watched_keys() {
+        let mut t = T::new(
+            vec![
+                Trigger::combo("Ctrl+Alt+P", Action::Toggle).unwrap(),
+                Trigger::combo("Ctrl+Alt+R", Action::ReleaseAll).unwrap(),
+            ],
+            false,
+        );
+        t.press_combo(&[KEY_LEFTCTRL, KEY_LEFTALT, P]);
+        t.down(A);
+        t.wdown(KEY_LEFTCTRL);
+        t.wdown(KEY_LEFTALT);
+        let fx = t.wdown(R);
+        let forgot = fx.iter().find_map(|e| match e {
+            Effect::Forget(c) => Some(c.clone()),
+            _ => None,
+        });
+        assert_eq!(forgot, Some(vec![A]));
+        // The watched Ctrl+Alt are still held: P on top toggles off.
+        t.wup(R);
+        assert!(t.wdown(P).contains(&Effect::Grab(false)));
     }
 
     #[test]

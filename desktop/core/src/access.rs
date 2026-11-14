@@ -1,8 +1,10 @@
-//! Read access to the selected input devices via a udev rule.
+//! Read access to the input devices via a udev rule.
 //!
-//! The rule tags the chosen devices (by USB vendor/product ID) with
-//! `uaccess`, so logind grants the logged-in user access. It must sort before
-//! 73-seat-late.rules, hence the "70-" prefix.
+//! The rule tags the chosen devices (by USB vendor/product ID) and every
+//! keyboard (triggers and the emergency stop work on all of them, see
+//! [`crate::input::watch_keyboards`]) with `uaccess`, so logind grants the
+//! logged-in user access. It must sort before 73-seat-late.rules, hence the
+//! "70-" prefix; ID_INPUT_KEYBOARD comes from 60-input-id.rules.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -13,7 +15,13 @@ pub const RULE_PATH: &str = "/etc/udev/rules.d/70-ps-hid-bridge.rules";
 /// Rule file of the old name (PS5 HID Bridge), replaced by RULE_PATH.
 const OLD_RULE_PATH: &str = "/etc/udev/rules.d/70-ps5-hid-bridge.rules";
 
-/// Rule text for the given devices (one line per vendor:product pair).
+/// Every keyboard: only watched for triggers and the emergency stop unless
+/// it is selected.
+const ALL_KEYBOARDS: &str = "# Every keyboard: triggers (e.g. Ctrl+Alt+P) and the emergency stop work on all of them\n\
+     SUBSYSTEM==\"input\", KERNEL==\"event*\", ENV{ID_INPUT_KEYBOARD}==\"1\", TAG+=\"uaccess\"\n";
+
+/// Rule text for the given devices (one line per vendor:product pair) and
+/// every keyboard.
 pub fn udev_rule(devices: &[DeviceInfo]) -> String {
     let mut ids: Vec<(u16, u16, String)> = devices
         .iter()
@@ -22,9 +30,10 @@ pub fn udev_rule(devices: &[DeviceInfo]) -> String {
     ids.sort();
     ids.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
     let mut out = String::from(
-        "# PS HID Bridge: read access to the selected keyboards and mice\n\
+        "# PS HID Bridge: read access to the selected keyboards and mice, and to every keyboard\n\
          # (written by the app; remove this file to revoke)\n",
     );
+    out += ALL_KEYBOARDS;
     for (v, p, name) in ids {
         let name: String = name.chars().filter(|c| !c.is_control() && *c != '"').collect();
         out += &format!(
@@ -94,7 +103,10 @@ mod tests {
             dev(0x1532, 0x00ab, "Razer Basilisk Keyboard"),
             dev(0x046d, 0xc52b, "Logitech \"K400\""),
         ]);
-        assert_eq!(rule.matches("TAG+=\"uaccess\"").count(), 2);
+        assert_eq!(rule.matches("TAG+=\"uaccess\"").count(), 3);
+        assert!(rule.contains(
+            "SUBSYSTEM==\"input\", KERNEL==\"event*\", ENV{ID_INPUT_KEYBOARD}==\"1\", TAG+=\"uaccess\"\n"
+        ));
         assert!(rule.contains("ATTRS{id/vendor}==\"046d\", ATTRS{id/product}==\"c52b\""));
         assert!(rule.contains("# Logitech K400\n"));
     }

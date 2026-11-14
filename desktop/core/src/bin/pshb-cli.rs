@@ -447,6 +447,20 @@ fn cmd_run(
     let guard = GrabGuard::default();
     let mut inputs =
         InputSet::open(&selected, waker, guard.clone()).map_err(|e| format!("Opening device: {e}"))?;
+    // Every other keyboard is only watched: triggers and the emergency stop
+    // work there too, nothing of it is forwarded.
+    let watch = input::watch_keyboards(&list.devices, &selected);
+    let mut opened = Vec::new();
+    inputs.update(&selected, &watch, &mut opened);
+    for d in &watch {
+        println!("Triggers also on: {} ({})", d.name, d.path.display());
+    }
+    let unwatched = input::unwatched_keyboards(&list.devices, &selected);
+    if unwatched > 0 {
+        println!(
+            "Note: {unwatched} other keyboards may not be read; triggers do not work on them (see the README, section \"Device access\")."
+        );
+    }
     let grabbed = guard.clone();
     let watchdog = Watchdog::start(link.clone(), guard, Duration::from_secs(1));
     let mut ctl = Controller::new(Engine::new(ecfg), link.clone());
