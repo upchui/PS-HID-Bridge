@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use crate::config::Config;
 use crate::controller::{Controller, Watchdog};
 use crate::engine::{Engine, Event, Notice};
+use crate::idle::IdleInhibitor;
 use crate::input::{self, DeviceInfo, GrabGuard, InputMsg, InputSet, Waker};
 use crate::keymap;
 use crate::mouse::MouseCurve;
@@ -219,6 +220,9 @@ struct Runner {
     /// Input corrections already written to the log, and when.
     logged_resyncs: u64,
     logged_at: Option<Instant>,
+    /// Keeps the screen on while the devices are grabbed (the desktop sees
+    /// no input then and would turn it off and lock it).
+    idle: IdleInhibitor,
 }
 
 impl Runner {
@@ -255,6 +259,7 @@ impl Runner {
             last_sent_at: Instant::now(),
             logged_resyncs: 0,
             logged_at: None,
+            idle: IdleInhibitor::new(),
         }
     }
 
@@ -284,6 +289,7 @@ impl Runner {
                 self.notices(n);
             }
         }
+        self.idle.set(self.guard.is_grabbed());
     }
 
     /// Devices that could not be grabbed or released: one message for the

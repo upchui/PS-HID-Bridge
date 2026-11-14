@@ -32,8 +32,10 @@ blake2 = "0.11"
 zbus = { version = "5", optional = true, default-features = false, features = ["async-io", "blocking-api"] }
 
 [features]
-default = ["rtkit", "udisks"]
+default = ["rtkit", "udisks", "idle"]
 rtkit = ["dep:zbus"]
+# Keeps the screen on while the bridge is on (idle inhibition over D-Bus).
+idle = ["dep:zbus"]
 # Flashing the board over USB: finds and mounts its boot drive via UDisks2.
 udisks = ["dep:zbus"]
 

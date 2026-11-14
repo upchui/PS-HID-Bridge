@@ -11,6 +11,7 @@ pub mod controller;
 pub mod counter;
 pub mod crypto;
 pub mod engine;
+pub mod idle;
 pub mod input;
 pub mod keymap;
 pub mod lockfile;

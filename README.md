@@ -48,6 +48,7 @@ Every commit on `main` is built and tested automatically and published as a rele
 - **Board:** address and key, connection state, "Open web interface".
 - **Firmware & updates:** installed and newest version of app and board firmware, "Check now", the automatic check (at start and every six hours), and "Install via USB" (see "Flashing over USB from the PC").
 - **Tray icon:** grey = board not reachable, blue = ready, green = bridge on. A click toggles. A Plasma notification appears when the bridge switches.
+- **Screen stays on:** while the bridge is on, the desktop sees no input from the grabbed mouse and keyboard and would dim the screen, turn it off and lock it. The app asks it not to (D-Bus: `org.freedesktop.ScreenSaver`, else the desktop portal's idle inhibition, e.g. on GNOME) until the bridge switches off, pauses or the app quits; Plasma lists PS HID Bridge in the power applet meanwhile. `pshb-cli run` does the same.
 - **Updates:** when a new release is out, the Status page shows a banner with "Update app" (the AppImage replaces itself, then "Restart now") and "Update board" (firmware over the network, signed with the key; the bridge must be off). See "Updates from the app and the command line".
 - **Emergency stop:** `Ctrl+Alt+Shift+Esc` always releases mouse and keyboard at once and lets go of everything on the PlayStation. This combination cannot be switched off.
 
@@ -94,7 +95,7 @@ By hand: `pshb-cli list-devices` shows vendor and product ID in the "ID" column;
 
 ## Command line tool
 
-`out/pshb-cli` does the same without a user interface (and without the window rule).
+`out/pshb-cli` does the same without a user interface (and without the window rule); `pshb-cli run` also keeps the screen on while the bridge is on.
 
 ```sh
 pshb-cli list-devices                              # keyboards and mice with access status

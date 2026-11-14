@@ -14,6 +14,7 @@ use pshb_core::config::{self, Config};
 use pshb_core::controller::{Controller, Watchdog};
 use pshb_core::crypto::parse_key_hex;
 use pshb_core::engine::{Engine, Notice};
+use pshb_core::idle::IdleInhibitor;
 use pshb_core::input::{self, GrabGuard, InputMsg, InputSet, Waker};
 use pshb_core::protocol::{self, Pong};
 use pshb_core::rt;
@@ -446,6 +447,7 @@ fn cmd_run(
     let guard = GrabGuard::default();
     let mut inputs =
         InputSet::open(&selected, waker, guard.clone()).map_err(|e| format!("Opening device: {e}"))?;
+    let grabbed = guard.clone();
     let watchdog = Watchdog::start(link.clone(), guard, Duration::from_secs(1));
     let mut ctl = Controller::new(Engine::new(ecfg), link.clone());
     install_signal_handlers();
@@ -463,8 +465,10 @@ fn cmd_run(
     }
 
     // Grab or release as the engine asks; a device that cannot be grabbed
-    // switches the bridge off again.
-    let apply_grab = |ctl: &mut Controller, inputs: &mut InputSet| {
+    // switches the bridge off again. While grabbed, the screen stays on
+    // (the desktop sees no input then and would turn it off and lock it).
+    let mut idle = IdleInhibitor::new();
+    let apply_grab = |ctl: &mut Controller, inputs: &mut InputSet, idle: &mut IdleInhibitor| {
         let forgotten = ctl.take_forgotten();
         if !forgotten.is_empty() {
             inputs.forget(&forgotten);
@@ -480,6 +484,7 @@ fn cmd_run(
                 }
             }
         }
+        idle.set(grabbed.is_grabbed());
     };
 
     let mut connected = link.is_connected();
@@ -497,7 +502,7 @@ fn cmd_run(
                     for n in ctl.handle(event, Instant::now(), ts_us) {
                         println!("{}", notice_text(n));
                     }
-                    apply_grab(&mut ctl, &mut inputs);
+                    apply_grab(&mut ctl, &mut inputs, &mut idle);
                 }
                 // Its keys were released just before (InputSet sends key-ups).
                 InputMsg::Gone { path, error } => {
@@ -524,7 +529,7 @@ fn cmd_run(
             for n in ctl.command(Action::Off) {
                 println!("{}", notice_text(n));
             }
-            apply_grab(&mut ctl, &mut inputs);
+            apply_grab(&mut ctl, &mut inputs, &mut idle);
         }
         let now_connected = link.is_connected();
         if now_connected != connected {
@@ -551,7 +556,7 @@ fn cmd_run(
     }
 
     ctl.shutdown();
-    apply_grab(&mut ctl, &mut inputs);
+    apply_grab(&mut ctl, &mut inputs, &mut idle);
     drop(watchdog);
     drop(inputs);
     thread::sleep(Duration::from_millis(30));
