@@ -6,11 +6,12 @@
 
 #include <stdint.h>
 
-#define PSHB_LAT_BUCKETS 64
+#define PSHB_LAT_BUCKETS 128
 
 typedef struct {
     uint32_t bucket_us;                  // width of one bucket
     uint32_t count;
+    uint32_t min_us;                     // smallest value (0 if nothing was recorded)
     uint32_t max_us;
     uint32_t buckets[PSHB_LAT_BUCKETS];  // last bucket also takes everything above
 } latency_hist_t;

@@ -391,6 +391,44 @@ static void h_status(web_app_t *app, web_conn_t *c) {
     respond_json(c, 200, &w, NULL);
 }
 
+static void jw_lat(json_writer_t *w, const char *name, const web_lat_t *l) {
+    static const char *const part[] = {"n", "min", "p50", "p99", "max"};
+    const uint32_t v[] = {l->n, l->min, l->p50, l->p99, l->max};
+    for (int i = 0; i < 5; i++) {
+        char key[24];
+        snprintf(key, sizeof(key), "%s_%s", name, part[i]);
+        jw_int(w, key, v[i]);
+    }
+}
+
+static void h_diag(web_app_t *app, web_conn_t *c) {
+    web_diag_t d;
+    memset(&d, 0, sizeof(d));
+    app->be->diag(app->be->ctx, &d);
+    json_writer_t w;
+    jw_begin(&w, c->dyn, sizeof(c->dyn));
+    jw_lat(&w, "ready", &d.ready);
+    jw_lat(&w, "detect", &d.detect);
+    jw_lat(&w, "bus", &d.bus);
+    jw_lat(&w, "spi", &d.spi);
+    jw_lat(&w, "handle", &d.handle);
+    jw_lat(&w, "usb", &d.usb);
+    jw_int(&w, "rounds", d.rounds);
+    jw_int(&w, "datagrams", d.datagrams);
+    jw_int(&w, "core0_spi", d.core0_spi);
+    jw_int(&w, "cr_busy", d.cr_busy);
+    jw_int(&w, "mouse_inputs", d.mouse_inputs);
+    jw_int(&w, "mouse_waits", d.mouse_waits);
+    jw_int(&w, "mouse_fetches", d.mouse_fetches);
+    jw_int(&w, "mouse_misses", d.mouse_misses);
+    jw_int(&w, "mouse_lead_us", d.mouse_lead_us);
+    jw_int(&w, "crypto_min_ns", d.crypto_min_ns);
+    jw_int(&w, "crypto_avg_ns", d.crypto_avg_ns);
+    jw_int(&w, "crypto_max_ns", d.crypto_max_ns);
+    jw_int(&w, "spi_hz", d.spi_hz);
+    respond_json(c, 200, &w, NULL);
+}
+
 static void h_network(web_app_t *app, web_conn_t *c) {
     const char *b = c->req.body;
     size_t bl = c->req.body_received;
@@ -583,7 +621,16 @@ static void handle(web_app_t *app, web_conn_t *c) {
             h_status(app, c);
             return;
         }
+        if (strcmp(p, "/api/diag") == 0 && app->be->diag) {
+            h_diag(app, c);
+            return;
+        }
     } else if (r->method == HTTP_POST) {
+        if (strcmp(p, "/api/diag/reset") == 0 && app->be->diag_reset) {
+            app->be->diag_reset(app->be->ctx);
+            respond_ok(c);
+            return;
+        }
         if (strcmp(p, "/api/network") == 0) {
             h_network(app, c);
             return;
@@ -634,6 +681,8 @@ void web_conn_reset(web_conn_t *c, uint64_t now_us) {
     c->started_us = now_us;
     c->ota = false;
     c->ota_failed = false;
+    c->sink = false;
+    c->sink_bytes = 0;
     c->close_early = false;
 }
 
@@ -644,6 +693,10 @@ typedef struct {
 
 static void ota_body(void *ctx, const uint8_t *data, size_t len) {
     body_ctx_t *b = ctx;
+    if (b->conn->sink) {
+        b->conn->sink_bytes += (uint32_t)len;  // bench sink: counted and dropped
+        return;
+    }
     if (b->app->ota_signed && b->app->ota_owner == b->conn) crypto_blake2b_update(&b->app->ota_hash, data, len);
     if (!b->conn->ota_failed && !b->app->be->ota_write(b->app->be->ctx, data, len)) b->conn->ota_failed = true;
 }
@@ -692,26 +745,40 @@ static bool ota_signed_start(web_app_t *app, web_conn_t *c) {
     return true;
 }
 
+// Same rules as the web interface's firmware upload (logged in, own
+// password set, X-PSHB header): only then may a body be streamed.
+static bool upload_allowed(web_app_t *app, web_conn_t *c) {
+    http_req_t *r = &c->req;
+    if (!r->csrf_header) {
+        respond_error(c, 403, "Request rejected (X-PSHB header missing)");
+        return false;
+    }
+    if (!r->session[0] || session_find(app, r->session) < 0) {
+        respond_error(c, 401, "Please log in");
+        return false;
+    }
+    if (!app->settings->pw_set) {
+        respond_error(c, 403, "Please set your own password first");
+        return false;
+    }
+    return true;
+}
+
+static void sink_done(web_conn_t *c) {
+    json_writer_t w;
+    jw_begin(&w, c->dyn, sizeof(c->dyn));
+    jw_bool(&w, "ok", true);
+    jw_int(&w, "bytes", c->sink_bytes);
+    respond_json(c, 200, &w, NULL);
+}
+
 // Headers of POST /api/ota are complete: authorise, then stream the body.
 // Returns false if a response was produced already.
 // Either logged in (web interface) or signed with the key (app, CLI).
 static bool ota_start(web_app_t *app, web_conn_t *c) {
     http_req_t *r = &c->req;
     bool signed_upload = r->has_ota_auth || r->has_ota_auth2 || r->has_ota_hash;
-    if (!signed_upload) {
-        if (!r->csrf_header) {
-            respond_error(c, 403, "Request rejected (X-PSHB header missing)");
-            return false;
-        }
-        if (!r->session[0] || session_find(app, r->session) < 0) {
-            respond_error(c, 401, "Please log in");
-            return false;
-        }
-        if (!app->settings->pw_set) {
-            respond_error(c, 403, "Please set your own password first");
-            return false;
-        }
-    }
+    if (!signed_upload && !upload_allowed(app, c)) return false;
     if (!r->has_crc) {
         respond_error(c, 400, "Checksum (X-PSHB-CRC32) missing");
         return false;
@@ -773,6 +840,14 @@ void web_conn_input(web_app_t *app, web_conn_t *c, const uint8_t *data, size_t l
                     return;
                 }
                 http_req_decide(&c->req, true);
+            } else if (c->req.method == HTTP_POST && app->bench_sink &&
+                       strcmp(c->req.path, "/api/bench/sink") == 0) {
+                if (!upload_allowed(app, c)) {
+                    c->close_early = true;
+                    return;
+                }
+                c->sink = true;
+                http_req_decide(&c->req, true);
             } else {
                 http_req_decide(&c->req, false);  // all other routes take a small JSON body
             }
@@ -787,6 +862,8 @@ void web_conn_input(web_app_t *app, web_conn_t *c, const uint8_t *data, size_t l
     } else if (c->req.state == HTTP_PARSE_DONE) {
         if (c->ota) {
             ota_done(app, c);
+        } else if (c->sink) {
+            sink_done(c);
         } else {
             handle(app, c);
         }

@@ -125,6 +125,9 @@ add_custom_command(
 add_custom_target(partition_table ALL DEPENDS ${CMAKE_BINARY_DIR}/ps-hid-bridge-pt.uf2)
 pshb_add_firmware(ps-hid-bridge-plain OTA DEFINES PSHB_PLAINTEXT_DEBUG=1)
 pshb_add_firmware(ps-hid-bridge-rollbacktest OTA DEFINES PSHB_OTA_NO_CONFIRM=1)
+# Measurements (docs/latency.md): the normal firmware plus measuring pins
+# (GP2, GP3), a summary on the debug UART and the upload sink for load tests.
+pshb_add_firmware(ps-hid-bridge-timing OTA DEFINES PSHB_TIMING_GPIO=1 PSHB_TIMING_UART=1 PSHB_BENCH=1)
 
 # Recovery: erase everything (RAM-only image).
 add_executable(ps-hid-bridge-nuke src/tools/nuke.c)
@@ -137,7 +140,7 @@ pshb_add_firmware(ps-hid-bridge-hidtest-mouse8 DEFINES PSHB_TEST_PATTERN=1 PSHB_
 # The images of this build: the Makefile copies exactly these to out/ (not
 # leftovers of renamed or removed targets in the build directory).
 set(PSHB_IMAGES ps-hid-bridge ps-hid-bridge-pt ps-hid-bridge-plain ps-hid-bridge-rollbacktest
-    ps-hid-bridge-nuke ps-hid-bridge-hidtest ps-hid-bridge-hidtest-mouse8)
+    ps-hid-bridge-timing ps-hid-bridge-nuke ps-hid-bridge-hidtest ps-hid-bridge-hidtest-mouse8)
 list(TRANSFORM PSHB_IMAGES APPEND ".uf2")
 list(JOIN PSHB_IMAGES "\n" PSHB_IMAGES_TEXT)
 file(CONFIGURE OUTPUT ${CMAKE_BINARY_DIR}/images.txt CONTENT "${PSHB_IMAGES_TEXT}\n")

@@ -89,6 +89,36 @@ static void led_service(void) {
     }
 }
 
+// ---------------------------------------------------------------- diagnostics
+
+void diag_init(void) {
+    // Kept: the crypto measurement (made once at start) and the current lead.
+    uint32_t cmin = g_diag.crypto_min_ns, cavg = g_diag.crypto_avg_ns, cmax = g_diag.crypto_max_ns;
+    uint32_t lead = g_diag.mouse_lead_us;
+    memset(&g_diag, 0, sizeof(g_diag));
+    latency_init(&g_diag.usb, 50);
+    latency_init(&g_diag.rx, 5);
+    latency_init(&g_diag.ready, 2);
+    latency_init(&g_diag.detect, 1);
+    latency_init(&g_diag.bus, 2);
+    latency_init(&g_diag.spi, 1);
+    latency_init(&g_diag.handle, 1);
+    g_diag.crypto_min_ns = cmin;
+    g_diag.crypto_avg_ns = cavg;
+    g_diag.crypto_max_ns = cmax;
+    g_diag.mouse_lead_us = lead;
+    w5500_core0_spi_reset();
+}
+
+static inline void timing_pin(uint pin, bool on) {
+#if PSHB_TIMING_GPIO
+    gpio_put(pin, on);
+#else
+    (void)pin;
+    (void)on;
+#endif
+}
+
 // ---------------------------------------------------------------- network input
 
 static void net_service(void) {
@@ -109,35 +139,57 @@ static void net_service(void) {
     if (!w5500_int_asserted() && !time_reached(next_poll)) return;
     next_poll = make_timeout_time_ms(1);
     uint64_t noticed = time_us_64();
+    // When INTn fell (GPIO IRQ); a poll without an edge counts from now.
+    uint64_t edge = w5500_int_time_take();
+    bool had_edge = edge && edge <= noticed;
+    if (!had_edge) edge = noticed;
+    timing_pin(PSHB_TIMING_PIN_RX, true);
 
     // One lock for the whole round: core 1 cannot slip in between the
     // register accesses of a datagram.
     w5500_lock();
+    uint64_t locked = time_us_64();
     setSn_IR(W5500_SOCK_UDP, Sn_IR_RECV);
     uint16_t left = 0;
+    int got = 0;
     for (int i = 0; i < 8; i++) {
         uint8_t pkt[PSHB_MAX_PACKET_LEN];
         uint8_t ip[4];
         uint16_t port;
+        uint64_t t0 = time_us_64();
         int n = w5500_udp_recv(W5500_SOCK_UDP, pkt, sizeof(pkt), ip, &port, &left);
         if (n == W5500_RX_EMPTY) break;
+        uint64_t t1 = time_us_64();
+        latency_add(&g_diag.spi, (uint32_t)(t1 - t0));
+        got++;
         if (n < 0) {
             g_bridge.stats.rx_malformed++;
         } else {
             uint8_t reply[PSHB_MAX_PACKET_LEN];
             g_bridge.input_applied = false;
-            size_t rlen = bridge_handle_packet(&g_bridge, pkt, (size_t)n, ip_to_u32(ip), time_us_64(),
-                                               reply, sizeof(reply));
+            size_t rlen = bridge_handle_packet(&g_bridge, pkt, (size_t)n, ip_to_u32(ip), t1, reply,
+                                               sizeof(reply));
+            uint64_t t2 = time_us_64();
+            latency_add(&g_diag.handle, (uint32_t)(t2 - t1));
             if (rlen) w5500_udp_send_nb(W5500_SOCK_UDP, reply, (uint16_t)rlen, ip, port);
             if (g_bridge.input_applied) {
-                latency_add(&g_diag.rx, (uint32_t)(time_us_64() - noticed));
-                hid_out_note_input(noticed);
+                latency_add(&g_diag.rx, (uint32_t)(t2 - noticed));
+                latency_add(&g_diag.ready, (uint32_t)(t2 - edge));
+                hid_out_note_input(edge);
             }
             s_activity_until = make_timeout_time_ms(20);
         }
         if (left < 8) break;  // nothing more known; a new datagram raises INTn again
     }
     w5500_unlock();
+    timing_pin(PSHB_TIMING_PIN_RX, false);
+    // Rounds that found nothing are the fallback poll: not counted.
+    if (got) {
+        g_diag.rounds++;
+        g_diag.datagrams += (uint32_t)got;
+        latency_add(&g_diag.bus, (uint32_t)(locked - noticed));
+        if (had_edge) latency_add(&g_diag.detect, (uint32_t)(noticed - edge));
+    }
 }
 
 // ---------------------------------------------------------------- test pattern
@@ -207,6 +259,13 @@ int main(void) {
     stdio_init_all();
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+#if PSHB_TIMING_GPIO
+    for (uint pin = PSHB_TIMING_PIN_RX; pin <= PSHB_TIMING_PIN_FETCH; pin++) {
+        gpio_init(pin);
+        gpio_set_dir(pin, GPIO_OUT);
+        gpio_put(pin, 0);
+    }
+#endif
 
     printf("ps-hid-bridge %u.%u.%u: boot%s%s\n", (PSHB_FW_VERSION >> 24) & 0xFF,
            (PSHB_FW_VERSION >> 16) & 0xFF, PSHB_FW_VERSION & 0xFFFF,
@@ -214,8 +273,7 @@ int main(void) {
            PSHB_PLAINTEXT_DEBUG ? " (PLAINTEXT DEBUG)" : "");
 
     input_state_init(&g_input);
-    latency_init(&g_diag.usb, 50);
-    latency_init(&g_diag.rx, 5);
+    diag_init();
     bridge_init(&g_bridge, &g_input, get_rand_64(), get_rand_64(), time_us_64());
     g_bridge.allow_plaintext = PSHB_PLAINTEXT_DEBUG;
     critical_section_init(&s_cfg_lock);
@@ -246,6 +304,9 @@ int main(void) {
         test_pattern_service();
 #endif
         input_cfg_poll(&g_bridge);
+        if (g_diag.reset_request) {
+            diag_init();  // clears the request as well
+        }
         usb_status_service();
         bridge_tick(&g_bridge, time_us_64());
         hid_out_service();

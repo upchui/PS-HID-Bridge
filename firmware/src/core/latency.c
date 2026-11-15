@@ -11,6 +11,7 @@ void latency_add(latency_hist_t *h, uint32_t us) {
     uint32_t i = us / h->bucket_us;
     if (i >= PSHB_LAT_BUCKETS) i = PSHB_LAT_BUCKETS - 1;
     h->buckets[i]++;
+    if (h->count == 0 || us < h->min_us) h->min_us = us;
     h->count++;
     if (us > h->max_us) h->max_us = us;
 }

@@ -4,7 +4,9 @@
 
 #include "hardware/gpio.h"
 #include "hardware/spi.h"
+#include "hardware/sync.h"
 #include "pico/mutex.h"
+#include "pico/platform.h"
 #include "pico/time.h"
 #include "pico/unique_id.h"
 
@@ -26,12 +28,20 @@
 static recursive_mutex_t s_mutex;
 static uint8_t s_mac[6];
 static bool s_tx_busy[8];
+static uint32_t s_spi_hz;
+// Diagnostics: SPI transactions started by core 0, and when INTn last fell
+// (0 = not since it was taken).
+static volatile uint32_t s_core0_spi;
+static volatile uint64_t s_int_us;
 
 // ---------------------------------------------------------------- ioLibrary callbacks
 
 static void cris_enter(void) { recursive_mutex_enter_blocking(&s_mutex); }
 static void cris_exit(void) { recursive_mutex_exit(&s_mutex); }
-static void cs_select(void) { gpio_put(W5500_PIN_CS, 0); }
+static void cs_select(void) {
+    if (get_core_num() == 0) s_core0_spi++;
+    gpio_put(W5500_PIN_CS, 0);
+}
 static void cs_deselect(void) { gpio_put(W5500_PIN_CS, 1); }
 
 static uint8_t spi_read_byte(void) {
@@ -54,6 +64,12 @@ static void spi_write_burst(uint8_t *buf, uint16_t len) {
 
 // ---------------------------------------------------------------- init
 
+static void int_edge(uint gpio, uint32_t events) {
+    (void)gpio;
+    (void)events;
+    if (!s_int_us) s_int_us = time_us_64();
+}
+
 static void make_mac(uint8_t mac[6]) {
     pico_unique_board_id_t id;
     pico_get_unique_board_id(&id);
@@ -64,7 +80,7 @@ static void make_mac(uint8_t mac[6]) {
 bool w5500_port_init(void) {
     recursive_mutex_init(&s_mutex);
 
-    spi_init(W5500_SPI, PSHB_W5500_SPI_HZ);
+    s_spi_hz = spi_init(W5500_SPI, PSHB_W5500_SPI_HZ);
     gpio_set_function(W5500_PIN_SCK, GPIO_FUNC_SPI);
     gpio_set_function(W5500_PIN_MOSI, GPIO_FUNC_SPI);
     gpio_set_function(W5500_PIN_MISO, GPIO_FUNC_SPI);
@@ -111,6 +127,9 @@ bool w5500_port_init(void) {
     setRCR(2);
 
     setSIMR(0);
+    // Only a timestamp (diagnostics): the datagram itself is read in the
+    // main loop. Registered on core 0, which calls this function.
+    gpio_set_irq_enabled_with_callback(W5500_PIN_INT, GPIO_IRQ_EDGE_FALL, true, int_edge);
     return true;
 }
 
@@ -128,6 +147,26 @@ void w5500_unlock(void) {
 
 bool w5500_int_asserted(void) {
     return !gpio_get(W5500_PIN_INT);
+}
+
+uint64_t w5500_int_time_take(void) {
+    uint32_t irq = save_and_disable_interrupts();  // 64-bit value, written by the IRQ
+    uint64_t t = s_int_us;
+    s_int_us = 0;
+    restore_interrupts(irq);
+    return t;
+}
+
+uint32_t w5500_core0_spi(void) {
+    return s_core0_spi;
+}
+
+void w5500_core0_spi_reset(void) {
+    s_core0_spi = 0;
+}
+
+uint32_t w5500_spi_hz(void) {
+    return s_spi_hz;
 }
 
 // ---------------------------------------------------------------- UDP fast path

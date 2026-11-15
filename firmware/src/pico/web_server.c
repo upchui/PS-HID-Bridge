@@ -2,6 +2,8 @@
 
 #include "pico/time.h"
 
+#include "pshb_config.h"
+
 #include "socket.h"
 #include "w5500_port.h"
 #include "wizchip_conf.h"
@@ -32,6 +34,7 @@ static void end_conn(int i, uint8_t sn) {
 
 void web_server_init(const web_backend_t *be, pshb_settings_t *settings) {
     web_app_init(&s_app, be, settings);
+    s_app.bench_sink = PSHB_BENCH;
 }
 
 static void serve(int i, uint8_t sn) {

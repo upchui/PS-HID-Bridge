@@ -182,11 +182,23 @@ function updateStaticFields() {
   for (const el of $("static-fields").querySelectorAll("input")) el.disabled = !isStatic;
 }
 
+function renderDiag(d) {
+  const stage = (k) => d[k + "_n"]
+    ? `${d[k + "_p50"]} · ${d[k + "_p99"]} · ${d[k + "_max"]} (${d[k + "_n"]}×)` : "–";
+  for (const k of ["ready", "detect", "bus", "spi", "handle", "usb"]) $("d-" + k).textContent = stage(k);
+  $("d-miss").textContent = d.mouse_fetches
+    ? `${d.mouse_misses} of ${d.mouse_fetches} (${(100 * d.mouse_misses / d.mouse_fetches).toFixed(2)} %), filled ${d.mouse_lead_us} µs before the fetch`
+    : "–";
+  $("d-crypto").textContent = d.crypto_avg_ns ? `${(d.crypto_avg_ns / 1000).toFixed(1)} µs on average` : "–";
+  $("d-chip").textContent = `SPI ${(d.spi_hz / 1e6).toFixed(1)} MHz · ${d.datagrams} packets in ${d.rounds} rounds · ${d.core0_spi} transfers`;
+}
+
 async function refreshStatus(fill) {
   try {
     const st = await api("/api/status");
     renderStatus(st);
     if (fill) fillForms(st);
+    if ($("d-lat").open) renderDiag(await api("/api/diag"));
   } catch (e) {
     $("pill").textContent = "no connection";
     $("pill").className = "pill bad";
@@ -384,6 +396,19 @@ function init() {
       await api("/api/reboot", {});
       waitForReboot("The board is restarting …");
     } catch (e) { message(e.message, false); }
+  });
+  $("d-lat").addEventListener("toggle", async () => {
+    if ($("d-lat").open) {
+      try { renderDiag(await api("/api/diag")); } catch (e) { /* shown at the next refresh */ }
+    }
+  });
+  $("b-diag-reset").addEventListener("click", async () => {
+    try {
+      await api("/api/diag/reset", {});
+      setTimeout(async () => renderDiag(await api("/api/diag")), 300);
+    } catch (e) {
+      message(e.message, false);
+    }
   });
   $("b-reset").addEventListener("click", () => { $("reset-confirm").hidden = false; });
   $("b-reset-no").addEventListener("click", () => { $("reset-confirm").hidden = true; });

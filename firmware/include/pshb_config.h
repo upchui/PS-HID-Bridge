@@ -19,6 +19,24 @@
 #define PSHB_W5500_SPI_HZ (25 * 1000 * 1000)
 #endif
 
+// Measuring points (docs/latency.md), all off in the normal image:
+// PSHB_TIMING_GPIO: GP2 is high from "INTn noticed" until the input is
+//   applied, GP3 toggles on every mouse report the host fetches;
+// PSHB_TIMING_UART: a latency summary on the debug UART every 10 s;
+// PSHB_BENCH: POST /api/bench/sink takes uploads and throws them away
+//   (network load like a firmware update, without flash writes).
+#ifndef PSHB_TIMING_GPIO
+#define PSHB_TIMING_GPIO 0
+#endif
+#define PSHB_TIMING_PIN_RX    2
+#define PSHB_TIMING_PIN_FETCH 3
+#ifndef PSHB_TIMING_UART
+#define PSHB_TIMING_UART 0
+#endif
+#ifndef PSHB_BENCH
+#define PSHB_BENCH 0
+#endif
+
 // USB identity. 1209:0001 is the pid.codes *Test PID*: fine for private,
 // in-house use, but NOT unique -- do not distribute devices with it.
 #define PSHB_USB_VID        0x1209

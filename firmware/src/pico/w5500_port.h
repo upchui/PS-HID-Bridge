@@ -41,6 +41,13 @@ void w5500_get_mac(uint8_t mac[6]);
 // INTn is active low; asserted while socket 1 has unacknowledged RECV.
 bool w5500_int_asserted(void);
 
+// Diagnostics (core 0): when INTn last fell, taken once (0 = no edge since
+// the last call); SPI transactions core 0 started; the actual SPI clock.
+uint64_t w5500_int_time_take(void);
+uint32_t w5500_core0_spi(void);
+void w5500_core0_spi_reset(void);
+uint32_t w5500_spi_hz(void);
+
 // Hold the SPI bus across several calls (recursive; the ioLibrary calls
 // inside still work). Core 0 takes it once per receive round, so it waits
 // for core 1 at most once instead of before every register access.

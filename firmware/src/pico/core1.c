@@ -13,6 +13,7 @@
 #include "flash_store.h"
 #include "net_shared.h"
 #include "ota.h"
+#include "proto.h"
 #include "protocol.h"
 #include "pshb_config.h"
 #include "pshb_version.h"
@@ -214,6 +215,84 @@ static void be_status(void *ctx, web_status_t *out) {
     out->mouse_lead_us = g_diag.mouse_lead_us;
 }
 
+static void lat(web_lat_t *out, const latency_hist_t *h) {
+    out->n = h->count;
+    out->min = h->min_us;
+    out->p50 = latency_percentile(h, 50);
+    out->p99 = latency_percentile(h, 99);
+    out->max = h->max_us;
+}
+
+static void be_diag(void *ctx, web_diag_t *out) {
+    (void)ctx;
+    lat(&out->ready, &g_diag.ready);
+    lat(&out->detect, &g_diag.detect);
+    lat(&out->bus, &g_diag.bus);
+    lat(&out->spi, &g_diag.spi);
+    lat(&out->handle, &g_diag.handle);
+    lat(&out->usb, &g_diag.usb);
+    out->rounds = g_diag.rounds;
+    out->datagrams = g_diag.datagrams;
+    out->core0_spi = w5500_core0_spi();
+    out->cr_busy = g_diag.cr_busy;
+    out->mouse_inputs = g_diag.mouse_inputs;
+    out->mouse_waits = g_diag.mouse_waits;
+    out->mouse_fetches = g_diag.mouse_fetches;
+    out->mouse_misses = g_diag.mouse_misses;
+    out->mouse_lead_us = g_diag.mouse_lead_us;
+    out->crypto_min_ns = g_diag.crypto_min_ns;
+    out->crypto_avg_ns = g_diag.crypto_avg_ns;
+    out->crypto_max_ns = g_diag.crypto_max_ns;
+    out->spi_hz = w5500_spi_hz();
+}
+
+static void be_diag_reset(void *ctx) {
+    (void)ctx;
+    g_diag.reset_request = true;  // core 0 owns the statistics
+}
+
+// How long decrypting one INPUT packet takes, as on the input path (same
+// CPU speed on both cores; core 1 measures, so core 0 does not wait).
+static void crypto_bench(void) {
+    uint8_t key[PSHB_KEY_LEN], payload[PSHB_INPUT_PAYLOAD_LEN] = {0}, out[PSHB_INPUT_PAYLOAD_LEN];
+    uint8_t pkt[PSHB_MAX_PACKET_LEN];
+    for (size_t i = 0; i < sizeof(key); i++) key[i] = (uint8_t)get_rand_32();
+    size_t len = proto_seal(key, PSHB_DIR_APP_TO_BOARD, PSHB_TYPE_INPUT, 1, payload, sizeof(payload), pkt,
+                            sizeof(pkt));
+    enum { RUNS = 1000 };
+    uint32_t min = UINT32_MAX, max = 0;
+    uint64_t start = time_us_64();
+    for (int i = 0; i < RUNS; i++) {
+        uint64_t t0 = time_us_64();
+        if (!proto_decrypt(key, PSHB_DIR_APP_TO_BOARD, pkt, len, out)) {
+            printf("crypto: self-check failed\n");
+            return;
+        }
+        uint32_t d = (uint32_t)(time_us_64() - t0);
+        if (d < min) min = d;
+        if (d > max) max = d;
+    }
+    uint64_t total = time_us_64() - start;
+    g_diag.crypto_min_ns = min * 1000;
+    g_diag.crypto_max_ns = max * 1000;
+    g_diag.crypto_avg_ns = (uint32_t)(total * 1000 / RUNS);
+    printf("crypto: decrypting a %u-byte packet takes %lu ns on average\n", (unsigned)len,
+           (unsigned long)g_diag.crypto_avg_ns);
+}
+
+#if PSHB_TIMING_UART
+static void timing_print(void) {
+    web_diag_t d;
+    be_diag(NULL, &d);
+    printf("lat: ready %lu/%lu/%lu us (p50/p99/max), bus %lu/%lu/%lu, spi %lu, handle %lu, "
+           "missed %lu of %lu fetches\n",
+           (unsigned long)d.ready.p50, (unsigned long)d.ready.p99, (unsigned long)d.ready.max,
+           (unsigned long)d.bus.p50, (unsigned long)d.bus.p99, (unsigned long)d.bus.max,
+           (unsigned long)d.spi.p50, (unsigned long)d.handle.p50, (unsigned long)d.mouse_misses,
+           (unsigned long)d.mouse_fetches);
+}
+#endif
+
 static bool be_save(void *ctx, const pshb_settings_t *s) {
     (void)ctx;
     pshb_settings_t copy = *s;
@@ -284,6 +363,8 @@ static void be_ota_activate(void *ctx) {
 static const web_backend_t k_backend = {
     .ctx = NULL,
     .status = be_status,
+    .diag = be_diag,
+    .diag_reset = be_diag_reset,
     .save = be_save,
     .apply = be_apply,
     .reboot = be_reboot,
@@ -326,6 +407,7 @@ static void bootsel_service(void) {
 void core1_main(void) {
     absolute_time_t next_second = make_timeout_time_ms(1000);
 
+    crypto_bench();
     reg_dhcp_cbfunc(on_dhcp_assign, on_dhcp_assign, on_dhcp_conflict);
     set_state(C1_NO_LINK);
     web_server_init(&k_backend, &g_settings);
@@ -342,6 +424,10 @@ void core1_main(void) {
         if (time_reached(next_second)) {
             next_second = delayed_by_ms(next_second, 1000);
             DHCP_time_handler();
+#if PSHB_TIMING_UART
+            static unsigned seconds;
+            if (++seconds % 10 == 0) timing_print();
+#endif
         }
 
         if (s_ota_activate) {

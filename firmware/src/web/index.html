@@ -87,6 +87,22 @@
           <tr><th>Mouse report timing</th><td id="s-lat-timing">–</td></tr>
         </table>
       </details>
+      <details class="card" id="d-lat">
+        <summary>Latency of the input path</summary>
+        <p class="hint">Measured by the board itself in µs, since the start or the last reset: median · 99 % below · slowest.</p>
+        <table class="kv">
+          <tr><th>Packet → report ready</th><td id="d-ready">–</td></tr>
+          <tr><th>… noticed by the board</th><td id="d-detect">–</td></tr>
+          <tr><th>… waiting for the network chip</th><td id="d-bus">–</td></tr>
+          <tr><th>… reading it</th><td id="d-spi">–</td></tr>
+          <tr><th>… checking and decrypting</th><td id="d-handle">–</td></tr>
+          <tr><th>Packet → fetched by the PlayStation</th><td id="d-usb">–</td></tr>
+          <tr><th>Missed polls</th><td id="d-miss">–</td></tr>
+          <tr><th>Decrypting one packet</th><td id="d-crypto">–</td></tr>
+          <tr><th>Network chip</th><td id="d-chip">–</td></tr>
+        </table>
+        <button id="b-diag-reset" type="button" class="secondary">Start over</button>
+      </details>
     </section>
 
     <section id="t-network" class="tabpane" hidden>

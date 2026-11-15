@@ -267,6 +267,21 @@ static void be_ota_abort(void *ctx) {
     s_ota_running = false;
 }
 
+// No measurements in the simulator: everything 0; a reset is counted so the
+// tests can see that it arrived.
+static unsigned s_diag_resets;
+
+static void be_diag(void *ctx, web_diag_t *out) {
+    (void)ctx;
+    memset(out, 0, sizeof(*out));
+    out->rounds = s_diag_resets;
+}
+
+static void be_diag_reset(void *ctx) {
+    (void)ctx;
+    s_diag_resets++;
+}
+
 static void be_ota_activate(void *ctx) {
     (void)ctx;
     s_ota_running = false;
@@ -276,6 +291,8 @@ static void be_ota_activate(void *ctx) {
 static const web_backend_t k_backend = {
     .ctx = NULL,
     .status = be_status,
+    .diag = be_diag,
+    .diag_reset = be_diag_reset,
     .save = be_save,
     .apply = be_apply,
     .reboot = be_reboot,
@@ -483,6 +500,7 @@ int main(int argc, char **argv) {
 
     web_app_t app;
     web_app_init(&app, &k_backend, &S.settings);
+    app.bench_sink = true;
     http_slot_t slots[MAX_CONNS];
     for (int i = 0; i < MAX_CONNS; i++) slots[i].fd = -1;
 
@@ -521,6 +539,7 @@ int main(int argc, char **argv) {
             printf("REBOOT\n");
             boot();
             web_app_init(&app, &k_backend, &S.settings);
+            app.bench_sink = true;
         }
 
         t = now_us();

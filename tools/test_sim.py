@@ -783,6 +783,31 @@ class WebTests(unittest.TestCase):
         # 80 is a TCP port: no conflict for UDP input.
         self.assertEqual(self.web.req("POST", "/api/network", {"mode": "dhcp", "udp_port": 80})[0], 200)
 
+    def test_latency_diagnostics(self):
+        self.assertEqual(self.web.req("GET", "/api/diag")[0], 401)
+        self.setup_password()
+        status, d, _ = self.web.req("GET", "/api/diag")
+        self.assertEqual(status, 200)
+        for stage in ("ready", "detect", "bus", "spi", "handle", "usb"):
+            for part in ("n", "min", "p50", "p99", "max"):
+                self.assertIn(f"{stage}_{part}", d)
+        for k in ("rounds", "datagrams", "core0_spi", "cr_busy", "mouse_inputs", "mouse_waits",
+                  "mouse_fetches", "mouse_misses", "mouse_lead_us", "crypto_min_ns", "crypto_avg_ns",
+                  "crypto_max_ns", "spi_hz"):
+            self.assertIn(k, d)
+        self.assertEqual(d["rounds"], 0)
+        # Reset reaches the backend (the simulator counts it in "rounds").
+        self.assertEqual(self.web.req("POST", "/api/diag/reset", {})[0], 200)
+        self.assertEqual(self.web.req("GET", "/api/diag")[1]["rounds"], 1)
+
+    def test_bench_sink_takes_uploads_only_when_logged_in(self):
+        body = bytes(range(256)) * 300  # 75 KiB
+        self.assertIn(self.web.upload("/api/bench/sink", body, None)[0], (0, 401))
+        self.setup_password()
+        status, r = self.web.upload("/api/bench/sink", body, None)
+        self.assertEqual((status, r), (200, {"ok": True, "bytes": len(body)}))
+        self.assertFalse(self.sim.wait_line(f"OTA BEGIN {len(body)}", timeout=0.2))
+
     def test_firmware_upload_needs_login(self):
         import zlib
         uf2 = make_uf2(4)

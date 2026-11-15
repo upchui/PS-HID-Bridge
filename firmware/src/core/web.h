@@ -44,9 +44,34 @@ typedef struct {
     uint32_t mouse_lead_us;  // reports are armed this long before the fetch (0 = right away)
 } web_status_t;
 
+// One stage of the input path: count, minimum, median, 99th percentile and
+// maximum in microseconds (percentiles are bucket upper edges).
+typedef struct {
+    uint32_t n, min, p50, p99, max;
+} web_lat_t;
+
+// Detailed latency diagnostics (GET /api/diag, see docs/latency.md).
+typedef struct {
+    web_lat_t ready;   // INTn -> input applied ("packet -> report ready")
+    web_lat_t detect;  // INTn -> noticed by the main loop
+    web_lat_t bus;     // core 0 waits for the SPI bus (per receive round)
+    web_lat_t spi;     // reading one datagram over SPI
+    web_lat_t handle;  // checks + decryption + apply
+    web_lat_t usb;     // INTn -> report fetched by the host
+    uint32_t rounds, datagrams;  // receive rounds and datagrams read in them
+    uint32_t core0_spi;          // SPI transactions by core 0
+    uint32_t cr_busy;            // command register still busy at the next command
+    uint32_t mouse_inputs, mouse_waits, mouse_fetches, mouse_misses, mouse_lead_us;
+    uint32_t crypto_min_ns, crypto_avg_ns, crypto_max_ns;  // decrypting one INPUT packet
+    uint32_t spi_hz;             // SPI clock to the W5500
+} web_diag_t;
+
 typedef struct {
     void *ctx;
     void (*status)(void *ctx, web_status_t *out);
+    // Latency diagnostics, and starting them over (both optional).
+    void (*diag)(void *ctx, web_diag_t *out);
+    void (*diag_reset)(void *ctx);
     bool (*save)(void *ctx, const pshb_settings_t *s);
     // New key / sender filter for the input path (takes effect immediately).
     void (*apply)(void *ctx, const pshb_settings_t *s);
@@ -85,6 +110,9 @@ typedef struct {
     bool ota_signed;
     uint8_t ota_signed_hash[32];
     crypto_blake2b_ctx ota_hash;
+    // Measurement builds: POST /api/bench/sink takes uploads like a firmware
+    // update and throws them away (network load without flash writes).
+    bool bench_sink;
 } web_app_t;
 
 typedef enum { WEB_AFTER_NONE, WEB_AFTER_REBOOT, WEB_AFTER_FACTORY_RESET, WEB_AFTER_OTA } web_after_t;
@@ -102,6 +130,8 @@ typedef struct {
     uint64_t started_us;
     bool ota;          // this request streams a firmware image
     bool ota_failed;
+    bool sink;         // this request streams into the bench sink
+    uint32_t sink_bytes;
     bool close_early;  // answered before the body arrived: close after sending
 } web_conn_t;
 

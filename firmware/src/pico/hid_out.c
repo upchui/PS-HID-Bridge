@@ -1,7 +1,10 @@
 #include "hid_out.h"
 
+#include "hardware/gpio.h"
 #include "pico/time.h"
 #include "tusb.h"
+
+#include "pshb_config.h"
 
 #include "diag.h"
 #include "usb_descriptors.h"
@@ -120,6 +123,10 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
     if (instance >= ITF_COUNT) return;
     uint64_t now = time_us_64();
     if (instance == ITF_MOUSE) {
+        g_diag.mouse_fetches++;
+#if PSHB_TIMING_GPIO
+        gpio_xor_mask(1u << PSHB_TIMING_PIN_FETCH);
+#endif
         if (usb_timing_fetched(&s_mouse_timing, now)) g_diag.mouse_misses++;
 #if PSHB_MOUSE_LATE_ARM
         g_diag.mouse_lead_us = s_mouse_timing.lead_us;
