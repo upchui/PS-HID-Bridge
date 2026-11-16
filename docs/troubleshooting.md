@@ -14,7 +14,7 @@ What helps with a receiver that loses releases: the mouse wired, the receiver on
 
 ## The board is not found over USB
 
-Use a USB cable with data lines, hold BOOTSEL *while* plugging in, and check that `udisks2` runs (`systemctl status udisks2`). See [Flashing over USB from the PC](../README.md#flashing-over-usb-from-the-pc).
+Use a USB cable with data lines, hold BOOTSEL *while* plugging in, and check that `udisks2` runs (`systemctl status udisks2`). See [Flashing over USB from the PC](advanced-setup.md#flashing-over-usb-from-the-pc).
 
 ## Wrong characters on the PlayStation
 
@@ -34,4 +34,4 @@ A USB network adapter with the `cdc_ncm` driver holds every outgoing packet back
 
 ## The board went back to the previous firmware after an update
 
-A new firmware starts "on trial" and is only accepted once it has started by itself and reaches the network chip; otherwise the board returns to the previous version after a restart, and the app says so. A board without the partition table from the first installation cannot fall back. See [Firmware update over the network](../README.md#firmware-update-over-the-network).
+A new firmware starts "on trial" and is only accepted once it has started by itself and reaches the network chip; otherwise the board returns to the previous version after a restart, and the app says so. A board without the partition table from the first installation cannot fall back. See [Firmware update over the network](advanced-setup.md#firmware-update-over-the-network).

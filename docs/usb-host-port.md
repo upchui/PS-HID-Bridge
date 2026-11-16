@@ -53,7 +53,7 @@ The firmware does not use such a port. In November 2026 one was built and tested
 
 ### Conflict with the timing image
 
-`ps-hid-bridge-timing.uf2` uses GP2/GP3 as measuring outputs: it would drive the socket's data lines. Do not install it while a device is plugged into the socket. Or move its pins to free ones first: `PSHB_TIMING_PIN_RX` / `PSHB_TIMING_PIN_FETCH` in `firmware/include/pshb_config.h`, e.g. GP6/GP7. The experiment did that; update the README and [latency.md](latency.md) along with it.
+`ps-hid-bridge-timing.uf2` uses GP2/GP3 as measuring outputs: it would drive the socket's data lines. Do not install it while a device is plugged into the socket. Or move its pins to free ones first: `PSHB_TIMING_PIN_RX` / `PSHB_TIMING_PIN_FETCH` in `firmware/include/pshb_config.h`, e.g. GP6/GP7. The experiment did that; update [advanced-setup.md](advanced-setup.md#other-images) and [latency.md](latency.md) along with it.
 
 ### Chip
 

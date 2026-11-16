@@ -74,7 +74,7 @@ enum Command {
     Replay {
         #[command(flatten)]
         board: BoardArgs,
-        /// Script file (format: see README)
+        /// Script file (format: see docs/advanced-setup.md)
         file: PathBuf,
         #[arg(long)]
         hotkey: Option<String>,

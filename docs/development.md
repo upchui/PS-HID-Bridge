@@ -80,7 +80,7 @@ To check the layout, `make ui-shots` takes every page at the window widths 612 (
 
 ## Checks on real hardware
 
-For a new board or a bigger firmware change. The order is chosen so that each step builds on the previous one. The images are listed under [Other images](../README.md#other-images).
+For a new board or a bigger firmware change. The order is chosen so that each step builds on the previous one. The images are listed under [Other images](advanced-setup.md#other-images).
 
 1. `picotool info -a` (BOOTSEL mode): RP2350A, 2 MB flash.
 2. `ps-hid-bridge-hidtest.uf2` on the PC: `lsusb -v` (1209:0001, two HID interfaces), `evtest` (the mouse moves in a square), polling rate 1000 Hz (`usbhid-dump` / usbmon).
