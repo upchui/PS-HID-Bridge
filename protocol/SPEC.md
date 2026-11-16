@@ -13,7 +13,7 @@ All three are checked against the shared test vectors in `protocol/vectors/`.
 - Transport: UDP; the board listens on port **45045** (configurable).
 - Every packet is encrypted and authenticated with **ChaCha20-Poly1305** (RFC 8439) and a **pre-shared key** (256 bit).
 - All numbers are **little endian**.
-- The board silently drops packets with a bad tag, an old counter, a wrong session or a foreign sender IP, and only counts them.
+- The board silently drops packets with a bad tag, an old counter or a foreign sender IP, and only counts them. For a wrong session it answers with a session hint at most every 100 ms (see "Processing on the board").
 
 ## Packet layout
 
@@ -132,13 +132,14 @@ Only the debug image `ps-hid-bridge-plain.uf2` and the simulator with `--plainte
 Besides the web interface (login), the app and `pshb-cli` can install firmware over HTTP (port 80) by proving that they know the pre-shared key. BLAKE2b-256 with a key, as in RFC 7693 (`crypto_blake2b_keyed` in Monocypher, `hashlib.blake2b(key=…, digest_size=32)` in Python):
 
 - `K_ota = BLAKE2b-256(key = PSK, message = "pshb-ota-key-v1")`: its own key, so the packet key is used for nothing else.
-- `GET /api/ota/challenge` (no login) returns `{"nonce": "<32 hex digits>"}`: 16 random bytes, valid for 60 seconds and for one upload. A new challenge replaces the previous one. Without a key on the board the answer is 403.
+- `GET /api/ota/challenge` (no login) returns `{"nonce": "<32 hex digits>"}`: 16 random bytes, valid for 60 seconds and for one upload or signed request. The board keeps the last four, so several programs (the app, `pshb-cli`, an update) can each use their own; firmware before 1.0.30 kept only the last one. Without a key on the board the answer is 403.
 - `POST /api/ota` with the UF2 file as body and these headers (each MAC/hash as 64 hex digits):
+  - `X-PSHB-Nonce: <32 hex digits>`: the challenge used. Without it the board takes the newest one (older clients).
   - `X-PSHB-CRC32: <hex>`
   - `X-PSHB-OTA-Hash`: `H = BLAKE2b-256(body)` (no key)
   - `X-PSHB-OTA-Auth2`: `BLAKE2b-256(key = K_ota, message = "pshb-ota-v2" || nonce || length of the body (u32 LE) || H)`
   - `X-PSHB-OTA-Auth`: `BLAKE2b-256(key = K_ota, message = "pshb-ota-v1" || nonce || length of the body (u32 LE) || body)`. This is the old signature; firmware before 1.0.9 checks only this one, newer firmware ignores it. Clients send it as long as such boards may be around.
-- The board uses up the challenge and checks `X-PSHB-OTA-Auth2` (in constant time) **before anything is written to the flash**. A wrong signature gives 403 "Signature does not match"; a request with only `X-PSHB-OTA-Auth` gives 403 "Please update the app". While the data is written to the inactive slot, the board hashes it and compares the result with `X-PSHB-OTA-Hash` before anything is activated (403 "The file does not match its signature"). Then the usual checks follow (CRC, UF2 contents), and the board restarts into the new firmware as with an upload from the web interface.
+- The board uses up the challenge (also when the signature turns out wrong) and checks `X-PSHB-OTA-Auth2` (in constant time) **before anything is written to the flash**. A challenge it does not know (any more) gives 403 "Challenge missing or expired": fetch a new one and try again. An upload refused before its body has arrived gets its answer all the same: the board reads the rest of the body and throws it away. A wrong signature gives 403 "Signature does not match"; a request with only `X-PSHB-OTA-Auth` gives 403 "Please update the app". While the data is written to the inactive slot, the board hashes it and compares the result with `X-PSHB-OTA-Hash` before anything is activated (403 "The file does not match its signature"). Then the usual checks follow (CRC, UF2 contents), and the board restarts into the new firmware as with an upload from the web interface.
 
 The signature covers the whole file through its hash, not only the CRC (a CRC can be forged), and the challenge makes a recorded upload worthless (no downgrade by replaying it). Checking it before writing matters: firmware before 1.0.9 checked the old signature only after the whole file, so anyone in the network could write a file into the flash (refused afterwards, but written). Whoever knows the key can install firmware, which is why the key never leaves the PC and the board's web interface.
 
@@ -147,13 +148,17 @@ The signature covers the whole file through its hash, not only the CRC (a CRC ca
 The app reads the board's status and latency diagnostics and sets its clock speeds with the key instead of the web password, over the same HTTP interface:
 
 - A fresh challenge (`GET /api/ota/challenge`, as above; valid for one signed request or upload, 60 seconds).
-- The request carries `X-PSHB-Auth: <64 hex digits>` = `BLAKE2b-256(key = K_ota, message = "pshb-req-v1" || nonce || method || " " || path || "\n" || body)` (method `GET` or `POST`, the path without query, the body as sent; empty for GET). POST requests also carry `X-PSHB: 1` like every POST.
+- The request carries `X-PSHB-Auth: <64 hex digits>` = `BLAKE2b-256(key = K_ota, message = "pshb-req-v1" || nonce || method || " " || path || "\n" || body)` (method `GET` or `POST`, the path without query, the body as sent; empty for GET), and `X-PSHB-Nonce` as for an upload. POST requests also carry `X-PSHB: 1` like every POST. Other methods are refused (405) before a challenge is used up.
 - Allowed with a signature: `GET /api/status`, `GET /api/diag`, `POST /api/diag/reset`, `POST /api/clock`. Anything else answers 403 "Not allowed with a signature": password, key, network settings and firmware keep their own ways in. A wrong signature or a used-up challenge answers 403.
 
 Clock speeds:
 
 - `GET /api/clock` (no login, nothing secret): `{"cpu_mhz": 150|200, "spi_fast": bool, "cpu_hz": …, "spi_hz": …, "cpu_fell_back": bool, "spi_fast_failed": bool}` -- the setting and what runs. `cpu_fell_back`: 200 MHz is set, but the last start at 200 MHz did not get through its trial (the board restarted by itself within 10 s), so it runs at 150 MHz and the setting is back at 150. `spi_fast_failed`: the fast SPI clock failed its self-test at start.
 - `POST /api/clock` (logged in or signed) with `{"cpu_mhz": 150|200, "spi_fast": bool}` (both optional): answers `{"ok": true, "reboot": bool}`; on a change the board stores it and restarts. 200 MHz is beyond the RP2350's rating. The SPI clock follows the CPU clock: standard 25 MHz; fast 37.5 MHz at 150 MHz and 33.3 MHz at 200 MHz.
+
+## Host header
+
+Against DNS rebinding (a web page whose name is pointed at the board's address would otherwise be the board's origin in the browser), the board answers 421 to every request whose `Host` is neither an IPv4 or IPv6 address (with or without port), nor `localhost`, nor its own name `ps-hid-bridge-xxxxxx` (the name it registers with DHCP; any domain may follow, e.g. `ps-hid-bridge-a1b2c3.fritz.box`). A request without `Host` is accepted. Clients address the board by its IP address.
 
 ## Test vectors
 

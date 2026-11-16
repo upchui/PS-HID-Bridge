@@ -55,7 +55,6 @@ typedef struct {
     uint32_t blocks_written;
     uint8_t seen[UF2_MAX_SECTORS * (UF2_SECTOR_SIZE / UF2_PAYLOAD_SIZE) / 8];
     uint8_t erased[UF2_MAX_SECTORS / 8];
-    uint32_t image_end;      // highest written offset + 256
     uf2_result_t error;
 } uf2_writer_t;
 

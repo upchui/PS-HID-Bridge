@@ -1,5 +1,7 @@
 #include "web_server.h"
 
+#include <stdio.h>
+
 #include "pico/time.h"
 
 #include "pshb_config.h"
@@ -36,6 +38,13 @@ static void end_conn(int i, uint8_t sn) {
 void web_server_init(const web_backend_t *be, pshb_settings_t *settings) {
     web_app_init(&s_app, be, settings);
     s_app.bench_sink = PSHB_BENCH;
+    // The name the board registers with DHCP (ioLibrary: "ps-hid-bridge-"
+    // and the last three bytes of the MAC address).
+    uint8_t mac[6];
+    char name[WEB_HOSTNAME_MAX];
+    w5500_get_mac(mac);
+    snprintf(name, sizeof(name), "ps-hid-bridge-%02x%02x%02x", mac[3], mac[4], mac[5]);
+    web_app_set_hostname(&s_app, name);
 }
 
 static void serve(int i, uint8_t sn) {
@@ -91,6 +100,7 @@ void web_server_service(void) {
             break;
         case SOCK_CLOSE_WAIT:
             // The client finished sending; answer what we have, then close.
+            if (getSn_RX_RSR(sn) == 0) web_conn_input_end(&s_conn[i]);
             if (getSn_RX_RSR(sn) > 0 || (s_open[i] && s_conn[i].responding && !web_conn_done(&s_conn[i]))) {
                 serve(i, sn);
             } else {

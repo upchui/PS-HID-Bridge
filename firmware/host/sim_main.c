@@ -158,10 +158,13 @@ static void boot(void) {
 
 // ---------------------------------------------------------------- web backend
 
+// The board's name for this MAC address (see be_status), allowed as Host.
+#define SIM_HOSTNAME "ps-hid-bridge-514d00"
+
 static void be_status(void *ctx, web_status_t *out) {
     (void)ctx;
     out->fw_version = S.bridge.fw_version;
-    out->uptime_ms = (uint32_t)((now_us() - S.boot_us) / 1000);
+    out->uptime_ms = (now_us() - S.boot_us) / 1000;
     static const uint8_t mac[6] = {0x02, 0x00, 0x00, 0x51, 0x4D, 0x00};
     memcpy(out->mac, mac, 6);
     static const uint8_t ip[4] = {127, 0, 0, 1}, mask[4] = {255, 0, 0, 0};
@@ -387,11 +390,20 @@ static void http_service(web_app_t *app, http_slot_t *slots, int listen_fd, uint
         ssize_t n = recv(s->fd, buf, sizeof(buf), 0);
         if (n > 0) {
             web_conn_input(app, &s->conn, buf, (size_t)n);
-        } else if (n == 0 && !s->conn.responding) {
+        } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            // Reset by the client (as the board's chip reports it): done.
             web_conn_close(app, &s->conn);
             close(s->fd);
             s->fd = -1;
             continue;
+        } else if (n == 0) {
+            if (!s->conn.responding) {
+                web_conn_close(app, &s->conn);
+                close(s->fd);
+                s->fd = -1;
+                continue;
+            }
+            web_conn_input_end(&s->conn);  // the client finished sending
         }
         const uint8_t *out;
         size_t len;
@@ -509,6 +521,7 @@ int main(int argc, char **argv) {
 
     web_app_t app;
     web_app_init(&app, &k_backend, &S.settings);
+    web_app_set_hostname(&app, SIM_HOSTNAME);
     app.bench_sink = true;
     http_slot_t slots[MAX_CONNS];
     for (int i = 0; i < MAX_CONNS; i++) slots[i].fd = -1;
@@ -548,6 +561,7 @@ int main(int argc, char **argv) {
             printf("REBOOT\n");
             boot();
             web_app_init(&app, &k_backend, &S.settings);
+            web_app_set_hostname(&app, SIM_HOSTNAME);
             app.bench_sink = true;
         }
 

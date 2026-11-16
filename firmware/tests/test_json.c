@@ -50,11 +50,27 @@ TEST(reader) {
     CHECK(jr_str(j, len, "mode", s, sizeof(s)) && strcmp(s, "static") == 0);
     CHECK(jr_int(j, len, "udp_port", &v) && v == 45045);
     CHECK(jr_bool(j, len, "on", &b) && !b);
-    CHECK(jr_str(j, len, "pw", s, sizeof(s)) && strcmp(s, "Gr?\"n\\") == 0);
+    CHECK(jr_str(j, len, "pw", s, sizeof(s)) && strcmp(s, "Grü\"n\\") == 0);  // \u escape -> UTF-8
     CHECK(jr_str(j, len, "umlaut", s, sizeof(s)) && strcmp(s, "Grün") == 0);  // raw UTF-8 kept
     CHECK(!jr_str(j, len, "udp_port", s, sizeof(s)));  // wrong type
     CHECK(!jr_int(j, len, "missing", &v));
     CHECK(!jr_str(j, len, "mode", s, 3));               // too small
+}
+
+TEST(reader_unicode_escapes) {
+    char s[16];
+    // The same text escaped (Python's json.dumps) and raw (a browser).
+    const char *a = "{\"a\":\"\\u20ac \\ud83d\\ude00\"}";
+    CHECK(jr_str(a, strlen(a), "a", s, sizeof(s)) && strcmp(s, "\xe2\x82\xac \xf0\x9f\x98\x80") == 0);
+    const char *nul = "{\"a\":\"x\\u0000y\"}";
+    CHECK(!jr_str(nul, strlen(nul), "a", s, sizeof(s)));  // would cut the text short
+    const char *lone = "{\"a\":\"\\ud83d\"}";
+    CHECK(!jr_str(lone, strlen(lone), "a", s, sizeof(s)));  // high surrogate alone
+    const char *low = "{\"a\":\"\\ude00\"}";
+    CHECK(!jr_str(low, strlen(low), "a", s, sizeof(s)));
+    const char *tight = "{\"a\":\"\\u00fc\"}";
+    CHECK(!jr_str(tight, strlen(tight), "a", s, 2));  // two bytes need room for the NUL too
+    CHECK(jr_str(tight, strlen(tight), "a", s, 3) && strcmp(s, "\xc3\xbc") == 0);
 }
 
 TEST(reader_rejects_garbage) {
@@ -87,6 +103,7 @@ int main(void) {
     RUN(writer);
     RUN(writer_int_roundtrip);
     RUN(reader);
+    RUN(reader_unicode_escapes);
     RUN(reader_rejects_garbage);
     RUN(reader_checks_what_follows_a_value);
     return TEST_SUMMARY();

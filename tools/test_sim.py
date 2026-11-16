@@ -671,7 +671,7 @@ class WebTests(unittest.TestCase):
         uf2 = make_uf2(100)
         # First upload: headers and part of the body, connection kept open.
         first = socket.create_connection(("127.0.0.1", self.sim.http_port), timeout=5)
-        head = (f"POST /api/ota HTTP/1.1\r\nHost: x\r\nX-PSHB: 1\r\nCookie: {self.web.cookie}\r\n"
+        head = (f"POST /api/ota HTTP/1.1\r\nHost: 127.0.0.1\r\nX-PSHB: 1\r\nCookie: {self.web.cookie}\r\n"
                 f"X-PSHB-CRC32: {zlib.crc32(uf2):x}\r\nContent-Length: {len(uf2)}\r\n\r\n")
         first.sendall(head.encode() + uf2[:4096])
         self.assertTrue(self.sim.wait_line(f"OTA BEGIN {len(uf2)}", timeout=2))
@@ -685,7 +685,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual((status, r), (200, {"ok": True, "reboot": True}))
 
     def signed_upload(self, image: bytes, key: bytes, nonce: bytes | None = None, *, v2: bool = True,
-                      signed_image: bytes | None = None):
+                      signed_image: bytes | None = None, name_nonce: bool = False):
         """POST /api/ota signed with `key` (no login) as the app does it: the signature over the
         file's hash (v2) and the old one over the file (for boards before 1.0.9). The nonce comes
         from a fresh challenge unless given; `signed_image` signs another file than the one sent."""
@@ -703,6 +703,8 @@ class WebTests(unittest.TestCase):
             req.add_header("X-PSHB-OTA-Hash", proto.ota_hash(signed).hex())
             req.add_header("X-PSHB-OTA-Auth2", proto.ota_mac2(key, nonce, signed).hex())
         req.add_header("X-PSHB-OTA-Auth", proto.ota_mac(key, nonce, signed).hex())
+        if name_nonce:
+            req.add_header("X-PSHB-Nonce", nonce.hex())
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return resp.status, json.loads(resp.read() or b"{}")
@@ -725,11 +727,16 @@ class WebTests(unittest.TestCase):
 
     def test_signed_upload_is_checked_before_writing(self):
         key = self.setup_key()
-        uf2 = make_uf2(4)
-        # Wrong key: refused before a single byte reaches the flash.
-        status, r = self.signed_upload(uf2, bytes(32))
+        uf2 = make_uf2(400)
+        # Wrong key: refused before a single byte reaches the flash (and the answer arrives
+        # while the file is still being sent). The challenge is used up all the same.
+        nonce = bytes.fromhex(Web(self.sim.http_port).req("GET", "/api/ota/challenge")[1]["nonce"])
+        status, r = self.signed_upload(uf2, bytes(32), nonce)
         self.assertEqual(status, 403)
         self.assertIn("Signature", r["error"])
+        status, r = self.signed_upload(uf2, key, nonce)
+        self.assertEqual(status, 403)
+        self.assertIn("Challenge", r["error"])
         # Only the old signature (an app before 1.0.9), checked after the data: refused even with
         # the right key, otherwise anyone could write files into the flash.
         status, r = self.signed_upload(uf2, key, v2=False)
@@ -803,14 +810,17 @@ class WebTests(unittest.TestCase):
 
     def test_bench_sink_takes_uploads_only_when_logged_in(self):
         body = bytes(range(256)) * 300  # 75 KiB
-        self.assertIn(self.web.upload("/api/bench/sink", body, None)[0], (0, 401))
+        self.assertEqual(self.web.upload("/api/bench/sink", body, None)[0], 401)
         self.setup_password()
         status, r = self.web.upload("/api/bench/sink", body, None)
         self.assertEqual((status, r), (200, {"ok": True, "bytes": len(body)}))
         self.assertFalse(self.sim.wait_line(f"OTA BEGIN {len(body)}", timeout=0.2))
 
-    def signed(self, method: str, path: str, key: bytes, body: bytes = b"", nonce: bytes | None = None):
-        """A request signed with the key, as the app sends it (no login)."""
+    def signed(self, method: str, path: str, key: bytes, body: bytes = b"", nonce: bytes | None = None,
+               *, name_nonce: bool = False, signed_as: tuple[str, str, bytes] | None = None):
+        """A request signed with the key, as the app sends it (no login). `name_nonce`: say which
+        challenge (X-PSHB-Nonce, newer apps); `signed_as`: sign this method, path and body
+        instead of what is sent."""
         import urllib.error
         import urllib.request
         if nonce is None:
@@ -822,7 +832,10 @@ class WebTests(unittest.TestCase):
         if method == "POST":
             req.add_header("X-PSHB", "1")
             req.add_header("Content-Type", "application/json")
-        req.add_header("X-PSHB-Auth", proto.request_mac(key, nonce, method, path, body).hex())
+        sm, sp, sb = signed_as or (method, path, body)
+        req.add_header("X-PSHB-Auth", proto.request_mac(key, nonce, sm, sp, sb).hex())
+        if name_nonce:
+            req.add_header("X-PSHB-Nonce", nonce.hex())
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return resp.status, json.loads(resp.read() or b"{}")
@@ -868,11 +881,80 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertIn("Not allowed", r["error"])
 
+    def test_signed_requests_cover_method_path_and_body(self):
+        key = self.setup_key()
+        body = json.dumps({"spi_fast": True}).encode()
+        for sent, signed_as in (
+                (("POST", "/api/clock", body), ("POST", "/api/clock", b'{"spi_fast": false}')),
+                (("POST", "/api/clock", body), ("POST", "/api/diag/reset", body)),
+                (("GET", "/api/status", b""), ("POST", "/api/status", b""))):
+            status, r = self.signed(*sent[:2], key, sent[2], signed_as=signed_as)
+            self.assertEqual(status, 403, (sent, signed_as))
+            self.assertIn("Signature", r["error"])
+        self.assertFalse(self.sim.wait_line("REBOOT", timeout=0.2))
+        # Other methods are refused before a challenge is used up.
+        nonce = bytes.fromhex(Web(self.sim.http_port).req("GET", "/api/ota/challenge")[1]["nonce"])
+        self.assertEqual(self.signed("PUT", "/api/status", key, nonce=nonce, name_nonce=True)[0], 405)
+        self.assertEqual(self.signed("GET", "/api/status", key, nonce=nonce, name_nonce=True)[0], 200)
+
+    def test_several_challenges_at_once(self):
+        # The app, pshb-cli and an update each fetch a challenge; naming it, none takes another's.
+        key = self.setup_key()
+        anon = Web(self.sim.http_port)
+        n1, n2, n3 = (bytes.fromhex(anon.req("GET", "/api/ota/challenge")[1]["nonce"]) for _ in range(3))
+        self.assertEqual(self.signed("GET", "/api/status", key, nonce=n2, name_nonce=True)[0], 200)
+        self.assertEqual(self.signed("GET", "/api/diag", key, nonce=n1, name_nonce=True)[0], 200)
+        status, r = self.signed("GET", "/api/status", key, nonce=n1, name_nonce=True)  # used up
+        self.assertEqual(status, 403)
+        self.assertIn("Challenge", r["error"])
+        # Without naming it (older apps) the newest one counts, as before.
+        self.assertEqual(self.signed("GET", "/api/status", key, nonce=n3)[0], 200)
+        # Only the last four are kept.
+        old = [bytes.fromhex(anon.req("GET", "/api/ota/challenge")[1]["nonce"]) for _ in range(5)]
+        self.assertEqual(self.signed("GET", "/api/status", key, nonce=old[0], name_nonce=True)[0], 403)
+        self.assertEqual(self.signed("GET", "/api/status", key, nonce=old[1], name_nonce=True)[0], 200)
+        status, r = self.signed_upload(make_uf2(20), key, old[4], name_nonce=True)
+        self.assertEqual((status, r), (200, {"ok": True, "reboot": True}))
+
+    def raw_status(self, host: str | None, path: str = "/api/clock") -> int:
+        """Status of a GET with exactly this Host header (None: none at all)."""
+        with socket.create_connection(("127.0.0.1", self.sim.http_port), timeout=5) as s:
+            head = f"GET {path} HTTP/1.1\r\n" + (f"Host: {host}\r\n" if host is not None else "") + "\r\n"
+            s.sendall(head.encode())
+            line = s.makefile("rb").readline().decode()
+        return int(line.split()[1])
+
+    def test_host_must_be_an_address_or_the_boards_name(self):
+        # Against DNS rebinding: a page under another name must not reach the API.
+        for host in ("127.0.0.1", "127.0.0.1:8080", "[::1]:80", "localhost:8080", None,
+                     "ps-hid-bridge-514d00", "PS-HID-Bridge-514D00.fritz.box", "ps-hid-bridge-514d00.local:80"):
+            self.assertEqual(self.raw_status(host), 200, host)
+        for host in ("evil.example", "evil.example:80", "ps-hid-bridge-514d00x", "x.ps-hid-bridge-514d00",
+                     "127.0.0.1.evil.example", "a" * 70):
+            self.assertEqual(self.raw_status(host), 421, host)
+        self.assertEqual(self.raw_status("evil.example", "/"), 421)
+
+    def test_password_with_umlauts(self):
+        import urllib.request
+        self.assertEqual(self.web.login("ps-hid-bridge")[0], 200)
+        pw = "Passwört-" + "ü" * 55  # 64 characters, 120 bytes
+        # Escaped (\u00f6, as json.dumps sends it) ...
+        self.assertEqual(self.web.req("POST", "/api/password", {"old": "ps-hid-bridge", "new": pw})[0], 200)
+        self.assertEqual(self.web.req("POST", "/api/password", {"old": pw, "new": pw + "x"})[0], 400)
+        # ... and raw UTF-8 (as a browser sends it) are the same password.
+        req = urllib.request.Request(f"http://127.0.0.1:{self.sim.http_port}/api/login", method="POST",
+                                     data=json.dumps({"password": pw}, ensure_ascii=False).encode())
+        req.add_header("X-PSHB", "1")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+
     def test_firmware_upload_needs_login(self):
         import zlib
-        uf2 = make_uf2(4)
-        status, _ = self.web.upload("/api/ota", uf2, zlib.crc32(uf2))
-        self.assertIn(status, (0, 401))
+        uf2 = make_uf2(400)  # 200 KiB: still being sent when the answer comes
+        status, r = self.web.upload("/api/ota", uf2, zlib.crc32(uf2))
+        self.assertEqual(status, 401)  # the answer arrives, not a reset connection
+        self.assertIn("log in", r["error"])
         self.assertFalse(self.sim.wait_line(f"OTA BEGIN {len(uf2)}", timeout=0.3))
 
     def test_settings_survive_restart(self):

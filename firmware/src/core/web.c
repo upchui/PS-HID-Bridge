@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 #include "hexutil.h"
 #include "json.h"
@@ -106,8 +107,10 @@ static const char *reason(int status) {
     case 403: return "Forbidden";
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
+    case 409: return "Conflict";
     case 413: return "Payload Too Large";
     case 414: return "URI Too Long";
+    case 421: return "Misdirected Request";
     case 429: return "Too Many Requests";
     case 431: return "Request Header Fields Too Large";
     case 500: return "Internal Server Error";
@@ -260,7 +263,7 @@ static void h_login(web_app_t *app, web_conn_t *c) {
     size_t bl = c->req.body_received;
     uint64_t t = now(app);
     if (locked_out(app, c, t)) return;
-    char pw[PSHB_PASSWORD_MAX_LEN + 1];
+    char pw[PSHB_PASSWORD_MAX_BYTES + 1];
     if (!jr_str(b, bl, "password", pw, sizeof(pw))) {
         respond_error(c, 400, "Password missing");
         return;
@@ -300,12 +303,12 @@ static void h_password(web_app_t *app, web_conn_t *c, int session) {
     size_t bl = c->req.body_received;
     uint64_t t = now(app);
     if (locked_out(app, c, t)) return;
-    char old_pw[PSHB_PASSWORD_MAX_LEN + 1], new_pw[PSHB_PASSWORD_MAX_LEN + 2];
+    char old_pw[PSHB_PASSWORD_MAX_BYTES + 1], new_pw[PSHB_PASSWORD_MAX_BYTES + 2];
     if (!jr_str(b, bl, "old", old_pw, sizeof(old_pw)) || !jr_str(b, bl, "new", new_pw, sizeof(new_pw))) {
         respond_error(c, 400, "Enter the current and the new password");
         return;
     }
-    size_t n = strlen(new_pw);
+    size_t n = strlen(new_pw) > PSHB_PASSWORD_MAX_BYTES ? PSHB_PASSWORD_MAX_LEN + 1 : password_chars(new_pw);
     bool old_ok = password_verify(app->settings, old_pw);
     crypto_wipe(old_pw, sizeof(old_pw));
     if (!old_ok) {
@@ -483,8 +486,37 @@ static void h_clock_set(web_app_t *app, web_conn_t *c) {
     if (changed) c->after = WEB_AFTER_REBOOT;
 }
 
-// A request signed with the key (the app): the last challenge, still fresh
-// (and used up here), and BLAKE2b-256(key = K_ota, "pshb-req-v1" || nonce ||
+// The challenge a signed request or upload names in X-PSHB-Nonce, or,
+// without that header (older apps), the newest one. It is used up
+// either way, also if the signature turns out wrong. False (answered with
+// 403) if there is no such challenge that is still fresh.
+static bool take_challenge(web_app_t *app, web_conn_t *c, uint8_t nonce[16]) {
+    const http_req_t *r = &c->req;
+    uint64_t t = now(app);
+    int pick = -1;
+    for (int i = 0; i < WEB_CHALLENGES; i++) {
+        uint64_t until = app->challenges[i].until_us;
+        if (until == 0) continue;
+        if (t >= until) {
+            app->challenges[i].until_us = 0;
+            continue;
+        }
+        if (r->has_nonce ? memcmp(app->challenges[i].nonce, r->nonce, 16) == 0
+                         : pick < 0 || until > app->challenges[pick].until_us) {
+            pick = i;
+        }
+    }
+    if (pick < 0) {
+        respond_error(c, 403, "Challenge missing or expired (GET /api/ota/challenge first)");
+        return false;
+    }
+    memcpy(nonce, app->challenges[pick].nonce, 16);
+    app->challenges[pick].until_us = 0;
+    return true;
+}
+
+// A request signed with the key (the app): a fresh challenge (used up
+// here), and BLAKE2b-256(key = K_ota, "pshb-req-v1" || nonce ||
 // method || " " || path || "\n" || body). Returns 1 if it is valid, 0 if
 // the request is not signed, -1 if it is signed wrongly (answered).
 static int check_signature(web_app_t *app, web_conn_t *c) {
@@ -494,12 +526,8 @@ static int check_signature(web_app_t *app, web_conn_t *c) {
         respond_error(c, 403, "No key set on the board");
         return -1;
     }
-    bool fresh = app->ota_nonce_until_us != 0 && now(app) < app->ota_nonce_until_us;
-    app->ota_nonce_until_us = 0;
-    if (!fresh) {
-        respond_error(c, 403, "Challenge missing or expired (GET /api/ota/challenge first)");
-        return -1;
-    }
+    uint8_t nonce[16];
+    if (!take_challenge(app, c, nonce)) return -1;
     uint8_t key[32], mac[32];
     ota_key(app->settings->psk, key);
     crypto_blake2b_ctx h;
@@ -507,7 +535,7 @@ static int check_signature(web_app_t *app, web_conn_t *c) {
     crypto_wipe(key, sizeof(key));
     const char *method = r->method == HTTP_POST ? "POST" : "GET";
     crypto_blake2b_update(&h, (const uint8_t *)REQ_MAC_LABEL, strlen(REQ_MAC_LABEL));
-    crypto_blake2b_update(&h, app->ota_nonce, sizeof(app->ota_nonce));
+    crypto_blake2b_update(&h, nonce, sizeof(nonce));
     crypto_blake2b_update(&h, (const uint8_t *)method, strlen(method));
     crypto_blake2b_update(&h, (const uint8_t *)" ", 1);
     crypto_blake2b_update(&h, (const uint8_t *)r->path, strlen(r->path));
@@ -651,16 +679,28 @@ static void ota_key(const uint8_t psk[32], uint8_t out[32]) {
     crypto_blake2b_keyed(out, 32, psk, 32, (const uint8_t *)OTA_KEY_LABEL, strlen(OTA_KEY_LABEL));
 }
 
-// A fresh random challenge for the next signed upload (replaces the last).
+// A fresh random challenge for the next signed request or upload. It takes
+// a free (or expired) place, else the oldest one's.
 static void h_ota_challenge(web_app_t *app, web_conn_t *c) {
     if (!app->settings->psk_set) {
         respond_error(c, 403, "No key set on the board");
         return;
     }
-    app->be->random(app->be->ctx, app->ota_nonce, sizeof(app->ota_nonce));
-    app->ota_nonce_until_us = now(app) + OTA_CHALLENGE_US;
-    char hex[2 * sizeof(app->ota_nonce) + 1];
-    hex_encode(app->ota_nonce, sizeof(app->ota_nonce), hex);
+    uint64_t t = now(app);
+    int slot = 0;
+    for (int i = 0; i < WEB_CHALLENGES; i++) {
+        uint64_t until = app->challenges[i].until_us;
+        if (until == 0 || t >= until) {
+            slot = i;
+            break;
+        }
+        if (until < app->challenges[slot].until_us) slot = i;
+    }
+    uint8_t *nonce = app->challenges[slot].nonce;
+    app->be->random(app->be->ctx, nonce, 16);
+    app->challenges[slot].until_us = t + OTA_CHALLENGE_US;
+    char hex[2 * 16 + 1];
+    hex_encode(nonce, 16, hex);
     json_writer_t w;
     jw_begin(&w, c->dyn, sizeof(c->dyn));
     jw_str(&w, "nonce", hex);
@@ -675,9 +715,55 @@ static const web_asset_t *find_asset(const char *path) {
     return NULL;
 }
 
+static bool is_ipv4(const char *s, size_t n) {
+    int dots = 0, digits = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (s[i] == '.') {
+            if (!digits) return false;
+            dots++;
+            digits = 0;
+        } else if (s[i] >= '0' && s[i] <= '9') {
+            if (++digits > 3) return false;
+        } else {
+            return false;
+        }
+    }
+    return dots == 3 && digits;
+}
+
+// Against DNS rebinding: a web page whose name an attacker points at the
+// board's address would be the board's origin in the browser (with the
+// factory password it could even log in). Allowed: an address, the
+// board's own name (also with a domain: "ps-hid-bridge-a1b2c3.fritz.box"),
+// localhost (the simulator), and no Host at all (HTTP/1.0 tools).
+static bool host_allowed(const web_app_t *app, const http_req_t *r) {
+    if (!r->has_host) return true;
+    if (r->host_bad) return false;
+    const char *h = r->host;
+    if (h[0] == '[') return strchr(h, ']') != NULL;  // IPv6 address (names have no brackets)
+    size_t n = strcspn(h, ":");                      // without the port
+    if (is_ipv4(h, n)) return true;
+    if (n == 9 && strncasecmp(h, "localhost", 9) == 0) return true;
+    size_t label = strcspn(h, ".:");
+    size_t hn = strlen(app->hostname);
+    return hn && label == hn && strncasecmp(h, app->hostname, hn) == 0;
+}
+
+// False (answered with 421) if the Host is not allowed.
+static bool check_host(web_app_t *app, web_conn_t *c) {
+    if (host_allowed(app, &c->req)) return true;
+    char msg[128];
+    snprintf(msg, sizeof(msg), "Open the board by its address%s%s instead of another name",
+             app->hostname[0] ? " or its name " : "", app->hostname);
+    respond_error(c, 421, msg);
+    return false;
+}
+
 static void handle(web_app_t *app, web_conn_t *c) {
     http_req_t *r = &c->req;
     const char *p = r->path;
+
+    if (!check_host(app, c)) return;
 
     if (strncmp(p, "/api/", 5) != 0) {
         if (r->method != HTTP_GET) {
@@ -693,6 +779,10 @@ static void handle(web_app_t *app, web_conn_t *c) {
         return;
     }
 
+    if (r->method != HTTP_GET && r->method != HTTP_POST) {
+        respond_error(c, 405, "Method not allowed");
+        return;
+    }
     int session = r->session[0] ? session_find(app, r->session) : -1;
     bool logged_in = session >= 0;
 
@@ -796,6 +886,10 @@ void web_app_init(web_app_t *app, const web_backend_t *be, pshb_settings_t *sett
     app->settings = settings;
 }
 
+void web_app_set_hostname(web_app_t *app, const char *name) {
+    snprintf(app->hostname, sizeof(app->hostname), "%s", name);
+}
+
 void web_conn_reset(web_conn_t *c, uint64_t now_us) {
     http_req_init(&c->req);
     c->head_len = 0;
@@ -809,7 +903,7 @@ void web_conn_reset(web_conn_t *c, uint64_t now_us) {
     c->ota_failed = false;
     c->sink = false;
     c->sink_bytes = 0;
-    c->close_early = false;
+    c->discard_left = 0;
 }
 
 typedef struct {
@@ -844,12 +938,8 @@ static bool ota_signed_start(web_app_t *app, web_conn_t *c) {
         respond_error(c, 403, "Please update the app: this board needs a newer signature for firmware updates");
         return false;
     }
-    bool fresh = app->ota_nonce_until_us != 0 && now(app) < app->ota_nonce_until_us;
-    app->ota_nonce_until_us = 0;
-    if (!fresh) {
-        respond_error(c, 403, "Challenge missing or expired (GET /api/ota/challenge first)");
-        return false;
-    }
+    uint8_t nonce[16];
+    if (!take_challenge(app, c, nonce)) return false;
     uint8_t key[32], mac[32];
     ota_key(app->settings->psk, key);
     crypto_blake2b_ctx h;
@@ -858,7 +948,7 @@ static bool ota_signed_start(web_app_t *app, web_conn_t *c) {
     uint32_t n = r->content_length;
     const uint8_t len[4] = {(uint8_t)n, (uint8_t)(n >> 8), (uint8_t)(n >> 16), (uint8_t)(n >> 24)};
     crypto_blake2b_update(&h, (const uint8_t *)OTA_MAC_LABEL, strlen(OTA_MAC_LABEL));
-    crypto_blake2b_update(&h, app->ota_nonce, sizeof(app->ota_nonce));
+    crypto_blake2b_update(&h, nonce, sizeof(nonce));
     crypto_blake2b_update(&h, len, sizeof(len));
     crypto_blake2b_update(&h, r->ota_hash, sizeof(r->ota_hash));
     crypto_blake2b_final(&h, mac);
@@ -875,6 +965,7 @@ static bool ota_signed_start(web_app_t *app, web_conn_t *c) {
 // password set, X-PSHB header): only then may a body be streamed.
 static bool upload_allowed(web_app_t *app, web_conn_t *c) {
     http_req_t *r = &c->req;
+    if (!check_host(app, c)) return false;
     if (!r->csrf_header) {
         respond_error(c, 403, "Request rejected (X-PSHB header missing)");
         return false;
@@ -904,6 +995,7 @@ static void sink_done(web_conn_t *c) {
 static bool ota_start(web_app_t *app, web_conn_t *c) {
     http_req_t *r = &c->req;
     bool signed_upload = r->has_ota_auth || r->has_ota_auth2 || r->has_ota_hash;
+    if (!check_host(app, c)) return false;
     if (!signed_upload && !upload_allowed(app, c)) return false;
     if (!r->has_crc) {
         respond_error(c, 400, "Checksum (X-PSHB-CRC32) missing");
@@ -953,29 +1045,37 @@ static void ota_done(web_app_t *app, web_conn_t *c) {
 }
 
 void web_conn_input(web_app_t *app, web_conn_t *c, const uint8_t *data, size_t len) {
-    if (c->responding) return;  // one request per connection
+    if (c->responding) {
+        // One request per connection; after an early answer the rest of its
+        // body is read and thrown away.
+        c->discard_left -= len < c->discard_left ? (uint32_t)len : c->discard_left;
+        return;
+    }
     body_ctx_t bctx = {app, c};
     while (len) {
         size_t n = http_req_feed(&c->req, data, len, ota_body, &bctx);
         data += n;
         len -= n;
         if (c->req.state == HTTP_PARSE_BODY && !c->req.body_decided) {
+            // The body beyond this piece, should the answer come first.
+            uint32_t rest = c->req.content_length > len ? c->req.content_length - (uint32_t)len : 0;
             if (c->req.method == HTTP_POST && strcmp(c->req.path, "/api/ota") == 0) {
                 if (!ota_start(app, c)) {
-                    c->close_early = true;
+                    c->discard_left = rest;
                     return;
                 }
                 http_req_decide(&c->req, true);
             } else if (c->req.method == HTTP_POST && app->bench_sink &&
                        strcmp(c->req.path, "/api/bench/sink") == 0) {
                 if (!upload_allowed(app, c)) {
-                    c->close_early = true;
+                    c->discard_left = rest;
                     return;
                 }
                 c->sink = true;
                 http_req_decide(&c->req, true);
             } else {
                 http_req_decide(&c->req, false);  // all other routes take a small JSON body
+                if (c->req.state == HTTP_PARSE_ERROR) c->discard_left = rest;  // too large
             }
             continue;
         }
@@ -1031,5 +1131,9 @@ void web_conn_close(web_app_t *app, web_conn_t *c) {
 }
 
 bool web_conn_done(const web_conn_t *c) {
-    return c->responding && c->sent >= c->head_len + c->body_len;
+    return c->responding && c->sent >= c->head_len + c->body_len && c->discard_left == 0;
+}
+
+void web_conn_input_end(web_conn_t *c) {
+    c->discard_left = 0;
 }

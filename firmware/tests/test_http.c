@@ -1,5 +1,7 @@
 // HTTP request parser: arbitrary split points, limits and header handling.
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "http.h"
 #include "mini_test.h"
@@ -36,6 +38,8 @@ static void check_parsed(const http_req_t *r) {
     CHECK_EQ_I(r->state, HTTP_PARSE_DONE);
     CHECK_EQ_I(r->method, HTTP_POST);
     CHECK(strcmp(r->path, "/api/login") == 0);
+    CHECK(r->has_host && !r->host_bad && strcmp(r->host, "192.168.1.50") == 0);
+    CHECK(!r->has_nonce);
     CHECK(r->csrf_header);
     CHECK(strcmp(r->session, "0123456789abcdef0123456789abcdef") == 0);
     CHECK_EQ_U(r->content_length, 21);
@@ -127,6 +131,30 @@ static void on_body(void *ctx, const uint8_t *data, size_t len) {
     s_streamed += len;
 }
 
+static http_req_t parse(const char *req) {
+    http_req_t r;
+    http_req_init(&r);
+    feed_all(&r, req, strlen(req), 7);
+    return r;
+}
+
+TEST(host_and_nonce) {
+    http_req_t r = parse("GET / HTTP/1.1\r\nHost: ps-hid-bridge-a1b2c3.fritz.box:80 \r\n"
+                         "X-PSHB-Nonce: 000102030405060708090a0b0c0d0e0f\r\n\r\n");
+    CHECK_EQ_I(r.state, HTTP_PARSE_DONE);
+    CHECK(r.has_host && strcmp(r.host, "ps-hid-bridge-a1b2c3.fritz.box:80") == 0);  // trailing blank dropped
+    CHECK(r.has_nonce && r.nonce[0] == 0 && r.nonce[15] == 15);
+    char req[256];
+    snprintf(req, sizeof(req), "GET / HTTP/1.1\r\nHost: %0*d\r\n\r\n", HTTP_MAX_HOST, 0);
+    r = parse(req);
+    CHECK(r.has_host && r.host_bad);  // too long to keep: refused by web.c
+    r = parse("GET / HTTP/1.1\r\n\r\n");
+    CHECK(!r.has_host);
+    r = parse("GET / HTTP/1.1\r\nX-PSHB-Nonce: 0001\r\n\r\n");
+    CHECK_EQ_I(r.state, HTTP_PARSE_ERROR);
+    CHECK_EQ_I(r.error_status, 400);
+}
+
 TEST(streamed_body) {
     // Large body handed to a callback (firmware upload).
     static char req[100 + 5000];
@@ -163,5 +191,6 @@ int main(void) {
     RUN(get_without_body);
     RUN(errors);
     RUN(streamed_body);
+    RUN(host_and_nonce);
     return TEST_SUMMARY();
 }

@@ -64,7 +64,6 @@ static bool handle_block(uf2_writer_t *w, const uint8_t *b) {
     }
     if (!w->flash->program_page(w->flash->ctx, off, b + 32)) return fail(w, UF2_ERR_FLASH);
     w->blocks_written++;
-    if (off + UF2_PAYLOAD_SIZE > w->image_end) w->image_end = off + UF2_PAYLOAD_SIZE;
     return true;
 }
 

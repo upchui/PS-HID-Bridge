@@ -25,11 +25,19 @@ void password_hash(const char *password, const uint8_t salt[16], uint8_t out[32]
     crypto_wipe(s_work_area, sizeof(s_work_area));
 }
 
+size_t password_chars(const char *password) {
+    size_t n = 0;
+    for (const char *p = password; *p; p++) {
+        if (((unsigned char)*p & 0xC0) != 0x80) n++;
+    }
+    return n;
+}
+
 bool password_verify(const pshb_settings_t *s, const char *password) {
-    if (strlen(password) > PSHB_PASSWORD_MAX_LEN) return false;
+    if (strlen(password) > PSHB_PASSWORD_MAX_BYTES) return false;
     if (!s->pw_set) {
         // Factory default; compare in constant time over the padded buffer.
-        uint8_t a[PSHB_PASSWORD_MAX_LEN + 1] = {0}, b[PSHB_PASSWORD_MAX_LEN + 1] = {0};
+        uint8_t a[PSHB_PASSWORD_MAX_BYTES + 1] = {0}, b[PSHB_PASSWORD_MAX_BYTES + 1] = {0};
         memcpy(a, password, strlen(password));
         memcpy(b, PSHB_DEFAULT_PASSWORD, sizeof(PSHB_DEFAULT_PASSWORD) - 1);
         uint8_t diff = 0;

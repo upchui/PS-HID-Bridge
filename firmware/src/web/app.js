@@ -226,9 +226,11 @@ async function refreshStatus(fill) {
   }
 }
 
+// Not while the tab is hidden: less work for the board, and a forgotten tab
+// does not keep the session alive (it ends after 30 minutes without use).
 function startStatus() {
   stopStatus();
-  statusTimer = setInterval(() => refreshStatus(false), 2000);
+  statusTimer = setInterval(() => { if (!document.hidden) refreshStatus(false); }, 2000);
 }
 
 function stopStatus() {
@@ -453,6 +455,9 @@ function init() {
   $("logout").addEventListener("click", async () => {
     try { await api("/api/logout", {}); } catch (e) { /* ignore */ }
     showLogin();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && statusTimer) refreshStatus(false);
   });
   window.addEventListener("hashchange", () => {
     if ($("v-main").hidden) return;

@@ -103,43 +103,80 @@ static int hexval(char ch) {
     return -1;
 }
 
+// Four hex digits of a \u escape at c->p; -1 if they are not there.
+static long hex4(cur_t *c) {
+    if (c->end - c->p < 4) return -1;
+    long v = 0;
+    for (int i = 0; i < 4; i++) {
+        int h = hexval(c->p[i]);
+        if (h < 0) return -1;
+        v = (v << 4) | h;
+    }
+    c->p += 4;
+    return v;
+}
+
 // Parse a string at c->p (which must point at '"'). Writes the unescaped
-// value to out (if not NULL, NUL-terminated, truncation = failure).
+// value to out (if not NULL, NUL-terminated, truncation = failure). \u
+// escapes become UTF-8 (as a browser sends the same text unescaped); \u0000
+// and lone surrogates fail.
 static bool parse_string(cur_t *c, char *out, size_t cap) {
     if (c->p >= c->end || *c->p != '"') return false;
     c->p++;
     size_t n = 0;
     while (c->p < c->end && *c->p != '"') {
+        char bytes[4];
+        size_t len = 1;
         char ch = *c->p++;
         if ((unsigned char)ch < 0x20) return false;
+        bytes[0] = ch;
         if (ch == '\\') {
             if (c->p >= c->end) return false;
             char e = *c->p++;
             switch (e) {
-            case '"': case '\\': case '/': ch = e; break;
-            case 'b': ch = '\b'; break;
-            case 'f': ch = '\f'; break;
-            case 'n': ch = '\n'; break;
-            case 'r': ch = '\r'; break;
-            case 't': ch = '\t'; break;
+            case '"': case '\\': case '/': bytes[0] = e; break;
+            case 'b': bytes[0] = '\b'; break;
+            case 'f': bytes[0] = '\f'; break;
+            case 'n': bytes[0] = '\n'; break;
+            case 'r': bytes[0] = '\r'; break;
+            case 't': bytes[0] = '\t'; break;
             case 'u': {
-                if (c->end - c->p < 4) return false;
-                int v = 0;
-                for (int i = 0; i < 4; i++) {
-                    int h = hexval(c->p[i]);
-                    if (h < 0) return false;
-                    v = (v << 4) | h;
+                long v = hex4(c);
+                if (v <= 0 || (v >= 0xDC00 && v <= 0xDFFF)) return false;
+                if (v >= 0xD800 && v <= 0xDBFF) {  // high surrogate: the low one must follow
+                    if (c->end - c->p < 2 || c->p[0] != '\\' || c->p[1] != 'u') return false;
+                    c->p += 2;
+                    long lo = hex4(c);
+                    if (lo < 0xDC00 || lo > 0xDFFF) return false;
+                    v = 0x10000 + ((v - 0xD800) << 10) + (lo - 0xDC00);
                 }
-                c->p += 4;
-                ch = v < 0x80 ? (char)v : '?';  // only ASCII escapes are expected
+                if (v < 0x80) {
+                    bytes[0] = (char)v;
+                } else if (v < 0x800) {
+                    bytes[0] = (char)(0xC0 | (v >> 6));
+                    bytes[1] = (char)(0x80 | (v & 0x3F));
+                    len = 2;
+                } else if (v < 0x10000) {
+                    bytes[0] = (char)(0xE0 | (v >> 12));
+                    bytes[1] = (char)(0x80 | ((v >> 6) & 0x3F));
+                    bytes[2] = (char)(0x80 | (v & 0x3F));
+                    len = 3;
+                } else {
+                    bytes[0] = (char)(0xF0 | (v >> 18));
+                    bytes[1] = (char)(0x80 | ((v >> 12) & 0x3F));
+                    bytes[2] = (char)(0x80 | ((v >> 6) & 0x3F));
+                    bytes[3] = (char)(0x80 | (v & 0x3F));
+                    len = 4;
+                }
                 break;
             }
             default: return false;
             }
         }
         if (out) {
-            if (n + 1 >= cap) return false;
-            out[n++] = ch;
+            if (n + len >= cap) return false;
+            memcpy(out + n, bytes, len);
+            n += len;
         }
     }
     if (c->p >= c->end) return false;

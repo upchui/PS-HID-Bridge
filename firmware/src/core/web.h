@@ -5,8 +5,13 @@
 // Security:
 //  * login with Argon2id password, growing lockout after failed attempts
 //  * session cookie (HttpOnly, SameSite=Strict), 30 min idle timeout
-//  * every POST needs the header "X-PSHB: 1" (no cross-site requests)
-//  * until the factory password is changed, only /api/password works
+//  * every POST from the browser needs the header "X-PSHB: 1" (no
+//    cross-site requests); requests signed with the key (protocol/SPEC.md)
+//    are allowed without login
+//  * the Host header must be an address or the board's own name (no DNS
+//    rebinding: a web page cannot make itself the board's origin)
+//  * until the factory password is changed, only /api/password (and the
+//    signed requests) work
 #ifndef PSHB_WEB_H
 #define PSHB_WEB_H
 
@@ -19,11 +24,13 @@
 #include "settings.h"
 
 #define WEB_SESSIONS 2
+#define WEB_CHALLENGES 4  // outstanding challenges for signed requests and uploads
+#define WEB_HOSTNAME_MAX 24
 #define WEB_SESSION_IDLE_US (30ull * 60 * 1000000)
 
 typedef struct {
     uint32_t fw_version;
-    uint32_t uptime_ms;
+    uint64_t uptime_ms;
     uint8_t mac[6];
     uint8_t ip[4], mask[4], gw[4], dns[4];
     bool link_up;
@@ -120,12 +127,18 @@ typedef struct {
     uint64_t lockout_until_us;
     // The connection streaming a firmware image (one update at a time).
     const void *ota_owner;
-    // Firmware upload signed with the key (see protocol/SPEC.md): the last
-    // challenge (good for one upload until ota_nonce_until_us, 0 = none),
-    // whether the running upload is signed, the body hash its (already
-    // checked) signature covers, and the hash of the body so far.
-    uint8_t ota_nonce[16];
-    uint64_t ota_nonce_until_us;
+    // Challenges for requests and uploads signed with the key (see
+    // protocol/SPEC.md): each good for one use until `until_us` (0 = free).
+    // Several at once, so the app, pshb-cli and an update do not take each
+    // other's.
+    struct {
+        uint8_t nonce[16];
+        uint64_t until_us;
+    } challenges[WEB_CHALLENGES];
+    // The board's own name ("ps-hid-bridge-xxxxxx"), allowed as Host.
+    char hostname[WEB_HOSTNAME_MAX];
+    // The running firmware upload: whether it is signed, the body hash its
+    // (already checked) signature covers, and the hash of the body so far.
     bool ota_signed;
     uint8_t ota_signed_hash[32];
     crypto_blake2b_ctx ota_hash;
@@ -151,10 +164,16 @@ typedef struct {
     bool ota_failed;
     bool sink;         // this request streams into the bench sink
     uint32_t sink_bytes;
-    bool close_early;  // answered before the body arrived: close after sending
+    // Answered before the body arrived (an upload refused at once): its
+    // rest is read and thrown away before closing, so the client, still
+    // sending, gets the answer instead of a reset connection.
+    uint32_t discard_left;
 } web_conn_t;
 
 void web_app_init(web_app_t *app, const web_backend_t *be, pshb_settings_t *settings);
+
+// The board's own name, accepted in the Host header besides addresses.
+void web_app_set_hostname(web_app_t *app, const char *name);
 
 void web_conn_reset(web_conn_t *c, uint64_t now_us);
 
@@ -169,6 +188,9 @@ size_t web_conn_output(const web_conn_t *c, const uint8_t **data);
 void web_conn_sent(web_app_t *app, web_conn_t *c, size_t n);
 
 bool web_conn_done(const web_conn_t *c);
+
+// The client has finished sending (half-closed): nothing more to read.
+void web_conn_input_end(web_conn_t *c);
 
 // The connection is being closed (done, timeout or client gone). Aborts an
 // unfinished firmware upload.

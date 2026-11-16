@@ -52,7 +52,6 @@ typedef struct {
     uint64_t last_rx_counter; // last counter that passed authentication
     uint64_t tx_counter;      // last counter we sent
     uint64_t last_input_us;   // last valid INPUT/HEARTBEAT
-    bool input_seen;
     bool failsafe_active;
     uint64_t last_hint_us;
     bool hint_sent;
