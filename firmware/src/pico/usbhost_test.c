@@ -360,7 +360,9 @@ int main(void) {
     s_host_cfg.pin_dp = (uint8_t)s_pin_dp;
     s_host_cfg.pinout = s_swapped ? PIO_USB_PINOUT_DMDP : PIO_USB_PINOUT_DPDM;
     s_host_cfg.tx_ch = (uint8_t)ch;
-    multicore_launch_core1(core1_main);
+    // Nested blocking descriptor requests: more than the default 2 KB stack.
+    static uint32_t core1_stack[8192 / sizeof(uint32_t)];
+    multicore_launch_core1_with_stack(core1_main, core1_stack, sizeof core1_stack);
 
     // Restart if core 1 (the host) stops: the log is kept.
     watchdog_enable(4000, true);

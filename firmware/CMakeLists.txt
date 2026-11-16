@@ -191,12 +191,18 @@ endfunction()
 pshb_add_usbhost_image(ps-hid-bridge-usbhosttest
     SOURCES ${CMAKE_CURRENT_LIST_DIR}/src/pico/usbhost_test.c
     DEFINES PSHB_USBHOST_TEST=1)
+# A real DualSense on the host port passed through to the PlayStation (its
+# authentication included): the go/no-go test of the controller mode.
+pshb_add_usbhost_image(ps-hid-bridge-dspassthrough
+    SOURCES ${CMAKE_CURRENT_LIST_DIR}/src/pico/dspass.c ${CMAKE_CURRENT_LIST_DIR}/src/core/ds_desc.c
+    DEFINES PSHB_DS_PASSTHROUGH=1
+    LIBS tinyusb_device)
 
 # The images of this build: the Makefile copies exactly these to out/ (not
 # leftovers of renamed or removed targets in the build directory).
 set(PSHB_IMAGES ps-hid-bridge ps-hid-bridge-pt ps-hid-bridge-plain ps-hid-bridge-rollbacktest
     ps-hid-bridge-timing ps-hid-bridge-nuke ps-hid-bridge-hidtest ps-hid-bridge-hidtest-mouse8
-    ps-hid-bridge-usbhosttest)
+    ps-hid-bridge-usbhosttest ps-hid-bridge-dspassthrough)
 list(TRANSFORM PSHB_IMAGES APPEND ".uf2")
 list(JOIN PSHB_IMAGES "\n" PSHB_IMAGES_TEXT)
 file(CONFIGURE OUTPUT ${CMAKE_BINARY_DIR}/images.txt CONTENT "${PSHB_IMAGES_TEXT}\n")

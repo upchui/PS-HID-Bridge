@@ -40,8 +40,12 @@ typedef struct {
     // the W5500 at its fast setting after a self-test (pico/clock.c).
     uint8_t cpu_200mhz;
     uint8_t spi_fast;
+    // Test image ps-hid-bridge-dspassthrough only: which configuration it
+    // shows the PlayStation (0 = the DualSense's HID interface alone, 1 = all
+    // its interfaces including audio). From the reserved bytes as well.
+    uint8_t ds_test_variant;
 
-    uint8_t reserved[PSHB_SETTINGS_SIZE - 4 - 2 - 2 - 4 - 1 - 16 - 1 - 2 - 32 - 4 - 1 - 16 - 32 - 1 - 2 - 4];
+    uint8_t reserved[PSHB_SETTINGS_SIZE - 4 - 2 - 2 - 4 - 1 - 16 - 1 - 2 - 32 - 4 - 1 - 16 - 32 - 1 - 2 - 1 - 4];
     uint32_t crc;              // CRC-32 of all bytes before this field
 } pshb_settings_t;
 
