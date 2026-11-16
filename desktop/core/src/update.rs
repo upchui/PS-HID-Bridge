@@ -334,12 +334,56 @@ fn read_json(resp: &mut ureq::http::Response<ureq::Body>) -> Result<serde_json::
     serde_json::from_str(&text).map_err(|e| format!("Board: unexpected answer ({e})"))
 }
 
+/// Why one try at the board failed, and whether trying again is safe.
+struct Failure {
+    msg: String,
+    /// Nothing happened on the board: both of its HTTP sockets were busy
+    /// (connection refused), or another program took the one-time challenge.
+    again: bool,
+}
+
+impl From<String> for Failure {
+    fn from(msg: String) -> Self {
+        Self { msg, again: false }
+    }
+}
+
+impl From<&str> for Failure {
+    fn from(msg: &str) -> Self {
+        msg.to_string().into()
+    }
+}
+
+fn ureq_failure(e: ureq::Error) -> Failure {
+    let again = matches!(&e, ureq::Error::Io(err) if err.kind() == io::ErrorKind::ConnectionRefused);
+    Failure {
+        msg: http_error(e),
+        again,
+    }
+}
+
+/// Runs `f` up to three times while the board was only busy. Two programs
+/// asking at once (two app windows, the app and pshb-cli) can find both of
+/// the board's HTTP sockets in use or take each other's challenge.
+fn retry<T>(mut f: impl FnMut() -> Result<T, Failure>) -> Result<T, String> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match f() {
+            Err(fail) if fail.again && attempt < 3 => {
+                std::thread::sleep(Duration::from_millis(150 * attempt))
+            }
+            result => return result.map_err(|fail| fail.msg),
+        }
+    }
+}
+
 /// A fresh one-time challenge for a signed request or upload.
-fn board_challenge(agent: &ureq::Agent, base: &str) -> Result<[u8; 16], String> {
+fn board_challenge(agent: &ureq::Agent, base: &str) -> Result<[u8; 16], Failure> {
     let mut resp = agent
         .get(format!("{base}/api/ota/challenge"))
         .call()
-        .map_err(http_error)?;
+        .map_err(ureq_failure)?;
     let v = read_json(&mut resp)?;
     let nonce_hex = v
         .get("nonce")
@@ -350,7 +394,7 @@ fn board_challenge(agent: &ureq::Agent, base: &str) -> Result<[u8; 16], String> 
         .collect::<Result<Vec<u8>, _>>()
         .ok()
         .and_then(|v| v.try_into().ok())
-        .ok_or_else(|| "Board: invalid challenge".to_string())
+        .ok_or_else(|| "Board: invalid challenge".into())
 }
 
 /// The board's web API with the key instead of the web password: status,
@@ -383,21 +427,29 @@ impl BoardApi {
     }
 
     fn signed(&self, method: &str, path: &str, body: &[u8]) -> Result<serde_json::Value, String> {
-        let nonce = board_challenge(&self.agent, &self.base)?;
-        let mac = hex(&request_mac(&self.psk, &nonce, method, path, body));
-        let url = format!("{}{path}", self.base);
-        let mut resp = if method == "POST" {
-            self.agent
-                .post(url)
-                .header("X-PSHB", "1")
-                .header("Content-Type", "application/json")
-                .header("X-PSHB-Auth", mac)
-                .send(body)
-        } else {
-            self.agent.get(url).header("X-PSHB-Auth", mac).call()
-        }
-        .map_err(http_error)?;
-        read_json(&mut resp)
+        retry(|| {
+            let nonce = board_challenge(&self.agent, &self.base)?;
+            let mac = hex(&request_mac(&self.psk, &nonce, method, path, body));
+            let url = format!("{}{path}", self.base);
+            let mut resp = if method == "POST" {
+                self.agent
+                    .post(url)
+                    .header("X-PSHB", "1")
+                    .header("Content-Type", "application/json")
+                    .header("X-PSHB-Auth", mac)
+                    .send(body)
+            } else {
+                self.agent.get(url).header("X-PSHB-Auth", mac).call()
+            }
+            .map_err(ureq_failure)?;
+            if resp.status() == 403 {
+                // The board checks the challenge before it does anything.
+                let msg = board_error(&mut resp);
+                let again = msg.contains("Challenge missing or expired");
+                return Err(Failure { msg, again });
+            }
+            Ok(read_json(&mut resp)?)
+        })
     }
 
     /// Board status (network, packets, firmware, ...), as the web interface shows it.
@@ -417,12 +469,14 @@ impl BoardApi {
 
     /// The clock speeds (readable without the key).
     pub fn clock(&self) -> Result<BoardClock, String> {
-        let mut resp = self
-            .agent
-            .get(format!("{}/api/clock", self.base))
-            .call()
-            .map_err(http_error)?;
-        let v = read_json(&mut resp)?;
+        let v = retry(|| {
+            let mut resp = self
+                .agent
+                .get(format!("{}/api/clock", self.base))
+                .call()
+                .map_err(ureq_failure)?;
+            Ok(read_json(&mut resp)?)
+        })?;
         let num = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0) as u32;
         let flag = |k: &str| v.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
         Ok(BoardClock {
@@ -448,7 +502,7 @@ impl BoardApi {
 pub fn board_ota(host: &str, http_port: u16, psk: &[u8; 32], image: &[u8]) -> Result<(), String> {
     let base = board_base(host, http_port);
     let agent = agent(Duration::from_secs(120), true);
-    let nonce = board_challenge(&agent, &base)?;
+    let nonce = retry(|| board_challenge(&agent, &base))?;
     let mut resp = agent
         .post(format!("{base}/api/ota"))
         .header("Content-Type", "application/octet-stream")
@@ -538,6 +592,35 @@ mod tests {
             hex(&ota_mac2(&psk, &[0; 16], b"abc")),
             "8d5efd6a6ed49b245ad596bf92a29135162ba317b6e9d0ea470f7b46a397a7cd"
         );
+    }
+
+    #[test]
+    fn retry_only_while_the_board_was_busy() {
+        let busy = || Failure {
+            msg: "busy".into(),
+            again: true,
+        };
+        let mut calls = 0;
+        let r = retry(|| {
+            calls += 1;
+            if calls < 3 { Err(busy()) } else { Ok(calls) }
+        });
+        assert_eq!(r, Ok(3));
+
+        calls = 0;
+        let r: Result<(), _> = retry(|| {
+            calls += 1;
+            Err(busy())
+        });
+        assert_eq!((r, calls), (Err("busy".to_string()), 3));
+
+        calls = 0;
+        let r: Result<(), _> = retry(|| {
+            calls += 1;
+            Err("Board answered 403 Forbidden: Signature does not match".into())
+        });
+        assert!(r.is_err());
+        assert_eq!(calls, 1);
     }
 
     #[test]
