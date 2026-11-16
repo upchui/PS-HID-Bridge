@@ -121,38 +121,58 @@ static inline void timing_pin(uint pin, bool on) {
 
 // ---------------------------------------------------------------- network input
 
+// Datagrams per receive round. In between, the main loop serves USB (arms
+// reports): a burst of datagrams (WLAN delivers them in bunches) must not
+// keep it away for long.
+#define RX_PER_ROUND 4
+
+// Datagrams known to be waiting that raise no interrupt any more (it was
+// acknowledged at the start of their round), and since when they wait.
+static bool s_rx_more;
+static uint64_t s_rx_more_since;
+
 static void net_service(void) {
     static bool active;
-    static absolute_time_t next_poll;
 
     // Handshake with core 1: only use socket 1 while it is enabled.
     bool enable = atomic_load(&g_net.udp_enable);
     if (enable != active) {
         active = enable;
         atomic_store(&g_net.udp_active, active);
+        // The socket was (re)opened: look once, whatever INTn says.
+        s_rx_more = active;
+        s_rx_more_since = time_us_64();
     }
     if (!active) return;
 
-    // (A reply still in flight is checked by w5500_udp_send_nb itself; only
-    // RECV raises INTn.)
-    // INTn signals new data; a slow poll covers a missed edge.
-    if (!w5500_int_asserted() && !time_reached(next_poll)) return;
-    next_poll = make_timeout_time_ms(1);
+    // INTn is level-triggered: it stays asserted while socket 1 has an
+    // unacknowledged RECV (only RECV is enabled, see core1.c udp_open), so
+    // no datagram can be missed and nothing needs to be polled: without
+    // input, core 0 causes no SPI traffic at all.
+    if (!s_rx_more && !w5500_int_asserted()) return;
     uint64_t noticed = time_us_64();
-    // When INTn fell (GPIO IRQ); a poll without an edge counts from now.
+    // When INTn fell (GPIO IRQ). Left-over datagrams wait since their round.
     uint64_t edge = w5500_int_time_take();
     bool had_edge = edge && edge <= noticed;
-    if (!had_edge) edge = noticed;
+    if (s_rx_more) {
+        edge = s_rx_more_since;
+        had_edge = false;
+    } else if (!had_edge) {
+        edge = noticed;
+    }
     timing_pin(PSHB_TIMING_PIN_RX, true);
 
     // One lock for the whole round: core 1 cannot slip in between the
-    // register accesses of a datagram.
+    // register accesses of a datagram. The interrupt is acknowledged before
+    // the chip is asked what it holds: a datagram arriving later raises it
+    // again (and SIR follows Sn_IR).
     w5500_lock();
     uint64_t locked = time_us_64();
     setSn_IR(W5500_SOCK_UDP, Sn_IR_RECV);
     uint16_t left = 0;
     int got = 0;
-    for (int i = 0; i < 8; i++) {
+    s_rx_more = false;
+    for (int i = 0; i < RX_PER_ROUND; i++) {
         uint8_t pkt[PSHB_MAX_PACKET_LEN];
         uint8_t ip[4];
         uint16_t port;
@@ -180,10 +200,14 @@ static void net_service(void) {
             s_activity_until = make_timeout_time_ms(20);
         }
         if (left < 8) break;  // nothing more known; a new datagram raises INTn again
+        if (i == RX_PER_ROUND - 1) {
+            // More is waiting: next loop, right after serving USB.
+            s_rx_more = true;
+            s_rx_more_since = edge;
+        }
     }
     w5500_unlock();
     timing_pin(PSHB_TIMING_PIN_RX, false);
-    // Rounds that found nothing are the fallback poll: not counted.
     if (got) {
         g_diag.rounds++;
         g_diag.datagrams += (uint32_t)got;
