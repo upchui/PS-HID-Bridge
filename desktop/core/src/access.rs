@@ -216,6 +216,8 @@ mod tests {
             product: p,
             keyboard: true,
             mouse: false,
+            touchpad: false,
+            touchscreen: false,
             accessible: false,
         }
     }

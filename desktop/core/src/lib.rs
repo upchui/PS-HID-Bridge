@@ -22,6 +22,7 @@ pub mod protocol;
 pub mod rt;
 pub mod script;
 pub mod service;
+pub mod touch;
 pub mod transport;
 pub mod trigger;
 pub mod update;

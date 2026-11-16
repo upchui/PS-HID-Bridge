@@ -232,6 +232,15 @@ enum ConfigCmd {
         sensitivity: Option<f64>,
         #[arg(long)]
         accel: Option<f64>,
+        /// Touchpads and touchscreens: factor on the motion (1.0 = as designed)
+        #[arg(long, value_name = "FACTOR")]
+        touchpad_speed: Option<f64>,
+        /// Touchpads and touchscreens: a short tap clicks
+        #[arg(long, value_enum)]
+        tap_to_click: Option<OnOff>,
+        /// Touchpads and touchscreens: two-finger scrolling moves the content with the fingers
+        #[arg(long, value_enum)]
+        natural_scroll: Option<OnOff>,
         /// Look for updates automatically (desktop app)
         #[arg(long, value_enum)]
         update_check: Option<OnOff>,
@@ -396,7 +405,7 @@ fn cmd_list_devices() -> Result<(), String> {
     let list = input::list_devices().map_err(|e| format!("/dev/input: {e}"))?;
     println!("{:<20} {:<14} {:<10} {:<8} Name", "Path", "Kind", "ID", "Access");
     for d in &list.devices {
-        if d.keyboard || d.mouse {
+        if d.keyboard || d.pointer() {
             println!(
                 "{:<20} {:<14} {:<10} {:<8} {}",
                 d.path.display(),
@@ -491,6 +500,7 @@ fn cmd_run(
     let guard = GrabGuard::default();
     let mut inputs =
         InputSet::open(&selected, waker, guard.clone()).map_err(|e| format!("Opening device: {e}"))?;
+    inputs.set_touch_settings(ctx.config.touchpad.settings());
     // Every other keyboard is only watched: triggers and the emergency stop
     // work there too, nothing of it is forwarded.
     let watch = input::watch_keyboards(&list.devices, &selected);
@@ -1072,6 +1082,9 @@ fn cmd_config(ctx: &mut Ctx, cmd: &ConfigCmd) -> Result<(), String> {
             keyboard,
             sensitivity,
             accel,
+            touchpad_speed,
+            tap_to_click,
+            natural_scroll,
             update_check,
         } => {
             let c = &mut ctx.config;
@@ -1103,6 +1116,15 @@ fn cmd_config(ctx: &mut Ctx, cmd: &ConfigCmd) -> Result<(), String> {
             }
             if let Some(a) = accel {
                 c.mouse.accel = *a;
+            }
+            if let Some(s) = touchpad_speed {
+                c.touchpad.speed = *s;
+            }
+            if let Some(on) = tap_to_click {
+                c.touchpad.tap_to_click = matches!(on, OnOff::On);
+            }
+            if let Some(on) = natural_scroll {
+                c.touchpad.natural_scroll = matches!(on, OnOff::On);
             }
             if let Some(on) = update_check {
                 c.update_check = matches!(on, OnOff::On);

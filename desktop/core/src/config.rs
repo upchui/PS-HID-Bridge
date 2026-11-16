@@ -12,6 +12,7 @@ use crate::engine::EngineConfig;
 use crate::keymap::Keymap;
 use crate::mouse::MouseCurve;
 use crate::protocol::{KEY_LEN, UDP_PORT_DEFAULT};
+use crate::touch::TouchSettings;
 use crate::trigger::{Action, Combo, KeyAlt, Trigger, TriggerKind};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -108,6 +109,51 @@ impl Default for MouseConfig {
     }
 }
 
+/// Touchpads and touchscreens (see [`crate::touch`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TouchpadConfig {
+    /// Factor on the motion (1.0 = as designed).
+    pub speed: f64,
+    /// A short tap clicks.
+    pub tap_to_click: bool,
+    /// Two-finger scrolling moves the content with the fingers.
+    pub natural_scroll: bool,
+    /// Settings this version does not know (written by a newer one): kept
+    /// and written back as they are.
+    #[serde(flatten)]
+    pub extra: toml::Table,
+}
+
+impl TouchpadConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if !(self.speed.is_finite() && self.speed > 0.0) {
+            return Err(format!("Touchpad speed must be above 0 (is {})", self.speed));
+        }
+        Ok(())
+    }
+
+    pub fn settings(&self) -> TouchSettings {
+        TouchSettings {
+            speed: self.speed,
+            tap: self.tap_to_click,
+            natural_scroll: self.natural_scroll,
+        }
+    }
+}
+
+impl Default for TouchpadConfig {
+    fn default() -> Self {
+        let t = TouchSettings::default();
+        Self {
+            speed: t.speed,
+            tap_to_click: t.tap,
+            natural_scroll: t.natural_scroll,
+            extra: toml::Table::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -121,6 +167,7 @@ pub struct Config {
     pub window_rule_enabled: bool,
     pub window_rule: String,
     pub mouse: MouseConfig,
+    pub touchpad: TouchpadConfig,
     /// ISO keyboard (German): `#'` key sends HID 0x32.
     pub iso_keyboard: bool,
     /// The first-run wizard has been completed (GUI).
@@ -150,6 +197,7 @@ impl Default for Config {
             window_rule_enabled: false,
             window_rule: DEFAULT_WINDOW_RULE.into(),
             mouse: MouseConfig::default(),
+            touchpad: TouchpadConfig::default(),
             iso_keyboard: true,
             setup_done: false,
             update_check: true,
@@ -238,6 +286,7 @@ impl Config {
 
     pub fn engine_config(&self) -> Result<EngineConfig, String> {
         self.mouse.validate()?;
+        self.touchpad.validate()?;
         Ok(EngineConfig {
             triggers: self
                 .triggers

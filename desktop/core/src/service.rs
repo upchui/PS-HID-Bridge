@@ -23,6 +23,7 @@ use crate::lowlat::{self, AdapterInfo, AdapterStatus, AdapterTimer, CpuWake, Cpu
 use crate::mouse::MouseCurve;
 use crate::protocol::{KEY_LEN, Pong};
 use crate::rt;
+use crate::touch::TouchSettings;
 use crate::transport::{KeyState, LatencyStats, Link, LinkConfig};
 use crate::trigger::{Action, Combo, KeyAlt};
 
@@ -46,6 +47,8 @@ pub enum ServiceCmd {
     /// Report which selected device produces input.
     Identify(bool),
     MouseCurve(MouseCurve),
+    /// Settings for touchpads and touchscreens.
+    Touchpad(TouchSettings),
     /// Ping more often while the latency view is visible.
     PingInterval(Duration),
     /// Keep the CPU out of deep sleep states while the bridge is on.
@@ -145,6 +148,7 @@ impl Service {
         let (tx, rx) = mpsc::channel();
         let devices = cfg.config.devices.clone();
         let cpu = CpuWake::new(cfg.config.keep_cpu_awake);
+        let touch = cfg.config.touchpad.settings();
         // Puts back what a crashed run left switched.
         let adapter = AdapterTimer::new(cfg.adapter_state);
         let board = cfg.board;
@@ -154,6 +158,7 @@ impl Service {
             .name("pshb-service".into())
             .spawn(move || {
                 let mut r = Runner::new(Engine::new(engine_cfg), link, devices, sink, w, cmds);
+                r.inputs.set_touch_settings(touch);
                 r.cpu = cpu;
                 r.adapter = adapter;
                 r.board = Some(board);
@@ -631,6 +636,7 @@ impl Runner {
                     }
                     Ok(ServiceCmd::Identify(on)) => self.identify = on,
                     Ok(ServiceCmd::MouseCurve(c)) => self.ctl.engine.set_mouse_curve(c),
+                    Ok(ServiceCmd::Touchpad(t)) => self.inputs.set_touch_settings(t),
                     Ok(ServiceCmd::PingInterval(d)) => self.link.set_ping_interval(d),
                     Ok(ServiceCmd::KeepCpuAwake(on)) => self.cpu.set_enabled(on),
                     Ok(ServiceCmd::CheckLowLatency) => {

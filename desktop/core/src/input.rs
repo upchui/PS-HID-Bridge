@@ -13,9 +13,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use evdev::raw_stream::RawDevice;
-use evdev::{EventType, InputEvent, SynchronizationCode};
+use evdev::{EventType, InputEvent, KeyCode, PropType, SynchronizationCode};
 
 use crate::engine::Event;
+use crate::touch::{Geometry, SlotState, Touch, TouchSettings};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceInfo {
@@ -27,6 +28,12 @@ pub struct DeviceInfo {
     pub product: u16,
     pub keyboard: bool,
     pub mouse: bool,
+    /// A touchpad: absolute finger positions, turned into mouse input (see
+    /// [`crate::touch`]).
+    pub touchpad: bool,
+    /// A touchscreen (INPUT_PROP_DIRECT), used like a touchpad: the
+    /// PlayStation knows a relative mouse only.
+    pub touchscreen: bool,
     /// We may open the event node (udev rule / group in place).
     pub accessible: bool,
 }
@@ -35,8 +42,30 @@ const KEY_A: usize = 30;
 const KEY_Z: usize = 44;
 const KEY_ENTER: usize = 28;
 const BTN_LEFT: usize = 0x110;
+const BTN_TOOL_PEN: usize = 0x140;
+const BTN_TOOL_FINGER: usize = 0x145;
+const BTN_TOUCH: usize = 0x14a;
+const BTN_STYLUS: usize = 0x14b;
 const REL_X: usize = 0;
 const REL_Y: usize = 1;
+const ABS_X: usize = 0x00;
+const ABS_Y: usize = 0x01;
+const ABS_MT_SLOT: usize = 0x2f;
+const ABS_MT_POSITION_X: usize = 0x35;
+const ABS_MT_POSITION_Y: usize = 0x36;
+const ABS_MT_TOOL_TYPE: usize = 0x37;
+const ABS_MT_TRACKING_ID: usize = 0x39;
+const INPUT_PROP_DIRECT: usize = 1;
+
+/// A surface touched by fingers (touchpad or touchscreen): positions on
+/// two axes and a touch key, but no pen (a graphics tablet stays out).
+pub fn touch_caps(keys: &str, abs: &str) -> bool {
+    let xy = (caps_bit(abs, ABS_X) && caps_bit(abs, ABS_Y))
+        || (caps_bit(abs, ABS_MT_POSITION_X) && caps_bit(abs, ABS_MT_POSITION_Y));
+    let finger = caps_bit(keys, BTN_TOUCH) || caps_bit(keys, BTN_TOOL_FINGER);
+    let pen = caps_bit(keys, BTN_TOOL_PEN) || caps_bit(keys, BTN_STYLUS);
+    xy && finger && !pen
+}
 
 /// Is bit `n` set in a sysfs capability bitmap ("hex words, most significant first")?
 pub fn caps_bit(caps: &str, n: usize) -> bool {
@@ -73,6 +102,8 @@ impl DeviceInfo {
         }
         let keys = sysfs(&dev, "capabilities/key");
         let rel = sysfs(&dev, "capabilities/rel");
+        let touch = touch_caps(&keys, &sysfs(&dev, "capabilities/abs"));
+        let direct = caps_bit(&sysfs(&dev, "properties"), INPUT_PROP_DIRECT);
         let hex = |s: String| u16::from_str_radix(&s, 16).unwrap_or(0);
         let path = PathBuf::from("/dev/input").join(event);
         Some(Self {
@@ -85,7 +116,14 @@ impl DeviceInfo {
             product: hex(sysfs(&dev, "id/product")),
             keyboard: caps_bit(&keys, KEY_A) && caps_bit(&keys, KEY_Z) && caps_bit(&keys, KEY_ENTER),
             mouse: caps_bit(&rel, REL_X) && caps_bit(&rel, REL_Y) && caps_bit(&keys, BTN_LEFT),
+            touchpad: touch && !direct,
+            touchscreen: touch && direct,
         })
+    }
+
+    /// Moves the PlayStation's mouse: a mouse, touchpad or touchscreen.
+    pub fn pointer(&self) -> bool {
+        self.mouse || self.touchpad || self.touchscreen
     }
 
     pub fn id_string(&self) -> String {
@@ -93,11 +131,22 @@ impl DeviceInfo {
     }
 
     pub fn kind(&self) -> &'static str {
-        match (self.keyboard, self.mouse) {
-            (true, true) => "keyboard + mouse",
-            (true, false) => "keyboard",
-            (false, true) => "mouse",
-            (false, false) => "other",
+        let pointer = if self.touchscreen {
+            "touchscreen"
+        } else if self.touchpad {
+            "touchpad"
+        } else if self.mouse {
+            "mouse"
+        } else {
+            ""
+        };
+        match (self.keyboard, pointer) {
+            (true, "") => "keyboard",
+            (true, "mouse") => "keyboard + mouse",
+            (true, "touchpad") => "keyboard + touchpad",
+            (true, _) => "keyboard + touchscreen",
+            (false, "") => "other",
+            (false, p) => p,
         }
     }
 
@@ -118,7 +167,8 @@ impl DeviceInfo {
 
 pub struct DeviceList {
     pub devices: Vec<DeviceInfo>,
-    /// Keyboards/mice we may not open (missing udev rule / group).
+    /// Keyboards and pointing devices we may not open (missing udev rule /
+    /// group).
     pub inaccessible: usize,
 }
 
@@ -142,7 +192,7 @@ pub fn list_devices() -> io::Result<DeviceList> {
         .collect();
     let inaccessible = devices
         .iter()
-        .filter(|d| (d.keyboard || d.mouse) && !d.accessible)
+        .filter(|d| (d.keyboard || d.pointer()) && !d.accessible)
         .count();
     Ok(DeviceList {
         devices,
@@ -150,11 +200,12 @@ pub fn list_devices() -> io::Result<DeviceList> {
     })
 }
 
-/// All devices matching any of the selectors (keyboards and mice only).
+/// All devices matching any of the selectors (keyboards and pointing
+/// devices only).
 pub fn select(devices: &[DeviceInfo], specs: &[String]) -> Vec<DeviceInfo> {
     devices
         .iter()
-        .filter(|d| (d.keyboard || d.mouse) && specs.iter().any(|s| d.matches(s)))
+        .filter(|d| (d.keyboard || d.pointer()) && specs.iter().any(|s| d.matches(s)))
         .cloned()
         .collect()
 }
@@ -248,6 +299,101 @@ fn open_device(path: &Path) -> io::Result<(RawDevice, bool)> {
 /// Keys and buttons the kernel says are held right now (EVIOCGKEY).
 fn held_keys(dev: &RawDevice) -> Option<Vec<u16>> {
     dev.get_key_state().ok().map(|s| s.iter().map(|k| k.0).collect())
+}
+
+/// EVIOCGMTSLOTS: the value of one ABS_MT_* axis in every slot.
+fn mt_slots(fd: RawFd, code: usize, slots: usize) -> Option<Vec<i32>> {
+    let mut buf = vec![0i32; slots + 1];
+    buf[0] = code as i32;
+    // _IOC(_IOC_READ, 'E', 0x0a, size of the buffer)
+    let request = (2 << 30) | (((buf.len() * 4) as libc::c_ulong) << 16) | (0x45 << 8) | 0x0a;
+    // SAFETY: valid descriptor; the kernel writes at most the size given in
+    // the request into the buffer.
+    let r = unsafe { libc::ioctl(fd, request as _, buf.as_mut_ptr()) };
+    (r >= 0).then(|| buf.split_off(1))
+}
+
+/// A touch device's axes: (minimum, maximum, resolution) by code.
+fn abs_axes(dev: &RawDevice) -> Vec<(usize, (i32, i32, i32), i32)> {
+    dev.get_absinfo()
+        .map(|axes| {
+            axes.map(|(code, i)| {
+                (
+                    usize::from(code.0),
+                    (i.minimum(), i.maximum(), i.resolution()),
+                    i.value(),
+                )
+            })
+            .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The contacts on a touch device right now (after opening it, and after
+/// events were lost), and its current slot; None if the kernel does not say.
+fn touch_state(dev: &RawDevice, geo: &Geometry) -> Option<(Vec<SlotState>, usize)> {
+    let axes = abs_axes(dev);
+    let value = |code| axes.iter().find(|a| a.0 == code).map(|a| a.2);
+    if geo.slots == 0 {
+        let touching = dev.get_key_state().ok()?.contains(KeyCode::BTN_TOUCH);
+        let state = SlotState {
+            id: if touching { 0 } else { -1 },
+            x: value(ABS_X)?,
+            y: value(ABS_Y)?,
+            palm: false,
+        };
+        return Some((vec![state], 0));
+    }
+    let fd = dev.as_raw_fd();
+    let ids = mt_slots(fd, ABS_MT_TRACKING_ID, geo.slots)?;
+    let xs = mt_slots(fd, ABS_MT_POSITION_X, geo.slots)?;
+    let ys = mt_slots(fd, ABS_MT_POSITION_Y, geo.slots)?;
+    let tools = mt_slots(fd, ABS_MT_TOOL_TYPE, geo.slots).unwrap_or_else(|| vec![0; geo.slots]);
+    let states = (0..geo.slots)
+        .map(|i| SlotState {
+            id: ids[i],
+            x: xs[i],
+            y: ys[i],
+            palm: tools[i] == 2, // MT_TOOL_PALM
+        })
+        .collect();
+    let current = value(ABS_MT_SLOT)
+        .and_then(|v| usize::try_from(v).ok())
+        .unwrap_or(0);
+    Some((states, current))
+}
+
+/// The touch handling for a touchpad or touchscreen, from its axes and
+/// properties; None for any other device (or one without usable axes).
+fn touch_for(info: &DeviceInfo, dev: &RawDevice, settings: TouchSettings) -> Option<Touch> {
+    if !(info.touchpad || info.touchscreen) {
+        return None;
+    }
+    let axes = abs_axes(dev);
+    let range = |code| axes.iter().find(|a| a.0 == code).map(|a| a.1);
+    let (x, y, slots) = match range(ABS_MT_POSITION_X).zip(range(ABS_MT_POSITION_Y)) {
+        Some((x, y)) => {
+            let slots = range(ABS_MT_SLOT).map_or(1, |s| usize::try_from(s.1 - s.0 + 1).unwrap_or(1).max(1));
+            (x, y, slots)
+        }
+        None => {
+            let (x, y) = range(ABS_X).zip(range(ABS_Y))?;
+            (x, y, 0)
+        }
+    };
+    let props = dev.properties();
+    let geo = Geometry::new(
+        x,
+        y,
+        slots,
+        props.contains(PropType::BUTTONPAD),
+        props.contains(PropType::DIRECT),
+    );
+    let mut touch = Touch::new(geo, settings);
+    // Fingers already on it count from where they are (no jump, no tap).
+    let held = held_keys(dev).unwrap_or_default();
+    touch.reset(touch_state(dev, &geo), &held);
+    Some(touch)
 }
 
 /// EVIOCGRAB: unlike EVIOCSCLOCKID the kernel uses the argument's *value*
@@ -428,6 +574,9 @@ struct Open {
     /// (a mouse whose receiver lost the release): not pressed again from
     /// the kernel's state until their next real release.
     stale: Vec<u16>,
+    /// A touchpad or touchscreen: its finger contacts become mouse input
+    /// (`pressed` then holds the buttons it sent, not the kernel's keys).
+    touch: Option<Touch>,
 }
 
 impl Open {
@@ -440,6 +589,10 @@ impl Open {
         self.mono = mono;
         self.dropping = false;
         self.stale.clear();
+        if let Some(touch) = &mut self.touch {
+            let geo = *touch.geometry();
+            touch.reset(touch_state(&self.dev, &geo), &[]);
+        }
         Ok(())
     }
 }
@@ -498,6 +651,8 @@ pub struct InputSet {
     resyncs: u64,
     /// Next comparison of every device with the kernel's key state.
     next_check: Instant,
+    /// Settings for touchpads and touchscreens.
+    touch_settings: TouchSettings,
 }
 
 /// How often every device is compared with the kernel's key state, as a
@@ -519,6 +674,7 @@ impl InputSet {
             pfds: Vec::new(),
             resyncs: 0,
             next_check: Instant::now() + KEY_CHECK_INTERVAL,
+            touch_settings: TouchSettings::default(),
         };
         set.devices_changed();
         set
@@ -571,6 +727,14 @@ impl InputSet {
         }
     }
 
+    /// Settings for touchpads and touchscreens (also for the open ones).
+    pub fn set_touch_settings(&mut self, settings: TouchSettings) {
+        self.touch_settings = settings;
+        for touch in self.devices.iter_mut().filter_map(|d| d.touch.as_mut()) {
+            touch.set_settings(settings);
+        }
+    }
+
     /// Hot-plugging is noticed by itself ([`InputMsg::Hotplug`]); without
     /// it the caller has to look at the device list regularly.
     pub fn watches_hotplug(&self) -> bool {
@@ -584,9 +748,19 @@ impl InputSet {
 
     fn add(&mut self, info: &DeviceInfo, watch: bool) -> io::Result<()> {
         let (dev, mono) = open_device(&info.path)?;
+        let touch = if watch {
+            None
+        } else {
+            touch_for(info, &dev, self.touch_settings)
+        };
         // Keys held already stay with the desktop (no events for them), but
-        // count as held, so the safety net does not press them.
-        let pressed = held_keys(&dev).unwrap_or_default();
+        // count as held, so the safety net does not press them. A touch
+        // device's keys are finger contacts: it starts with no buttons.
+        let pressed = if touch.is_some() {
+            Vec::new()
+        } else {
+            held_keys(&dev).unwrap_or_default()
+        };
         self.devices.push(Open {
             id: self.next_id,
             info: info.clone(),
@@ -596,6 +770,7 @@ impl InputSet {
             pressed,
             dropping: false,
             stale: Vec::new(),
+            touch,
         });
         self.next_id += 1;
         Ok(())
@@ -748,7 +923,9 @@ impl InputSet {
     fn check_keys(&mut self, out: &mut Vec<InputMsg>) {
         self.next_check = Instant::now() + KEY_CHECK_INTERVAL;
         for d in &mut self.devices {
-            if d.pressed.is_empty() || d.dropping {
+            // A touch device's kernel keys are finger contacts, not the
+            // buttons it sent (lost events are handled by Touch::reset).
+            if d.pressed.is_empty() || d.dropping || d.touch.is_some() {
                 continue;
             }
             let Some(held) = held_keys(&d.dev) else {
@@ -774,7 +951,16 @@ impl InputSet {
     /// Wait up to `timeout` for input, hot-plugging or [`Waker::wake`] and
     /// append what arrived to `out`.
     pub fn wait(&mut self, timeout: Duration, out: &mut Vec<InputMsg>) {
-        let timeout = timeout.min(self.next_check.saturating_duration_since(Instant::now()));
+        let mut timeout = timeout.min(self.next_check.saturating_duration_since(Instant::now()));
+        // A tap's click is let go on time (Touch::tick below).
+        if let Some(due) = self
+            .devices
+            .iter()
+            .filter_map(|d| d.touch.as_ref()?.deadline())
+            .min()
+        {
+            timeout = timeout.min(Duration::from_micros(due.saturating_sub(crate::clock::now_us())));
+        }
         // SAFETY: valid pollfd array for the duration of the call.
         let r = unsafe {
             libc::poll(
@@ -786,10 +972,29 @@ impl InputSet {
         if r > 0 {
             self.read_devices(out);
         }
+        self.tick_touch(out);
         // After the batches: the safety net's state query deletes the key
         // events still queued, so nothing read but unprocessed may be left.
         if Instant::now() >= self.next_check {
             self.check_keys(out);
+        }
+    }
+
+    /// Touch devices: let go of tap clicks whose time is up.
+    fn tick_touch(&mut self, out: &mut Vec<InputMsg>) {
+        let now = crate::clock::now_us();
+        for d in &mut self.devices {
+            let Some(touch) = &mut d.touch else {
+                continue;
+            };
+            for event in touch.tick(now) {
+                track_key(&mut d.pressed, &mut d.stale, &event);
+                out.push(InputMsg::Event {
+                    dev: d.id,
+                    event,
+                    ts_us: None,
+                });
+            }
         }
     }
 
@@ -807,6 +1012,7 @@ impl InputSet {
             out.push(InputMsg::Hotplug);
         }
         let mut gone = Vec::new();
+        let mut typed = false;
         for i in 0..n {
             if self.pfds[i].revents == 0 {
                 continue;
@@ -819,6 +1025,7 @@ impl InputSet {
                 pressed,
                 dropping,
                 stale,
+                touch,
                 ..
             } = &mut self.devices[i];
             let events: Vec<InputEvent> = match dev.fetch_events() {
@@ -830,23 +1037,40 @@ impl InputSet {
                 }
             };
             let mut got = Vec::with_capacity(events.len());
-            if process_events(events, pressed, stale, dropping, || held_keys(dev), &mut got) {
+            let lost = match touch {
+                Some(touch) => {
+                    let state = |geo: &Geometry| (touch_state(dev, geo), held_keys(dev).unwrap_or_default());
+                    process_touch_events(events, touch, *mono, pressed, stale, dropping, state, &mut got)
+                }
+                None => {
+                    let lost = process_events(events, pressed, stale, dropping, || held_keys(dev), &mut got);
+                    // A key pressed on a keyboard: touches beginning now are
+                    // no taps (a palm on the touchpad while typing).
+                    typed |= got
+                        .iter()
+                        .any(|(e, _)| matches!(e, Event::Key { code, down: true } if *code < 0x100));
+                    lost
+                }
+            };
+            if lost {
                 self.resyncs += 1;
             }
             for (event, ts) in got {
                 let Some(event) = role_event(*watch, event) else {
                     continue;
                 };
-                let ts_us = ts.filter(|_| *mono).map(|t| {
-                    t.duration_since(std::time::UNIX_EPOCH)
-                        .map(|t| t.as_micros() as u64)
-                        .unwrap_or(0)
-                });
+                let ts_us = ts.filter(|_| *mono).map(micros);
                 out.push(InputMsg::Event {
                     dev: *id,
                     event,
                     ts_us,
                 });
+            }
+        }
+        if typed {
+            let now = crate::clock::now_us();
+            for touch in self.devices.iter_mut().filter_map(|d| d.touch.as_mut()) {
+                touch.note_typing(now);
             }
         }
         if gone.is_empty() {
@@ -883,6 +1107,98 @@ fn role_event(watch: bool, event: Event) -> Option<Event> {
         Event::Key { code, down } => Some(Event::TriggerKey { code, down }),
         _ => None,
     }
+}
+
+/// A kernel timestamp (on the monotonic clock) in microseconds.
+fn micros(t: SystemTime) -> u64 {
+    t.duration_since(std::time::UNIX_EPOCH)
+        .map(|t| t.as_micros() as u64)
+        .unwrap_or(0)
+}
+
+/// Keep `pressed` up to date with a key event. A real edge of a forgotten
+/// key ends its stale mark: the kernel sends one only when the key really
+/// changed.
+fn track_key(pressed: &mut Vec<u16>, stale: &mut Vec<u16>, event: &Event) {
+    if let Event::Key { code, down } = *event {
+        stale.retain(|c| *c != code);
+        if !down {
+            pressed.retain(|c| *c != code);
+        } else if !pressed.contains(&code) {
+            pressed.push(code);
+        }
+    }
+}
+
+/// [`process_events`] for a touchpad or touchscreen: its finger contacts go
+/// to the [`Touch`], which turns every frame into mouse events; anything
+/// else of the device (relative axes, keys of a keyboard built into it)
+/// goes the usual way. When events were lost (SYN_DROPPED), the touch
+/// handling starts over from the kernel's state (`state`: contacts and key
+/// state). Returns true if events had been lost.
+#[allow(clippy::too_many_arguments)]
+fn process_touch_events(
+    events: impl IntoIterator<Item = InputEvent>,
+    touch: &mut Touch,
+    mono: bool,
+    pressed: &mut Vec<u16>,
+    stale: &mut Vec<u16>,
+    dropping: &mut bool,
+    mut state: impl FnMut(&Geometry) -> (Option<(Vec<SlotState>, usize)>, Vec<u16>),
+    out: &mut Vec<(Event, Option<SystemTime>)>,
+) -> bool {
+    let mut lost = false;
+    // Events of this frame that went the usual way (they need a Sync).
+    let mut other = false;
+    for ev in events {
+        if ev.event_type() == EventType::SYNCHRONIZATION {
+            if ev.code() == SynchronizationCode::SYN_DROPPED.0 {
+                *dropping = true;
+                continue;
+            }
+            if ev.code() != SynchronizationCode::SYN_REPORT.0 {
+                continue;
+            }
+            if *dropping {
+                *dropping = false;
+                lost = true;
+                other = false;
+                let geo = *touch.geometry();
+                let (slots, held) = state(&geo);
+                for event in touch.reset(slots, &held) {
+                    track_key(pressed, stale, &event);
+                    out.push((event, None));
+                }
+                continue;
+            }
+            let now = if mono {
+                micros(ev.timestamp())
+            } else {
+                crate::clock::now_us()
+            };
+            let mut events = touch.frame(now);
+            if other && events.is_empty() {
+                events.push(Event::Sync);
+            }
+            other = false;
+            for event in events {
+                track_key(pressed, stale, &event);
+                out.push((event, Some(ev.timestamp())));
+            }
+            continue;
+        }
+        if *dropping {
+            continue;
+        }
+        if Touch::handles(&ev) {
+            touch.feed(&ev);
+        } else if let Some(event) = map_event(&ev) {
+            track_key(pressed, stale, &event);
+            other = true;
+            out.push((event, Some(ev.timestamp())));
+        }
+    }
+    lost
 }
 
 fn map_event(ev: &evdev::InputEvent) -> Option<Event> {
@@ -973,16 +1289,7 @@ fn process_events(
         let Some(event) = map_event(&ev) else {
             continue;
         };
-        if let Event::Key { code, down } = event {
-            // A real edge of a forgotten key ends its stale mark: the kernel
-            // sends one only when the key really changed.
-            stale.retain(|c| *c != code);
-            if !down {
-                pressed.retain(|c| *c != code);
-            } else if !pressed.contains(&code) {
-                pressed.push(code);
-            }
-        }
+        track_key(pressed, stale, &event);
         out.push((event, Some(ev.timestamp())));
     }
     // An incomplete frame at the end of the batch is finished in the next
@@ -1380,7 +1687,112 @@ mod tests {
             product: 0xc52b,
             keyboard: kb,
             mouse,
+            touchpad: false,
+            touchscreen: false,
         }
+    }
+
+    #[test]
+    fn touch_devices_from_their_capabilities() {
+        // This laptop's touchpad (a PixArt clickpad, multitouch) and its
+        // touchscreen; the DualSense's touchpad too.
+        assert!(touch_caps("e520 10000 0 0 0 0", "2e0800000000003"));
+        assert!(touch_caps("400 0 0 0 0 0", "660800001000003"));
+        assert!(caps_bit("2", INPUT_PROP_DIRECT) && !caps_bit("5", INPUT_PROP_DIRECT));
+        assert!(touch_caps("2420 10000 0 0 0 0", "260800000000003"));
+        // Not: the DualSense itself (sticks, no touch), a graphics tablet
+        // (pen), the touchpad's "Mouse" sibling node (no absolute axes).
+        assert!(!touch_caps("7fdb000000000000 0 0 0 0", "3003f"));
+        assert!(!touch_caps("c01 0 0 0 0 0", "1000003"));
+        assert!(!touch_caps("30000 0 0 0 0", "0"));
+
+        let mut d = dev("PIXA3854:00 093A:1343 Touchpad", false, false);
+        assert!(!d.pointer());
+        d.touchpad = true;
+        assert!(d.pointer());
+        assert_eq!(d.kind(), "touchpad");
+        d.touchpad = false;
+        d.touchscreen = true;
+        assert_eq!(d.kind(), "touchscreen");
+        assert_eq!(select(&[d.clone()], &["Touchpad".into()]), vec![d]);
+    }
+
+    #[test]
+    fn touch_frames_become_mouse_events() {
+        use crate::touch::BTN_LEFT as LEFT_BUTTON;
+        let geo = Geometry::new((0, 1000, 10), (0, 600, 10), 2, true, false);
+        let mut touch = Touch::new(geo, TouchSettings::default());
+        let (mut pressed, mut stale, mut dropping) = (Vec::new(), Vec::new(), false);
+        let abs = |code, value| InputEvent::new(EventType::ABSOLUTE.0, code, value);
+        let none = |_: &Geometry| (None, Vec::new());
+        let mut out = Vec::new();
+        let events = vec![
+            abs(0x2f, 0),
+            abs(0x39, 1),
+            abs(0x35, 500),
+            abs(0x36, 300),
+            key(0x14a, 1), // BTN_TOUCH: a finger, never a key for the engine
+            report(),
+            abs(0x35, 510),
+            report(),
+            key(0x110, 1), // the clickpad pressed
+            report(),
+        ];
+        let lost = process_touch_events(
+            events,
+            &mut touch,
+            false,
+            &mut pressed,
+            &mut stale,
+            &mut dropping,
+            none,
+            &mut out,
+        );
+        assert!(!lost);
+        let events: Vec<Event> = out.iter().map(|(e, _)| *e).collect();
+        assert!(
+            matches!(events[0], Event::Rel { axis: 0, value } if value > 0),
+            "{events:?}"
+        );
+        assert_eq!(
+            events[1..],
+            [
+                Event::Sync,
+                Event::Key {
+                    code: LEFT_BUTTON,
+                    down: true
+                },
+                Event::Sync
+            ]
+        );
+        assert_eq!(pressed, [LEFT_BUTTON]);
+
+        // Events lost while the button was let go: released, no jump.
+        let mut out = Vec::new();
+        let events = vec![syn(SynchronizationCode::SYN_DROPPED), abs(0x35, 900), report()];
+        let lost = process_touch_events(
+            events,
+            &mut touch,
+            false,
+            &mut pressed,
+            &mut stale,
+            &mut dropping,
+            none,
+            &mut out,
+        );
+        assert!(lost);
+        let events: Vec<Event> = out.iter().map(|(e, _)| *e).collect();
+        assert_eq!(
+            events,
+            [
+                Event::Key {
+                    code: LEFT_BUTTON,
+                    down: false
+                },
+                Event::Sync
+            ]
+        );
+        assert!(pressed.is_empty());
     }
 
     #[test]
