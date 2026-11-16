@@ -56,6 +56,10 @@ static c1_state_t s_state = C1_NO_LINK;
 // static start was never set up).
 static uint8_t s_ip_mode;
 static bool s_reboot;
+// The settings were erased (factory reset), the restart is pending: nothing
+// may write the old ones from RAM back meanwhile (a signed request from the
+// app, the web interface while the BOOTSEL button is still held).
+static bool s_settings_erased;
 
 // ---------------------------------------------------------------- network
 
@@ -326,6 +330,7 @@ static void timing_print(void) {
 
 static bool be_save(void *ctx, const pshb_settings_t *s) {
     (void)ctx;
+    if (s_settings_erased) return false;
     pshb_settings_t copy = *s;
     if (!settings_save(&g_settings_flash, &copy)) return false;
     g_settings = copy;
@@ -345,6 +350,7 @@ static void be_reboot(void *ctx) {
 static void be_factory_reset(void *ctx) {
     (void)ctx;
     settings_erase(&g_settings_flash);
+    s_settings_erased = true;
     s_reboot = true;
 }
 
@@ -430,6 +436,7 @@ static void bootsel_service(void) {
     if (pressed && absolute_time_diff_us(pressed_since, get_absolute_time()) > FACTORY_RESET_HOLD_MS * 1000) {
         printf("system: BOOTSEL held, factory reset (restart when released)\n");
         settings_erase(&g_settings_flash);
+        s_settings_erased = true;
         erased = true;
     }
 }
@@ -446,7 +453,7 @@ void core1_main(void) {
         // interface and the app say why).
         pshb_settings_t next = g_settings;
         next.cpu_200mhz = 0;
-        if (settings_save(&g_settings_flash, &next)) g_settings = next;
+        if (!s_settings_erased && settings_save(&g_settings_flash, &next)) g_settings = next;
         printf("clock: back to 150 MHz for good\n");
     }
     reg_dhcp_cbfunc(on_dhcp_assign, on_dhcp_assign, on_dhcp_conflict);
