@@ -1,7 +1,7 @@
 //! Command line front end of the PS HID Bridge.
 
 use std::io::Read;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -275,16 +275,7 @@ fn resolve(board: &str) -> Result<SocketAddr, String> {
     if board.is_empty() {
         return Err("No board address: pass --board or run \"pshb-cli config set --board …\".".into());
     }
-    let with_port = if board.contains(':') {
-        board.to_string()
-    } else {
-        format!("{board}:{}", protocol::UDP_PORT_DEFAULT)
-    };
-    with_port
-        .to_socket_addrs()
-        .map_err(|e| format!("Cannot resolve address {board}: {e}"))?
-        .next()
-        .ok_or_else(|| format!("Cannot resolve address {board}"))
+    config::board_socket_addr(board).map_err(|e| format!("Cannot resolve address {board}: {e}"))
 }
 
 fn board_addr(ctx: &Ctx, args: &BoardArgs) -> Result<SocketAddr, String> {
@@ -865,15 +856,33 @@ fn cmd_board(
     Ok(())
 }
 
+/// The board's firmware version over its web API (signed with the key):
+/// needs no packet counter, so it also works while the app is running.
+/// Firmware before 1.0.25 (no signed requests): asked over UDP instead.
+fn board_firmware_http(ctx: &Ctx, board: &BoardArgs, http_port: u16) -> Result<Version, String> {
+    let addr = board_addr(ctx, board)?;
+    let api = update::BoardApi::new(&addr.ip().to_string(), http_port, &load_key(board)?);
+    match api.status() {
+        Ok(st) => st
+            .get("firmware")
+            .and_then(|v| v.as_str())
+            .and_then(Version::parse)
+            .ok_or_else(|| "The board did not say its firmware version.".into()),
+        Err(e) if e.contains("too old") => board_firmware(ctx, board),
+        Err(e) => Err(e),
+    }
+}
+
 fn update_firmware(ctx: &Ctx, board: &BoardArgs, file: Option<&Path>, http_port: u16) -> Result<(), String> {
     let addr = board_addr(ctx, board)?;
     let key = load_key(board)?;
-    let before = board_firmware(ctx, board).ok();
+    let before = board_firmware_http(ctx, board, http_port).ok();
     let (image, expected) = match file {
-        Some(f) => (
-            std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?,
-            None,
-        ),
+        Some(f) => {
+            let data = std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?;
+            usbflash::check_uf2(&data).map_err(|e| format!("{}: {e}", f.display()))?;
+            (data, None)
+        }
         None => {
             let latest = update::latest_release()?;
             if let Some(b) = before
@@ -897,7 +906,7 @@ fn update_firmware(ctx: &Ctx, board: &BoardArgs, file: Option<&Path>, http_port:
     thread::sleep(Duration::from_secs(2));
     loop {
         let late = Instant::now() > deadline;
-        match board_firmware(ctx, board) {
+        match board_firmware_http(ctx, board, http_port) {
             Ok(v) if expected.is_none_or(|e| v == e) => {
                 println!("The board runs firmware {v}.");
                 return Ok(());

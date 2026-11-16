@@ -78,7 +78,9 @@ fn persist(path: &Path, floor: u64) -> io::Result<()> {
     let mut f = File::create(&tmp)?;
     writeln!(f, "{floor}")?;
     f.sync_all()?;
-    fs::rename(&tmp, path)
+    fs::rename(&tmp, path)?;
+    crate::config::sync_dir(path);
+    Ok(())
 }
 
 fn warn(e: io::Error) {

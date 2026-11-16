@@ -97,6 +97,14 @@ impl ksni::Tray for BridgeTray {
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         vec![
             StandardItem {
+                label: "Show window".into(),
+                activate: Box::new(|t: &mut Self| {
+                    let _ = t.qt.queue(|obj| obj.show_window_requested());
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
                 label: if self.active {
                     "Bridge off".into()
                 } else {

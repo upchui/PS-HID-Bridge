@@ -13,6 +13,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "pshb-cli"
 path = "src/bin/pshb-cli.rs"
+# Flashing over USB (usbflash) is part of every command set.
+required-features = ["udisks"]
 
 [dependencies]
 chacha20poly1305 = "0.11"

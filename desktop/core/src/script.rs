@@ -73,7 +73,7 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 }
             }
             "combo" => {
-                let combo = Combo::parse(words.get(1).ok_or_else(|| err("Kombination fehlt"))?)?;
+                let combo = Combo::parse(words.get(1).ok_or_else(|| err("combination missing"))?)?;
                 let codes: Vec<u16> = combo.0.iter().map(|alt| alt.0[0]).collect();
                 for &c in &codes {
                     push(&mut delay, Event::Key { code: c, down: true });

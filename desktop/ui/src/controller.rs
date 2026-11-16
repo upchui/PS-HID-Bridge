@@ -3,7 +3,7 @@
 
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
@@ -23,6 +23,10 @@ use serde::Serialize;
 use crate::focus::FocusWatcher;
 use crate::notify;
 use crate::tray::{self, BridgeTray};
+
+/// The app's requests to the board's web API (latency page, start over,
+/// clock speeds) go one at a time.
+static BOARD_API: Mutex<()> = Mutex::new(());
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -199,6 +203,10 @@ pub mod qobject {
         fn usb_cancel(self: Pin<&mut AppController>);
         #[qinvokable]
         fn quit_app(self: Pin<&mut AppController>);
+
+        /// The window should come to the front (tray menu "Show window").
+        #[qsignal]
+        fn show_window_requested(self: Pin<&mut AppController>);
     }
 
     impl cxx_qt::Threading for AppController {}
@@ -259,6 +267,9 @@ pub struct AppControllerRust {
     /// What the GUI asked the service for; re-applied after a restart.
     identify_on: bool,
     latency_view: bool,
+    /// The board's address the running service sends to (looked up from
+    /// the setting, which may be a host name).
+    board_addr: Option<std::net::SocketAddr>,
     focus_state: Option<bool>,
 
     update_check: bool,
@@ -314,6 +325,9 @@ impl ServiceSlot {
 /// Retry interval when the service could not be started (no network yet,
 /// board name not resolvable, another program sending).
 const RETRY: Duration = Duration::from_secs(5);
+/// Board configured by name and not answering: look the name up again this
+/// often (it may have a new address from DHCP).
+const RENAME_CHECK: Duration = Duration::from_secs(10);
 
 impl Default for AppControllerRust {
     fn default() -> Self {
@@ -367,6 +381,7 @@ impl Default for AppControllerRust {
             focus: None,
             identify_on: false,
             latency_view: false,
+            board_addr: None,
             focus_state: None,
             update_check: true,
             appearance: QString::from("system"),
@@ -411,7 +426,10 @@ fn group_devices(devices: &[DeviceInfo], config: &Config) -> Vec<DeviceGroup> {
     let mut groups: Vec<DeviceGroup> = Vec::new();
     for d in devices.iter().filter(|d| d.keyboard || d.mouse) {
         let id = d.id_string();
+        // Selected by its id, or by a path or part of the name (pshb-cli).
+        let selected = config.devices.iter().any(|s| d.matches(s));
         if let Some(g) = groups.iter_mut().find(|g| g.id == id) {
+            g.selected |= selected;
             g.nodes += 1;
             g.accessible &= d.accessible;
             g.paths.push(d.path.display().to_string());
@@ -428,7 +446,7 @@ fn group_devices(devices: &[DeviceInfo], config: &Config) -> Vec<DeviceGroup> {
             };
         } else {
             groups.push(DeviceGroup {
-                selected: config.devices.iter().any(|s| s.eq_ignore_ascii_case(&id)),
+                selected,
                 id,
                 name: d.name.clone(),
                 kind: d.kind().into(),
@@ -517,9 +535,11 @@ impl qobject::AppController {
             }
             let old = slot.service.lock().unwrap().take();
             drop(old); // releases devices and board, frees the packet counter
+            let mut addr = None;
             let result = config::load_psk(&config::psk_path())
                 .and_then(|key| Ok((key, resolve(&cfg.board)?)))
                 .and_then(|(key, board)| {
+                    addr = Some(board);
                     let sink = Box::new(move |ev: ServiceEvent| {
                         let _ = events.queue(move |obj| obj.on_service_event(ev));
                     });
@@ -534,7 +554,7 @@ impl qobject::AppController {
             match result {
                 Ok(service) if slot.is_current(generation) => {
                     *slot.service.lock().unwrap() = Some(service);
-                    let _ = done.queue(move |obj| obj.service_started(generation));
+                    let _ = done.queue(move |obj| obj.service_started(generation, addr));
                 }
                 Ok(_) => {} // superseded: dropped here
                 Err(e) => {
@@ -547,10 +567,12 @@ impl qobject::AppController {
         }
     }
 
-    fn service_started(mut self: Pin<&mut Self>, generation: u64) {
+    fn service_started(mut self: Pin<&mut Self>, generation: u64, addr: Option<std::net::SocketAddr>) {
         if !self.rust().slot.is_current(generation) {
             return;
         }
+        self.as_mut().rust_mut().board_addr = addr;
+        self.as_mut().schedule_name_check(generation); // in case it never answers
         self.as_mut().set_last_error(QString::default());
         // A new service knows nothing of what the GUI asked the old one for.
         if self.rust().identify_on {
@@ -582,6 +604,35 @@ impl qobject::AppController {
             thread::sleep(RETRY);
             let _ = qt.queue(move |obj| obj.retry_service(generation));
         });
+    }
+
+    /// While the board does not answer: if its address is a host name,
+    /// look it up again every RENAME_CHECK and reconnect when it changed.
+    fn schedule_name_check(self: Pin<&mut Self>, generation: u64) {
+        let board = self.config_ref().board.clone();
+        let bare = board
+            .strip_prefix('[')
+            .and_then(|b| b.strip_suffix(']'))
+            .unwrap_or(&board);
+        if board.parse::<std::net::SocketAddr>().is_ok() || bare.parse::<std::net::IpAddr>().is_ok() {
+            return; // an address: nothing to look up
+        }
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new().name("pshb-name".into()).spawn(move || {
+            thread::sleep(RENAME_CHECK);
+            let found = resolve(&board).ok();
+            let _ = qt.queue(move |obj| obj.name_checked(generation, found));
+        });
+    }
+
+    fn name_checked(mut self: Pin<&mut Self>, generation: u64, found: Option<std::net::SocketAddr>) {
+        if !self.rust().slot.is_current(generation) || *self.connected() {
+            return;
+        }
+        match found {
+            Some(a) if self.rust().board_addr.is_some_and(|old| old != a) => self.restart_service(),
+            _ => self.as_mut().schedule_name_check(generation),
+        }
     }
 
     fn retry_service(self: Pin<&mut Self>, generation: u64) {
@@ -617,6 +668,10 @@ impl qobject::AppController {
     }
 
     fn apply_status(mut self: Pin<&mut Self>, st: ServiceStatus) {
+        if *self.connected() && !st.connected {
+            let generation = self.rust().slot.generation.load(Ordering::SeqCst);
+            self.as_mut().schedule_name_check(generation);
+        }
         self.as_mut().set_connected(st.connected);
         self.as_mut().set_active(st.active);
         self.as_mut().set_pending(st.pending);
@@ -657,6 +712,11 @@ impl qobject::AppController {
                 self.as_mut()
                     .set_update_status(QString::from(&format!("The board runs firmware {want}.")));
             }
+        } else if !self.board_firmware().is_empty() || !self.board_usb().is_empty() {
+            // Not reachable: what it said last no longer holds.
+            self.as_mut().set_board_firmware(QString::default());
+            self.as_mut().set_board_usb(QString::default());
+            self.as_mut().set_board_no_partition_table(false);
         }
         self.as_mut().refresh_board_update(st.connected);
         let text = if !st.connected {
@@ -757,6 +817,11 @@ impl qobject::AppController {
         } else if !config::psk_path().exists() {
             return QString::from("Please paste the key from the board's web interface.");
         }
+        if self.config_ref().board != address {
+            // The latency page shows the new board's figures only.
+            self.as_mut().set_board_info_json(QString::default());
+            self.as_mut().set_board_info_error(QString::default());
+        }
         self.as_mut().rust_mut().config.board = address;
         self.as_mut().save_config();
         self.as_mut().publish_config();
@@ -788,9 +853,27 @@ impl qobject::AppController {
 
     pub fn set_device_selected(mut self: Pin<&mut Self>, id: &QString, selected: bool) {
         let id = String::from(id).to_lowercase();
+        let list = self.rust().devices.clone();
         {
             let devices = &mut self.as_mut().rust_mut().config.devices;
-            devices.retain(|d| !d.eq_ignore_ascii_case(&id));
+            let in_group = |s: &String| list.iter().any(|d| d.id_string() == id && d.matches(s));
+            // Off: also a selector by path or name that takes this device
+            // (pshb-cli); other devices it took stay selected by their id.
+            let broad: Vec<String> = devices
+                .iter()
+                .filter(|s| !selected && !s.eq_ignore_ascii_case(&id) && in_group(s))
+                .cloned()
+                .collect();
+            devices.retain(|d| !d.eq_ignore_ascii_case(&id) && !broad.contains(d));
+            for d in list
+                .iter()
+                .filter(|d| d.id_string() != id && broad.iter().any(|s| d.matches(s)))
+            {
+                let other = d.id_string();
+                if !devices.iter().any(|s| s.eq_ignore_ascii_case(&other)) {
+                    devices.push(other);
+                }
+            }
             if selected {
                 devices.push(id);
             }
@@ -1021,6 +1104,10 @@ impl qobject::AppController {
             } else {
                 "Everything is up to date.".to_string()
             }));
+        } else if any && !*self.update_busy() {
+            // An earlier "Everything is up to date." (or an error) would stand
+            // in the banner that now offers the update.
+            self.as_mut().set_update_status(QString::default());
         }
         if any && self.rust().notified != Some(v) {
             self.as_mut().rust_mut().notified = Some(v);
@@ -1120,15 +1207,20 @@ impl qobject::AppController {
         }
     }
 
-    /// Board address and key for the board's web API.
-    fn board_api(&self) -> Result<update::BoardApi, String> {
-        let key = config::load_psk(&config::psk_path())?;
-        let addr = resolve(&self.config_ref().board)?;
-        Ok(update::BoardApi::new(
-            &addr.ip().to_string(),
-            BOARD_HTTP_PORT,
-            &key,
-        ))
+    /// The board's web API, for a background thread: it looks up the
+    /// address there (a host name could block the UI) and waits for the
+    /// app's other requests to the board to finish first.
+    fn board_api(
+        &self,
+    ) -> impl FnOnce() -> Result<(update::BoardApi, MutexGuard<'static, ()>), String> + Send + 'static {
+        let key = config::load_psk(&config::psk_path());
+        let board = self.config_ref().board.clone();
+        move || {
+            let key = key?;
+            let addr = resolve(&board)?;
+            let api = update::BoardApi::new(&addr.ip().to_string(), BOARD_HTTP_PORT, &key);
+            Ok((api, BOARD_API.lock().unwrap_or_else(|e| e.into_inner())))
+        }
     }
 
     pub fn refresh_board_info(mut self: Pin<&mut Self>) {
@@ -1145,7 +1237,7 @@ impl qobject::AppController {
         let _ = thread::Builder::new()
             .name("pshb-board-info".into())
             .spawn(move || {
-                let result = api.and_then(|api| {
+                let result = api().and_then(|(api, _one_at_a_time)| {
                     let clock = api.clock()?;
                     let diag = api.diag()?;
                     let status = api.status()?;
@@ -1164,13 +1256,13 @@ impl qobject::AppController {
             });
     }
 
-    pub fn reset_board_diag(mut self: Pin<&mut Self>) {
+    pub fn reset_board_diag(self: Pin<&mut Self>) {
         let done = self.qt_thread();
         let api = self.board_api();
         let _ = thread::Builder::new()
             .name("pshb-board-reset".into())
             .spawn(move || {
-                let result = api.and_then(|api| api.diag_reset());
+                let result = api().and_then(|(api, _one_at_a_time)| api.diag_reset());
                 let _ = done.queue(move |mut obj| {
                     if let Err(e) = result {
                         obj.as_mut().set_board_info_error(QString::from(&e));
@@ -1195,7 +1287,7 @@ impl qobject::AppController {
         let _ = thread::Builder::new()
             .name("pshb-board-clock".into())
             .spawn(move || {
-                let result = api.and_then(|api| api.set_clock(cpu_mhz as u32, spi_fast));
+                let result = api().and_then(|(api, _one_at_a_time)| api.set_clock(cpu_mhz as u32, spi_fast));
                 let _ = done.queue(move |mut obj| {
                     obj.as_mut().set_clock_busy(false);
                     let text = match result {
@@ -1510,7 +1602,11 @@ fn check_address(board: &str) -> Result<(), String> {
     if board.is_empty() {
         return Err("Please enter the board address.".into());
     }
-    if board.parse::<std::net::SocketAddr>().is_ok() || board.parse::<std::net::IpAddr>().is_ok() {
+    let bare = board
+        .strip_prefix('[')
+        .and_then(|b| b.strip_suffix(']'))
+        .unwrap_or(board);
+    if board.parse::<std::net::SocketAddr>().is_ok() || bare.parse::<std::net::IpAddr>().is_ok() {
         return Ok(());
     }
     let (host, port) = match board.rsplit_once(':') {
@@ -1530,18 +1626,8 @@ fn check_address(board: &str) -> Result<(), String> {
 }
 
 fn resolve(board: &str) -> Result<std::net::SocketAddr, String> {
-    use std::net::ToSocketAddrs;
     if board.is_empty() {
         return Err("Please enter the board address.".into());
     }
-    let with_port = if board.contains(':') {
-        board.to_string()
-    } else {
-        format!("{board}:{}", protocol::UDP_PORT_DEFAULT)
-    };
-    with_port
-        .to_socket_addrs()
-        .map_err(|_| format!("Address \"{board}\" not found."))?
-        .next()
-        .ok_or_else(|| format!("Address \"{board}\" not found."))
+    config::board_socket_addr(board).map_err(|_| format!("Address \"{board}\" not found."))
 }

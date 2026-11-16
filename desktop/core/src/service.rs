@@ -441,8 +441,11 @@ impl Runner {
         // (Keys of watched keyboards count too: a trigger may be recorded there.)
         let engine_release =
             matches!(event.key(), Some((code, false)) if !self.record_pressed.contains(&code));
+        // Left and right click work the app (also "Stop") and are no trigger.
+        let click = matches!(event.key(), Some((keymap::BTN_LEFT | keymap::BTN_RIGHT, _)));
         if let Some(rec) = &mut self.recording
             && !engine_release
+            && !click
         {
             if let Some((code, down)) = event.key() {
                 if down {

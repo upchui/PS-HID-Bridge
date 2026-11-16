@@ -17,6 +17,16 @@ Controls.ApplicationWindow {
     }
     minimumWidth: Kirigami.Units.gridUnit * 34
     minimumHeight: Kirigami.Units.gridUnit * 26
+
+    Connections {
+        target: AppController
+        function onShowWindowRequested() {
+            root.show();
+            if (root.visibility === Window.Minimized) root.showNormal();
+            root.raise();
+            root.requestActivate();
+        }
+    }
     visible: true
     color: Style.window
 

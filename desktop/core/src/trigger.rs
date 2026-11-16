@@ -5,7 +5,7 @@
 //!   "Mouse5" / "BTN_EXTRA"  mouse button (optionally with modifiers)
 //!   "LEFTCTRL"              single key (e.g. for double tap)
 
-use crate::keymap::{self, BTN_EXTRA, BTN_MIDDLE, BTN_SIDE};
+use crate::keymap::{self, BTN_EXTRA, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, BTN_SIDE};
 
 pub const KEY_LEFTCTRL: u16 = 29;
 pub const KEY_RIGHTCTRL: u16 = 97;
@@ -53,6 +53,19 @@ impl Combo {
             parts.push(KeyAlt(alt));
         }
         Ok(Combo(parts))
+    }
+
+    /// As a trigger: refuses the left or right mouse button alone (every
+    /// click would switch the bridge, and the desktop lose its clicks).
+    pub fn parse_trigger(text: &str) -> Result<Self, String> {
+        let c = Self::parse(text)?;
+        if c.0
+            .iter()
+            .all(|p| p.0.iter().all(|&k| k == BTN_LEFT || k == BTN_RIGHT))
+        {
+            return Err("The left or right mouse button alone cannot be a trigger".into());
+        }
+        Ok(c)
     }
 
     /// Satisfied by the set of pressed codes.
@@ -139,7 +152,7 @@ pub struct Trigger {
 impl Trigger {
     pub fn combo(text: &str, action: Action) -> Result<Self, String> {
         Ok(Self {
-            kind: TriggerKind::Combo(Combo::parse(text)?),
+            kind: TriggerKind::Combo(Combo::parse_trigger(text)?),
             action,
         })
     }
@@ -164,6 +177,15 @@ mod tests {
         assert_eq!(Combo::parse("Ctrl+BTN_SIDE").unwrap().to_text(), "Ctrl+Mouse4");
         assert!(Combo::parse("Ctrl+Nonsense").is_err());
         assert!(Combo::parse("Ctrl++P").is_err());
+    }
+
+    #[test]
+    fn click_alone_is_no_trigger() {
+        assert!(Combo::parse_trigger("BTN_LEFT").is_err());
+        assert!(Combo::parse_trigger("BTN_LEFT+BTN_RIGHT").is_err());
+        assert!(Combo::parse_trigger("Ctrl+BTN_LEFT").is_ok());
+        assert!(Combo::parse_trigger("Mouse4").is_ok());
+        assert!(Combo::parse("BTN_LEFT").is_ok()); // replay scripts press it
     }
 
     #[test]

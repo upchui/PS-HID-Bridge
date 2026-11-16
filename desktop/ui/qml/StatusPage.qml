@@ -7,7 +7,13 @@ AppPage {
     id: page
     title: "Status"
 
-    Component.onCompleted: AppController.setLatencyView(true)
+    // Fast pings for the round-trip view only while it can be seen (not
+    // while the window is minimised during play).
+    readonly property bool shown: page.Window.window !== null
+                                  && page.Window.window.visibility !== Window.Minimized
+                                  && page.Window.window.visibility !== Window.Hidden
+    onShownChanged: AppController.setLatencyView(shown)
+    Component.onCompleted: AppController.setLatencyView(shown)
     Component.onDestruction: AppController.setLatencyView(false)
 
     readonly property var triggers: JSON.parse(AppController.triggersJson)

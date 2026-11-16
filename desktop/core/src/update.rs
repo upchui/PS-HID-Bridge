@@ -437,11 +437,22 @@ impl BoardApi {
                     .header("X-PSHB", "1")
                     .header("Content-Type", "application/json")
                     .header("X-PSHB-Auth", mac)
+                    .header("X-PSHB-Nonce", hex(&nonce))
                     .send(body)
             } else {
-                self.agent.get(url).header("X-PSHB-Auth", mac).call()
+                self.agent
+                    .get(url)
+                    .header("X-PSHB-Auth", mac)
+                    .header("X-PSHB-Nonce", hex(&nonce))
+                    .call()
             }
             .map_err(ureq_failure)?;
+            if resp.status() == 401 {
+                // Firmware before 1.0.25 knows no signed requests: it asks for the login.
+                return Err(
+                    "The board's firmware is too old for this: update it (Firmware & updates)".into(),
+                );
+            }
             if resp.status() == 403 {
                 // The board checks the challenge before it does anything.
                 let msg = board_error(&mut resp);
@@ -511,6 +522,7 @@ pub fn board_ota(host: &str, http_port: u16, psk: &[u8; 32], image: &[u8]) -> Re
         .header("X-PSHB-OTA-Auth2", hex(&ota_mac2(psk, &nonce, image)))
         // For boards with firmware before 1.0.9; newer ones ignore it.
         .header("X-PSHB-OTA-Auth", hex(&ota_mac(psk, &nonce, image)))
+        .header("X-PSHB-Nonce", hex(&nonce))
         .send(image)
         .map_err(http_error)?;
     if resp.status() != 200 {

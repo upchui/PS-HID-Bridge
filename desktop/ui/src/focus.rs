@@ -103,9 +103,9 @@ impl FocusWatcher {
             let _: zbus::Result<bool> = proxy.call("unloadScript", &(SCRIPT_NAME,));
             let id: i32 = proxy
                 .call("loadScript", &(path.display().to_string(), SCRIPT_NAME))
-                .map_err(|e| format!("KWin-Skript laden: {e}"))?;
+                .map_err(|e| format!("Loading the KWin script: {e}"))?;
             if id < 0 {
-                return Err("KWin hat das Skript abgelehnt.".into());
+                return Err("KWin refused the script.".into());
             }
             Proxy::new(
                 &conn,
@@ -114,7 +114,7 @@ impl FocusWatcher {
                 "org.kde.kwin.Script",
             )
             .and_then(|p| p.call::<_, _, ()>("run", &()))
-            .map_err(|e| format!("KWin-Skript starten: {e}"))?;
+            .map_err(|e| format!("Starting the KWin script: {e}"))?;
         }
         // KWin reports the current window by itself shortly after.
         Ok(Self { conn })

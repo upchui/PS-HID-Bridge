@@ -22,6 +22,13 @@ AppPage {
     readonly property var st: info ? info.status : ({})
     readonly property var clk: info ? info.clock : ({})
     readonly property bool have: info !== null
+    // The clock choice before "Apply" ("" = what the board runs). It ends
+    // when the board reports other speeds (after the restart, or a fall
+    // back to 150 MHz), so the controls always come back to the truth.
+    property string pendingCpu: ""
+    property string pendingSpi: ""
+    readonly property string boardClock: clk.cpu_mhz + "/" + clk.spi_fast
+    onBoardClockChanged: { pendingCpu = ""; pendingSpi = ""; }
 
     function stage(key, label) {
         return { label: label, n: d[key + "_n"] || 0, min: d[key + "_min"] || 0, p50: d[key + "_p50"] || 0,
@@ -44,11 +51,14 @@ AppPage {
         return days ? `${days} d ${h} h` : h ? `${h} h ${m} min` : `${m} min ${s} s`;
     }
 
-    Component.onCompleted: AppController.refreshBoardInfo()
+    // Only while the window is shown: during play (minimised) the board's
+    // web server would only add work next to the input path.
     Timer {
         interval: 2000
         repeat: true
-        running: true
+        running: page.Window.window !== null && page.Window.window.visibility !== Window.Minimized
+                 && page.Window.window.visibility !== Window.Hidden
+        triggeredOnStart: true
         onTriggered: AppController.refreshBoardInfo()
     }
 
@@ -232,16 +242,16 @@ AppPage {
             Controls.Label { text: "Processor"; color: Style.text }
             Segmented {
                 id: cpuChoice
-                value: String(page.clk.cpu_mhz || 150)
+                value: page.pendingCpu !== "" ? page.pendingCpu : String(page.clk.cpu_mhz || 150)
                 model: [{ value: "150", text: "150 MHz (rated)" }, { value: "200", text: "200 MHz (overclocked)" }]
-                onActivated: v => value = v
+                onActivated: v => page.pendingCpu = v
             }
             Controls.Label { text: "Network chip (SPI)"; color: Style.text }
             Segmented {
                 id: spiChoice
-                value: page.clk.spi_fast ? "fast" : "standard"
+                value: page.pendingSpi !== "" ? page.pendingSpi : page.clk.spi_fast ? "fast" : "standard"
                 model: [{ value: "standard", text: "Standard (25 MHz)" }, { value: "fast", text: "Fast (33–37.5 MHz)" }]
-                onActivated: v => value = v
+                onActivated: v => page.pendingSpi = v
             }
         }
         RowLayout {

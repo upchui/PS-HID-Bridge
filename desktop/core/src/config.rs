@@ -11,11 +11,11 @@ use crate::crypto::parse_key_hex;
 use crate::engine::EngineConfig;
 use crate::keymap::Keymap;
 use crate::mouse::MouseCurve;
-use crate::protocol::KEY_LEN;
+use crate::protocol::{KEY_LEN, UDP_PORT_DEFAULT};
 use crate::trigger::{Action, Combo, KeyAlt, Trigger, TriggerKind};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct TriggerConfig {
     /// "combo", "hold" or "double-tap"
     pub kind: String,
@@ -25,6 +25,10 @@ pub struct TriggerConfig {
     pub action: String,
     /// double tap: maximum time between the taps
     pub window_ms: u64,
+    /// Settings this version does not know (written by a newer one): kept
+    /// and written back as they are.
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 
 impl Default for TriggerConfig {
@@ -34,6 +38,7 @@ impl Default for TriggerConfig {
             keys: String::new(),
             action: "toggle".into(),
             window_ms: 300,
+            extra: toml::Table::new(),
         }
     }
 }
@@ -42,10 +47,10 @@ impl TriggerConfig {
     pub fn to_trigger(&self) -> Result<Trigger, String> {
         let action = Action::parse(&self.action)?;
         let kind = match self.kind.as_str() {
-            "combo" => TriggerKind::Combo(Combo::parse(&self.keys)?),
-            "hold" => TriggerKind::Hold(Combo::parse(&self.keys)?),
+            "combo" => TriggerKind::Combo(Combo::parse_trigger(&self.keys)?),
+            "hold" => TriggerKind::Hold(Combo::parse_trigger(&self.keys)?),
             "double-tap" => {
-                let c = Combo::parse(&self.keys)?;
+                let c = Combo::parse_trigger(&self.keys)?;
                 if c.0.len() != 1 {
                     return Err(format!("Double tap needs exactly one key: \"{}\"", self.keys));
                 }
@@ -61,11 +66,15 @@ impl TriggerConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct MouseConfig {
     pub sensitivity: f64,
     pub accel: f64,
     pub threshold: f64,
+    /// Settings this version does not know (written by a newer one): kept
+    /// and written back as they are.
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 
 impl MouseConfig {
@@ -94,12 +103,13 @@ impl Default for MouseConfig {
             sensitivity: c.sensitivity,
             accel: c.accel,
             threshold: c.threshold,
+            extra: toml::Table::new(),
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Config {
     /// Board address, "192.168.1.50" or "192.168.1.50:45045".
     pub board: String,
@@ -119,6 +129,10 @@ pub struct Config {
     pub update_check: bool,
     /// Look of the app: "system" (follow the desktop), "light" or "dark".
     pub appearance: String,
+    /// Settings this version does not know (written by a newer one): kept
+    /// and written back as they are.
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 
 impl Default for Config {
@@ -137,6 +151,7 @@ impl Default for Config {
             setup_done: false,
             update_check: true,
             appearance: "system".into(),
+            extra: toml::Table::new(),
         }
     }
 }
@@ -157,7 +172,26 @@ impl Config {
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
         config.normalize();
+        let unknown = config.unknown_keys();
+        if !unknown.is_empty() {
+            eprintln!(
+                "{}: settings this version does not know are kept: {}",
+                path.display(),
+                unknown.join(", ")
+            );
+        }
         Ok(config)
+    }
+
+    /// Names of the settings this version does not know (from a newer one,
+    /// or a typo in a hand-edited file).
+    pub fn unknown_keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self.extra.keys().cloned().collect();
+        keys.extend(self.mouse.extra.keys().map(|k| format!("mouse.{k}")));
+        for t in &self.triggers {
+            keys.extend(t.extra.keys().map(|k| format!("triggers.{k}")));
+        }
+        keys
     }
 
     fn parse(text: &str) -> Result<Self, String> {
@@ -274,6 +308,29 @@ pub fn counter_path() -> PathBuf {
     state_dir().join("counter")
 }
 
+/// The board's UDP address from the setting: "192.168.1.50", a host name,
+/// either with ":port", an IPv6 address bare or as "[fe80::1]:45045". Host
+/// names are looked up (that may take a while).
+pub fn board_socket_addr(board: &str) -> io::Result<std::net::SocketAddr> {
+    use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+    let bare = board
+        .strip_prefix('[')
+        .and_then(|b| b.strip_suffix(']'))
+        .unwrap_or(board);
+    if let Ok(ip) = bare.parse::<IpAddr>() {
+        return Ok(SocketAddr::new(ip, UDP_PORT_DEFAULT));
+    }
+    let with_port = if board.contains(':') {
+        board.to_string()
+    } else {
+        format!("{board}:{UDP_PORT_DEFAULT}")
+    };
+    with_port
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no address"))
+}
+
 pub fn load_psk(path: &Path) -> Result<[u8; KEY_LEN], String> {
     let text = fs::read_to_string(path).map_err(|e| match e.kind() {
         io::ErrorKind::NotFound => format!(
@@ -282,6 +339,13 @@ pub fn load_psk(path: &Path) -> Result<[u8; KEY_LEN], String> {
         ),
         _ => format!("{}: {e}", path.display()),
     })?;
+    // A key others may read (copied by hand, restored from a backup): for
+    // the owner only, as it is stored.
+    if let Ok(meta) = fs::metadata(path)
+        && meta.permissions().mode() & 0o077 != 0
+    {
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
     parse_key_hex(&text)
 }
 
@@ -305,7 +369,19 @@ fn write_atomic(path: &Path, data: &[u8], mode: u32) -> io::Result<()> {
     f.set_permissions(fs::Permissions::from_mode(mode))?;
     f.write_all(data)?;
     f.sync_all()?;
-    fs::rename(&tmp, path)
+    fs::rename(&tmp, path)?;
+    sync_dir(path);
+    Ok(())
+}
+
+/// After a rename: the directory entry itself reaches the disk (otherwise a
+/// power cut can leave the old file).
+pub(crate) fn sync_dir(path: &Path) {
+    if let Some(dir) = path.parent()
+        && let Ok(d) = fs::File::open(dir)
+    {
+        let _ = d.sync_all();
+    }
 }
 
 #[cfg(test)]
@@ -332,6 +408,7 @@ mod tests {
             keys: "LEFTCTRL".into(),
             action: "pause".into(),
             window_ms: 250,
+            ..Default::default()
         });
         c.save(&path).unwrap();
         let back = Config::load(&path).unwrap();
@@ -378,6 +455,53 @@ mod tests {
         assert!(c.engine_config().is_err());
         c.mouse.accel = 0.0;
         assert!(c.engine_config().is_ok());
+    }
+
+    #[test]
+    fn board_addresses() {
+        let a = |s: &str| board_socket_addr(s).unwrap().to_string();
+        assert_eq!(a("192.168.1.50"), "192.168.1.50:45045");
+        assert_eq!(a("192.168.1.50:5000"), "192.168.1.50:5000");
+        assert_eq!(a("fe80::1"), "[fe80::1]:45045");
+        assert_eq!(a("[fe80::1]"), "[fe80::1]:45045");
+        assert_eq!(a("[fe80::1]:5000"), "[fe80::1]:5000");
+        assert_eq!(a("localhost:5000").rsplit_once(':').unwrap().1, "5000");
+        assert!(board_socket_addr("no such host.invalid").is_err());
+    }
+
+    #[test]
+    fn settings_of_a_newer_version_are_kept() {
+        let dir = temp("newer");
+        let path = dir.join("config.toml");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            &path,
+            "board = \"10.0.0.2\"\nfuture_flag = true\n\n[mouse]\nsensitivity = 2.0\nfuture_mouse = 3\n\n\
+             [future_table]\nx = \"y\"\n\n[[triggers]]\nkeys = \"Ctrl+Alt+P\"\nfuture_trigger = 1\n",
+        )
+        .unwrap();
+        let mut c = Config::load(&path).unwrap();
+        assert_eq!(c.board, "10.0.0.2");
+        assert_eq!(c.mouse.sensitivity, 2.0);
+        let mut unknown = c.unknown_keys();
+        unknown.sort();
+        assert_eq!(
+            unknown,
+            [
+                "future_flag",
+                "future_table",
+                "mouse.future_mouse",
+                "triggers.future_trigger"
+            ]
+        );
+        // An older version that saves its own change keeps the newer settings.
+        c.iso_keyboard = false;
+        c.save(&path).unwrap();
+        let back = Config::load(&path).unwrap();
+        assert_eq!(back, c);
+        assert!(!back.iso_keyboard);
+        assert_eq!(back.extra["future_table"]["x"].as_str(), Some("y"));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

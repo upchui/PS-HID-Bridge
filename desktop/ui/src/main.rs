@@ -29,7 +29,10 @@ fn single_instance() {
         Ok(lock) => *INSTANCE_LOCK.lock().unwrap() = Some(lock),
         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
             eprintln!("PS HID Bridge is already running.");
-            notify::send_now("PS HID Bridge is already running", "Open it from its tray icon.");
+            notify::send_now(
+                "PS HID Bridge is already running",
+                "Its window: tray icon menu → Show window (a click on the icon switches the bridge).",
+            );
             std::process::exit(0);
         }
         Err(_) => {} // no lock possible: start anyway

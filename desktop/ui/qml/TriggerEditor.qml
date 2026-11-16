@@ -161,6 +161,16 @@ ColumnLayout {
                         onActivated: idx => editor.setField(row.index, "action", editor.actionValues[idx])
                     }
                 }
+                Controls.Label {
+                    visible: row.modelData.kind === "hold"
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Style.muted
+                    font.pointSize: Style.fontSize * 0.9
+                    text: "The desktop never sees this key let go and keeps it pressed afterwards. "
+                          + "Use a key on a device that is not selected (e.g. a second keyboard), "
+                          + "or one the desktop does not need."
+                }
             }
         }
     }
