@@ -113,7 +113,7 @@ AppPage {
                 model: [
                     ["Firmware", AppController.boardFirmware !== "" ? AppController.boardFirmware : "–"],
                     ["PlayStation", AppController.boardUsb !== "" ? AppController.boardUsb : "–"],
-                    ["Round trip", AppController.rttMs >= 0 ? AppController.rttMs.toFixed(2) + " ms" : "–"],
+                    ["Round trip", AppController.rttMs >= 0 ? Math.round(AppController.rttMs * 1000) + " µs" : "–"],
                     ["Desktop app", AppController.version]
                 ]
                 delegate: RowLayout {

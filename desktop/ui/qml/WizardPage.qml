@@ -273,7 +273,7 @@ AppPage {
                     }
                     Controls.Label { text: "Round trip"; color: Style.muted }
                     Controls.Label {
-                        text: AppController.rttMs >= 0 ? AppController.rttMs.toFixed(2) + " ms" : "–"
+                        text: AppController.rttMs >= 0 ? Math.round(AppController.rttMs * 1000) + " µs" : "–"
                         color: Style.text
                     }
                 }

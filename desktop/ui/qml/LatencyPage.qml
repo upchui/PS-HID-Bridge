@@ -37,9 +37,6 @@ AppPage {
     function us(v) {
         return v === undefined ? "–" : Math.round(v) + " µs";
     }
-    function ms(v) {
-        return v === undefined ? "–" : (v / 1000).toFixed(2) + " ms";
-    }
     function pct(a, b) {
         return b > 0 ? (100 * a / b).toFixed(2) + " %" : "–";
     }
@@ -126,8 +123,8 @@ AppPage {
         StatTile {
             icon: "gamepad"
             label: "PlayStation fetch"
-            value: page.d.usb_n ? page.ms(page.d.usb_p50) : "–"
-            detail: page.d.usb_n ? `median · 99 % below ${page.ms(page.d.usb_p99)}` : "no reports yet"
+            value: page.d.usb_n ? page.us(page.d.usb_p50) : "–"
+            detail: page.d.usb_n ? `median · 99 % below ${page.us(page.d.usb_p99)}` : "no reports yet"
         }
         StatTile {
             icon: "network"
@@ -312,10 +309,10 @@ AppPage {
                 wrapMode: Text.WordWrap
                 color: AppController.adapterMode === "delaying" ? Style.stateColor("warn") : Style.muted
                 text: AppController.adapterMode === "delaying"
-                      ? `${AppController.adapterIface} holds every packet back up to about ${AppController.adapterDelayMs.toFixed(1)} ms (USB adapter, cdc_ncm)`
+                      ? `${AppController.adapterIface} holds every packet back up to about ${(AppController.adapterDelayMs * 1000).toFixed(0)} µs (USB adapter, cdc_ncm)`
                       : AppController.adapterMode === "managed"
                       ? (AppController.adapterAtOnceNow ? `${AppController.adapterIface} sends at once while the app runs (bundles again when it is closed)`
-                         : `${AppController.adapterIface} bundles packets (up to ${AppController.adapterDelayMs.toFixed(1)} ms); the app switches it to “send at once”`)
+                         : `${AppController.adapterIface} bundles packets (up to ${(AppController.adapterDelayMs * 1000).toFixed(0)} µs); the app switches it to “send at once”`)
                       : AppController.adapterMode === "fixed" ? `${AppController.adapterIface} sends at once (set outside the app)`
                       : AppController.connected ? "sends packets at once" : "–"
             }

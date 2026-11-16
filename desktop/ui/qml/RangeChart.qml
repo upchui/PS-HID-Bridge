@@ -26,7 +26,7 @@ ColumnLayout {
         return 10 * mag;
     }
     function fmt(us) {
-        return us >= 1000 ? (us / 1000).toFixed(us >= 10000 ? 0 : 2) + " ms" : Math.round(us) + " µs";
+        return Math.round(us) + " µs";
     }
     function pos(v, w) {
         return Math.min(1, Math.max(0, v / scaleMax)) * w;

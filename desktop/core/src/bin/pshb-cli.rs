@@ -683,7 +683,7 @@ fn cmd_ping(ctx: &Ctx, board: &BoardArgs, count: u32, timeout: Duration) -> Resu
             last = st.last_pong;
             answered += 1;
             if let Some(rtt) = st.rtt {
-                println!("Answer: round trip {:.2} ms", rtt.as_secs_f64() * 1000.0);
+                println!("Answer: round trip {:.0} µs", rtt.as_secs_f64() * 1e6);
             }
         }
     }

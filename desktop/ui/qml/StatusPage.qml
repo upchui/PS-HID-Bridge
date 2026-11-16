@@ -5,6 +5,10 @@ import PSHIDBridge
 
 AppPage {
     id: page
+    // Every latency in microseconds (most are well below a millisecond).
+    function us(ms) {
+        return Math.round(ms * 1000) + " µs";
+    }
     title: "Status"
 
     // Fast pings for the round-trip view only while it can be seen (not
@@ -99,7 +103,7 @@ AppPage {
         kind: "warn"
         visible: AppController.adapterMode === "delaying"
         text: "The network adapter " + AppController.adapterIface + " holds every packet back up to about "
-              + AppController.adapterDelayMs.toFixed(1) + " ms before sending it, to bundle packets (USB adapter, cdc_ncm). "
+              + page.us(AppController.adapterDelayMs) + " before sending it, to bundle packets (USB adapter, cdc_ncm). "
               + "This comes on top of “Input → network” and shows in the round trip. "
               + "Set up once (administrator password); after that the adapter sends at once while the app runs and bundles again when it is closed, without a password."
               + (AppController.latencySetupMessage !== "" ? "\n" + AppController.latencySetupMessage : "")
@@ -269,19 +273,16 @@ AppPage {
             // stamps, else estimated as half the round trip (older firmware).
             readonly property bool oneWay: AppController.upP50 >= 0
             readonly property bool roundTrip: AppController.rttP50 >= 0
-            function fmt(ms) {
-                return ms < 1 ? (ms * 1000).toFixed(0) + " µs" : ms.toFixed(2) + " ms";
-            }
             icon: "latency"
             label: "Network latency to the board"
-            value: oneWay ? fmt(AppController.upP50)
-                   : roundTrip ? "≈ " + fmt(AppController.rttP50 / 2) : "–"
+            value: oneWay ? page.us(AppController.upP50)
+                   : roundTrip ? "≈ " + page.us(AppController.rttP50 / 2) : "–"
             detail: oneWay
-                    ? "PC → board, median · 95 % below " + fmt(AppController.upP95)
-                      + (roundTrip ? " · round trip " + fmt(AppController.rttP50) : "")
+                    ? "PC → board, median · 95 % below " + page.us(AppController.upP95)
+                      + (roundTrip ? " · round trip " + page.us(AppController.rttP50) : "")
                     : roundTrip
-                    ? "half the round trip (exact with newer board firmware) · round trip " + fmt(AppController.rttP50)
-                      + ", 95 % below " + fmt(AppController.rttP95)
+                    ? "half the round trip (exact with newer board firmware) · round trip " + page.us(AppController.rttP50)
+                      + ", 95 % below " + page.us(AppController.rttP95)
                     : "measured while connected"
 
             Canvas {
@@ -321,9 +322,9 @@ AppPage {
         StatTile {
             icon: "keyboard"
             label: "Input → network"
-            value: AppController.inputP50 >= 0 ? AppController.inputP50.toFixed(2) + " ms" : "–"
+            value: AppController.inputP50 >= 0 ? page.us(AppController.inputP50) : "–"
             detail: AppController.inputP50 >= 0
-                    ? "median · max " + AppController.inputMax.toFixed(2) + " ms · " + AppController.packetsPerSecond + " packets/s"
+                    ? "median · max " + page.us(AppController.inputMax) + " · " + AppController.packetsPerSecond + " packets/s"
                     : "measured while the bridge is on"
 
             RowLayout {
