@@ -84,6 +84,11 @@ static volatile bool s_problem;
 static volatile uint8_t s_new_dev;
 static uint8_t s_hid_addr, s_hid_idx;
 static int s_feature_step;  // 0 = none, 1.. = next feature report to read
+// After the feature reports: light bar green, one player LED and a short
+// rumble (output report 0x02), so the DualSense shows it was set up; then
+// the rumble off again.
+static int s_hello_step;
+static uint64_t s_hello_at;
 static bool s_feature_busy;
 static uint8_t s_feature_buf[64];
 static const uint8_t s_feature_ids[] = {0x05, 0x09, 0x20};  // calibration, pairing (MAC), firmware
@@ -169,6 +174,7 @@ void tuh_mount_cb(uint8_t daddr) {
 void tuh_umount_cb(uint8_t daddr) {
     printf("host: device %u removed\n", daddr);
     s_dev_addr = 0;
+    s_hello_step = 0;
     s_feature_step = 0;
     s_feature_busy = false;
 }
@@ -193,13 +199,17 @@ void tuh_hid_report_received_cb(uint8_t daddr, uint8_t idx, uint8_t const *repor
     s_last_report_us = time_us_64();
     s_reports++;
     if (len >= sizeof s_input && report[0] == 0x01) {
+        // Sticks and triggers jitter by a count or two: only real moves count.
         bool changed = false;
-        for (uint32_t i = 0; i < sizeof s_input; i++) {
+        for (uint32_t i = 1; i < sizeof s_input; i++) {
             if (i == 7) continue;  // sequence number: changes every time
-            if (s_input[i] != report[i]) changed = true;
+            int d = (int)s_input[i] - (int)report[i];
+            if (i >= 8 ? d != 0 : (d > 3 || d < -3)) changed = true;
         }
-        for (uint32_t i = 0; i < sizeof s_input; i++) s_input[i] = report[i];
-        if (changed) s_input_new = true;
+        if (changed) {
+            for (uint32_t i = 0; i < sizeof s_input; i++) s_input[i] = report[i];
+            s_input_new = true;
+        }
     } else if (s_reports <= 3) {
         netlog_hex("hid: report", report, len);  // not what a DualSense sends: show it
     }
@@ -228,6 +238,7 @@ static void host_service(void) {
     if (s_feature_step > 0 && !s_feature_busy && s_dev_addr) {
         if (s_feature_step > (int)sizeof s_feature_ids) {
             s_feature_step = 0;
+            s_hello_step = 1;
             printf("hid: feature reports read -- move the sticks and press buttons\n");
         } else {
             uint8_t id = s_feature_ids[s_feature_step - 1];
@@ -242,6 +253,39 @@ static void host_service(void) {
     }
 }
 
+// DualSense output report 0x02 over USB (47 bytes after the ID), as in
+// Linux hid-playstation: valid flags, motors, ..., light bar.
+static void send_hello(bool rumble) {
+    static uint8_t r[47];
+    memset(r, 0, sizeof r);
+    r[0] = 0x03;           // valid_flag0: compatible vibration, haptics select
+    r[1] = 0x04 | 0x10;    // valid_flag1: light bar, player indicator
+    r[2] = rumble ? 0x80 : 0;  // right motor
+    r[3] = rumble ? 0x80 : 0;  // left motor
+    r[38] = 0x02;          // valid_flag2: light bar setup
+    r[41] = 0x02;          // light bar setup: end the blue start-up glow
+    r[43] = 0x04;          // player LEDs: the middle one
+    r[44] = 0x00;          // red
+    r[45] = 0xC0;          // green
+    r[46] = 0x40;          // blue
+    if (!tuh_hid_send_report(s_hid_addr, s_hid_idx, 0x02, r, sizeof r))
+        printf("hid: output report not accepted\n");
+}
+
+static void hello_service(void) {
+    if (s_hello_step == 0 || !s_dev_addr || !tuh_hid_send_ready(s_hid_addr, s_hid_idx)) return;
+    uint64_t now = time_us_64();
+    if (s_hello_step == 1) {
+        send_hello(true);
+        printf("hid: output report sent: light bar green, player LED, rumble\n");
+        s_hello_at = now + 300000;
+        s_hello_step = 2;
+    } else if (now >= s_hello_at) {
+        send_hello(false);
+        s_hello_step = 0;
+    }
+}
+
 static void core1_main(void) {
     tuh_configure(PSHB_TUH_RHPORT, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &s_host_cfg);
     tuh_init(PSHB_TUH_RHPORT);
@@ -249,6 +293,7 @@ static void core1_main(void) {
     while (true) {
         tuh_task();
         host_service();
+        hello_service();
         s_core1_beat++;
     }
 }
