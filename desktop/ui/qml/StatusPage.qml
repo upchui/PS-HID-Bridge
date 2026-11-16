@@ -20,6 +20,35 @@ AppPage {
     Component.onCompleted: AppController.setLatencyView(shown)
     Component.onDestruction: AppController.setLatencyView(false)
 
+    // The board's own measurements (signed request, see LatencyPage.qml):
+    // its part of the way to the PlayStation.
+    readonly property var diag: {
+        try {
+            return AppController.boardInfoJson === "" ? ({}) : (JSON.parse(AppController.boardInfoJson).diag || ({}));
+        } catch (e) {
+            return ({});
+        }
+    }
+    Timer {
+        interval: 5000
+        repeat: true
+        running: page.shown && AppController.connected
+        triggeredOnStart: true
+        onTriggered: AppController.refreshBoardInfo()
+    }
+
+    // The way from input to PlayStation in parts (µs, -1 = not known yet):
+    // this PC (input -> network), the network (PC -> board; half the round
+    // trip with older board firmware), the board (packet -> report ready)
+    // and the wait for the PlayStation's fetch (packet -> report fetched,
+    // minus the board's part).
+    readonly property int pcUs: AppController.inputP50 >= 0 ? Math.round(AppController.inputP50 * 1000) : -1
+    readonly property int netUs: AppController.upP50 >= 0 ? Math.round(AppController.upP50 * 1000)
+                                 : AppController.rttP50 >= 0 ? Math.round(AppController.rttP50 * 500) : -1
+    readonly property int boardUs: diag.ready_n > 0 ? diag.ready_p50 : -1
+    readonly property int fetchUs: diag.usb_n > 0 ? diag.usb_p50 : -1
+    readonly property int waitUs: fetchUs >= 0 && boardUs >= 0 ? Math.max(0, fetchUs - boardUs) : -1
+
     readonly property var triggers: JSON.parse(AppController.triggersJson)
     readonly property string level: AppController.active ? "ok" : AppController.connected ? "accent" : ""
     // A mouse button has been held for a while: if the user is not holding
@@ -243,6 +272,7 @@ AppPage {
 
     // ------------------------------------------------------------ tiles
     GridLayout {
+        id: tiles
         Layout.fillWidth: true
         columns: page.width > 760 ? 2 : 1
         columnSpacing: Style.gap
@@ -361,6 +391,30 @@ AppPage {
                     visible: AppController.inputResyncs > 0
                     text: "The kernel dropped input events because the app fell behind for a moment (or a release went missing). The app compared with the real key state and released or pressed what was lost, so no key stays stuck. If this count rises often, set up real-time priority (see README)."
                 }
+            }
+        }
+        StatTile {
+            readonly property bool complete: page.pcUs >= 0 && page.netUs >= 0 && page.fetchUs >= 0
+            Layout.columnSpan: tiles.columns
+            icon: "gamepad"
+            label: "Input → PlayStation"
+            value: complete ? "≈ " + (page.pcUs + page.netUs + page.fetchUs) + " µs" : "–"
+            detail: complete ? "typical: from the input reaching this PC to the PlayStation fetching the report"
+                    : "complete while the bridge is on (and the board answers)"
+
+            StageBar {
+                Layout.fillWidth: true
+                Layout.topMargin: 4
+                visible: parts.length > 0
+                parts: [
+                    { name: "this PC", value: page.pcUs },
+                    { name: AppController.upP50 >= 0 ? "network" : "network (≈ half the round trip)", value: page.netUs },
+                    { name: "board", value: page.boardUs },
+                    { name: "waiting for the PlayStation's poll", value: page.waitUs }
+                ].filter(p => p.value >= 0)
+            }
+            HelpHint {
+                text: "Medians of each part, added up. This PC: input event to packet sent (last 1000 packets). Network: PC → board, measured with the board's time stamps (last 2 minutes). Board: packet arrived to report ready. Waiting: until the PlayStation fetches the report; it polls once per millisecond. The board's parts count since it started or since \"Start over\" on the Latency page. Not included: the time until this PC fetches the report from the mouse or keyboard (their own USB polling)."
             }
         }
     }
