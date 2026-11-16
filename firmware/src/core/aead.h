@@ -21,6 +21,13 @@ void pshb_chacha20_block_c(uint32_t out[16], const uint32_t in[16]);
 // installs a faster one at start, before any other thread uses it).
 extern pshb_chacha20_block_fn pshb_chacha20_block;
 
+// Two independent blocks at once (pshb_aead_prepare: blocks 0 and 1 of a
+// packet). By default one after the other; a platform with a second core
+// can compute one on each (pico/crypto_help.c).
+typedef void (*pshb_chacha20_block2_fn)(uint32_t out0[16], const uint32_t in0[16], uint32_t out1[16],
+                                        const uint32_t in1[16]);
+extern pshb_chacha20_block2_fn pshb_chacha20_block2;
+
 // Overwrite a secret with zeros (word-wise, not optimised away).
 void pshb_wipe(void *p, size_t n);
 

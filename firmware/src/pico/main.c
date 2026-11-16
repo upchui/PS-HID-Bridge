@@ -17,6 +17,7 @@
 #include "bridge.h"
 #include "proto.h"
 #include "core1.h"
+#include "crypto_help.h"
 #include "diag.h"
 #include "flash_store.h"
 #include "hexutil.h"
@@ -142,6 +143,7 @@ void diag_init(void) {
     g_diag.mouse_lead_us = lead;
     g_diag.mouse_floor_us = floor;
     w5500_core0_spi_reset();
+    crypto_help_reset_counts();
 }
 
 static inline void timing_pin(uint pin, bool on) {
@@ -365,6 +367,7 @@ int main(void) {
     tud_init(0);
 
     crypto_select();
+    crypto_help_init_core0();
     s_chip_ok = w5500_port_init();
     // Before the confirmation below: buying may erase the other slot.
     g_running_slot = ota_running_slot();

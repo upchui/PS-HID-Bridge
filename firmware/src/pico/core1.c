@@ -1,4 +1,5 @@
 #include "core1.h"
+#include "crypto_help.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -249,6 +250,8 @@ static void be_diag(void *ctx, web_diag_t *out) {
     out->crypto_avg_ns = g_diag.crypto_avg_ns;
     out->crypto_max_ns = g_diag.crypto_max_ns;
     out->crypto_fast = g_diag.crypto_fast;
+    out->crypto_helped = crypto_help_helped();
+    out->crypto_alone = crypto_help_alone();
     out->spi_hz = w5500_spi_hz();
 }
 
@@ -414,6 +417,7 @@ void core1_main(void) {
     absolute_time_t next_second = make_timeout_time_ms(1000);
 
     crypto_bench();
+    crypto_help_init_core1();
     reg_dhcp_cbfunc(on_dhcp_assign, on_dhcp_assign, on_dhcp_conflict);
     set_state(C1_NO_LINK);
     web_server_init(&k_backend, &g_settings);

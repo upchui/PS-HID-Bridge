@@ -32,6 +32,7 @@ set(PSHB_PICO_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/bootsel.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/chacha20_m33.S
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/core1.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/pico/crypto_help.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/flash_store.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/hid_out.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/ota.c

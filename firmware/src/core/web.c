@@ -431,6 +431,8 @@ static void h_diag(web_app_t *app, web_conn_t *c) {
     jw_int(&w, "crypto_avg_ns", d.crypto_avg_ns);
     jw_int(&w, "crypto_max_ns", d.crypto_max_ns);
     jw_bool(&w, "crypto_fast", d.crypto_fast);
+    jw_int(&w, "crypto_helped", d.crypto_helped);
+    jw_int(&w, "crypto_alone", d.crypto_alone);
     jw_int(&w, "spi_hz", d.spi_hz);
     respond_json(c, 200, &w, NULL);
 }

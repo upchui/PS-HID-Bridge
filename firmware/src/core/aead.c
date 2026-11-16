@@ -6,6 +6,13 @@
 
 pshb_chacha20_block_fn pshb_chacha20_block = pshb_chacha20_block_c;
 
+static void block2_in_turn(uint32_t out0[16], const uint32_t in0[16], uint32_t out1[16], const uint32_t in1[16]) {
+    pshb_chacha20_block(out0, in0);
+    pshb_chacha20_block(out1, in1);
+}
+
+pshb_chacha20_block2_fn pshb_chacha20_block2 = block2_in_turn;
+
 // Clear secrets (key material, keystream) before their stack space is
 // reused. Monocypher's crypto_wipe writes byte by byte through a volatile
 // pointer, about 35 ns per byte on the RP2350, which on the ~300 bytes
@@ -216,12 +223,13 @@ void pshb_aead_seal(const uint8_t key[32], const uint8_t nonce[12], const uint8_
 }
 
 void pshb_aead_prepare(pshb_aead_pre_t *pre, const uint8_t key[32], const uint8_t nonce[12]) {
-    uint32_t st[16];
-    chacha_init(st, key, nonce);
-    pshb_chacha20_block(pre->block0, st);
-    st[12] = 1;
-    pshb_chacha20_block(pre->block1, st);
-    pshb_wipe(st, sizeof(st));
+    uint32_t st0[16], st1[16];
+    chacha_init(st0, key, nonce);
+    memcpy(st1, st0, sizeof(st1));
+    st1[12] = 1;
+    pshb_chacha20_block2(pre->block0, st0, pre->block1, st1);
+    pshb_wipe(st0, sizeof(st0));
+    pshb_wipe(st1, sizeof(st1));
     memcpy(pre->key, key, sizeof(pre->key));
     memcpy(pre->nonce, nonce, sizeof(pre->nonce));
     pre->valid = true;

@@ -345,6 +345,8 @@ def report(results: list[dict]) -> None:
                 print(f"  decrypting one INPUT packet: {d['crypto_avg_ns'] / 1000:.1f} µs on average "
                       f"(min {d['crypto_min_ns'] / 1000:.0f}, max {d['crypto_max_ns'] / 1000:.0f}), "
                       f"{'optimised' if d.get('crypto_fast') else 'C'} ChaCha20")
+            if "crypto_helped" in d:
+                print(f"  second ChaCha20 block on core 1: {d['crypto_helped']}, on core 0 alone: {d['crypto_alone']}")
         else:
             print(f"  receive and decrypt (noticed -> applied): median {s.get('lat_rx_p50_us')} µs, "
                   f"max {s.get('lat_rx_max_us')} µs")
