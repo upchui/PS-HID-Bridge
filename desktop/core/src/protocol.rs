@@ -11,6 +11,8 @@ pub const UDP_PORT_DEFAULT: u16 = 45045;
 pub const INPUT_LEN: usize = 23;
 pub const PING_LEN: usize = 12;
 pub const PONG_LEN: usize = 49;
+/// PONG_TIMED: a PONG and the board's time stamps (see [`PongTimed`]).
+pub const PONG_TIMED_LEN: usize = 65;
 
 pub const FLAG_RELEASE_ALL: u8 = 0x01;
 
@@ -20,6 +22,8 @@ pub const STATUS_FAILSAFE: u8 = 0x04;
 /// The board has no partition table: firmware updates overwrite the running
 /// firmware and there is no previous version to fall back to.
 pub const STATUS_NO_PARTITION_TABLE: u8 = 0x08;
+/// The board answers PING_TIMED (with PONG_TIMED).
+pub const STATUS_TIMED_PING: u8 = 0x10;
 pub const STATUS_PLAINTEXT: u8 = 0x80;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +33,9 @@ pub enum PacketType {
     Heartbeat = 0x02,
     Ping = 0x03,
     Pong = 0x04,
+    /// Like PING, answered with PONG_TIMED (boards with STATUS_TIMED_PING).
+    PingTimed = 0x05,
+    PongTimed = 0x06,
 }
 
 impl PacketType {
@@ -38,6 +45,8 @@ impl PacketType {
             0x02 => Some(Self::Heartbeat),
             0x03 => Some(Self::Ping),
             0x04 => Some(Self::Pong),
+            0x05 => Some(Self::PingTimed),
+            0x06 => Some(Self::PongTimed),
             _ => None,
         }
     }
@@ -45,8 +54,9 @@ impl PacketType {
     pub fn payload_len(self) -> usize {
         match self {
             Self::Input | Self::Heartbeat => INPUT_LEN,
-            Self::Ping => PING_LEN,
+            Self::Ping | Self::PingTimed => PING_LEN,
             Self::Pong => PONG_LEN,
+            Self::PongTimed => PONG_TIMED_LEN,
         }
     }
 }
@@ -228,6 +238,34 @@ impl Pong {
     }
 }
 
+/// PONG_TIMED: a PONG and the board's clock (µs since its start) when the
+/// PING arrived and when the answer was built, for the one-way time app ->
+/// board (see [`crate::oneway`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PongTimed {
+    pub pong: Pong,
+    pub board_rx_us: u64,
+    pub board_tx_us: u64,
+}
+
+impl PongTimed {
+    pub fn encode(&self) -> [u8; PONG_TIMED_LEN] {
+        let mut b = [0u8; PONG_TIMED_LEN];
+        b[..PONG_LEN].copy_from_slice(&self.pong.encode());
+        b[49..57].copy_from_slice(&self.board_rx_us.to_le_bytes());
+        b[57..65].copy_from_slice(&self.board_tx_us.to_le_bytes());
+        b
+    }
+
+    pub fn decode(b: &[u8]) -> Self {
+        Self {
+            pong: Pong::decode(&b[..PONG_LEN]),
+            board_rx_us: u64::from_le_bytes(b[49..57].try_into().unwrap()),
+            board_tx_us: u64::from_le_bytes(b[57..65].try_into().unwrap()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,5 +312,12 @@ mod tests {
         };
         assert_eq!(Pong::decode(&p.encode()), p);
         assert_eq!(p.fw_version_string(), "1.9.291");
+        let t = PongTimed {
+            pong: p,
+            board_rx_us: 61_000_500_123,
+            board_tx_us: 61_000_500_187,
+        };
+        assert_eq!(PongTimed::decode(&t.encode()), t);
+        assert_eq!(PacketType::from_u8(0x06).unwrap().payload_len(), PONG_TIMED_LEN);
     }
 }

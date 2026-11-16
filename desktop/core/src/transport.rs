@@ -27,7 +27,10 @@ use std::time::{Duration, Instant};
 use crate::clock;
 use crate::counter::TxCounter;
 use crate::crypto::PacketKey;
-use crate::protocol::{Direction, FLAG_RELEASE_ALL, InputPayload, KEY_LEN, PacketType, Ping, Pong};
+use crate::oneway::{OneWay, OneWayStats};
+use crate::protocol::{
+    Direction, FLAG_RELEASE_ALL, InputPayload, KEY_LEN, PacketType, Ping, Pong, PongTimed, STATUS_TIMED_PING,
+};
 use crate::rt;
 
 /// Upper bound for key states waiting to be sent (one per millisecond).
@@ -92,6 +95,8 @@ pub struct LinkStatus {
     /// Most recent round trips in milliseconds, oldest first.
     pub rtt_history: VecDeque<f64>,
     pub board: Option<Pong>,
+    /// One-way time app -> board (boards that answer PING_TIMED).
+    pub oneway: Option<OneWayStats>,
     pub packets_sent: u64,
     /// Packets the network stack did not take (send buffer full).
     pub send_failures: u64,
@@ -159,6 +164,9 @@ struct Shared {
     /// Statistics for `latency_total` samples (computed once per change).
     latency_cache: Mutex<Option<LatencyStats>>,
     timer_realtime: AtomicBool,
+    /// The board answers PING_TIMED: ping with it (learned from its PONGs).
+    timed_ping: AtomicBool,
+    oneway: Mutex<OneWay>,
 }
 
 impl Shared {
@@ -281,6 +289,8 @@ impl Link {
             latency_total: AtomicU64::new(0),
             latency_cache: Mutex::new(None),
             timer_realtime: AtomicBool::new(false),
+            timed_ping: AtomicBool::new(false),
+            oneway: Mutex::new(OneWay::default()),
         });
 
         let rx_thread = {
@@ -374,8 +384,10 @@ impl Link {
             st.board = None;
             st.rtt = None;
             st.rtt_history.clear();
+            self.shared.oneway.lock().unwrap().clear();
         }
         let mut st = st.clone();
+        st.oneway = self.shared.oneway.lock().unwrap().stats();
         st.packets_sent = self.shared.packets_sent.load(Ordering::Relaxed);
         st.send_failures = self.shared.send_failures.load(Ordering::Relaxed);
         st
@@ -457,8 +469,13 @@ fn receiver(sock: Arc<UdpSocket>, key: PacketKey, shared: Arc<Shared>) {
                 continue;
             }
         };
-        let pong = match key.open(Direction::BoardToApp, &buf[..n]) {
-            Ok((h, payload)) if h.ptype == PacketType::Pong as u8 => Pong::decode(&payload),
+        // A PONG_TIMED is a PONG with the board's time stamps.
+        let (pong, stamps) = match key.open(Direction::BoardToApp, &buf[..n]) {
+            Ok((h, payload)) if h.ptype == PacketType::Pong as u8 => (Pong::decode(&payload), None),
+            Ok((h, payload)) if h.ptype == PacketType::PongTimed as u8 => {
+                let t = PongTimed::decode(&payload);
+                (t.pong, Some((t.board_rx_us, t.board_tx_us)))
+            }
             _ => {
                 shared.status.lock().unwrap().bad_replies += 1;
                 continue;
@@ -480,6 +497,18 @@ fn receiver(sock: Arc<UdpSocket>, key: PacketKey, shared: Arc<Shared>) {
         if pong.t_app_us > now_us || now_us - pong.t_app_us > PONG_MAX_AGE_US {
             shared.status.lock().unwrap().stale_replies += 1;
             continue;
+        }
+        shared
+            .timed_ping
+            .store(pong.status & STATUS_TIMED_PING != 0, Ordering::Relaxed);
+        {
+            let mut oneway = shared.oneway.lock().unwrap();
+            if changed {
+                oneway.clear(); // another session: the board's clock started over
+            }
+            if let Some((board_rx, board_tx)) = stamps {
+                oneway.add(pong.t_app_us, board_rx, board_tx, now_us);
+            }
         }
         {
             let mut st = shared.status.lock().unwrap();
@@ -619,7 +648,7 @@ impl Tx {
         } else if r < 0 && io::Error::last_os_error().kind() == io::ErrorKind::WouldBlock {
             shared.send_failures.fetch_add(1, Ordering::Relaxed);
         }
-        if ptype != PacketType::Ping {
+        if !matches!(ptype, PacketType::Ping | PacketType::PingTimed) {
             self.last_send = now;
             self.tat = self.tat.max(now) + self.interval;
         }
@@ -713,7 +742,13 @@ impl Tx {
                 t_app_us: shared.micros().max(1),
                 seq: self.ping_seq,
             };
-            self.send(shared, PacketType::Ping, &ping.encode(), now);
+            // Boards that can, answer with their time stamps (one-way time).
+            let ptype = if shared.timed_ping.load(Ordering::Relaxed) {
+                PacketType::PingTimed
+            } else {
+                PacketType::Ping
+            };
+            self.send(shared, ptype, &ping.encode(), now);
             self.last_ping = now;
             // Ping faster while we are still looking for the board.
             let interval = if session.is_none() {
@@ -757,6 +792,8 @@ mod tests {
         session: u64,
         /// Answer pings with this instead of their own timestamp.
         fake_t_app_us: Option<u64>,
+        /// Answer PING_TIMED (and say so in every PONG); board clock origin.
+        timed: Option<Instant>,
     }
 
     impl FakeBoard {
@@ -769,7 +806,19 @@ mod tests {
                 counter: 1000,
                 session: SESSION,
                 fake_t_app_us: None,
+                timed: None,
             }
+        }
+
+        fn reply_timed(&mut self, pong: PongTimed, to: SocketAddr) {
+            self.counter += 1;
+            let pkt = self.key.seal(
+                Direction::BoardToApp,
+                PacketType::PongTimed,
+                self.counter,
+                &pong.encode(),
+            );
+            self.sock.send_to(&pkt, to).unwrap();
         }
 
         fn reply(&mut self, pong: Pong, to: SocketAddr) {
@@ -799,16 +848,38 @@ mod tests {
                 };
                 let (h, payload) = self.key.open(Direction::AppToBoard, &buf[..n]).unwrap();
                 match PacketType::from_u8(h.ptype).unwrap() {
-                    PacketType::Ping => {
+                    t @ (PacketType::Ping | PacketType::PingTimed) => {
+                        let board_rx = self.timed.map(|o| o.elapsed().as_micros() as u64);
                         let ping = Ping::decode(&payload);
                         let pong = Pong {
                             t_app_us: self.fake_t_app_us.unwrap_or(ping.t_app_us),
                             seq: ping.seq,
                             session_id: self.session,
-                            status: STATUS_USB_MOUNTED,
+                            status: STATUS_USB_MOUNTED
+                                | if self.timed.is_some() {
+                                    STATUS_TIMED_PING
+                                } else {
+                                    0
+                                },
                             ..Default::default()
                         };
-                        self.reply(pong, from);
+                        match (t, self.timed, board_rx) {
+                            (PacketType::PingTimed, Some(origin), Some(board_rx)) => {
+                                let board_tx = origin.elapsed().as_micros() as u64;
+                                self.reply_timed(
+                                    PongTimed {
+                                        pong,
+                                        board_rx_us: board_rx,
+                                        board_tx_us: board_tx,
+                                    },
+                                    from,
+                                );
+                            }
+                            (PacketType::PingTimed, ..) => {
+                                panic!("PING_TIMED to a board that never offered it")
+                            }
+                            _ => self.reply(pong, from),
+                        }
                     }
                     t => {
                         let p = InputPayload::decode(&payload);
@@ -827,6 +898,33 @@ mod tests {
             }
             got
         }
+    }
+
+    #[test]
+    fn one_way_time_from_timed_pings() {
+        let mut board = FakeBoard::new();
+        board.timed = Some(Instant::now());
+        let mut cfg = LinkConfig::new(board.addr(), KEY);
+        cfg.ping_interval = Duration::from_millis(10);
+        let link = Link::start(cfg).unwrap();
+        board.run_for(Duration::from_millis(400));
+        let st = link.status();
+        assert!(st.is_connected());
+        let ow = st.oneway.expect("one-way time from PONG_TIMED");
+        assert!(ow.history_ms.len() >= 5, "{}", ow.history_ms.len());
+        // Over loopback: well below the round trip, below a few ms.
+        assert!(ow.p50_us < 5_000.0, "{ow:?}");
+        assert!(ow.p50_us <= st.rtt.unwrap().as_micros() as f64 + 1.0);
+    }
+
+    #[test]
+    fn plain_pings_to_boards_without_time_stamps() {
+        let mut board = FakeBoard::new();
+        let link = Link::start(LinkConfig::new(board.addr(), KEY)).unwrap();
+        // run_for panics on a PING_TIMED to this board.
+        board.run_for(Duration::from_millis(100));
+        assert!(link.wait_connected(Duration::from_millis(500)));
+        assert!(link.status().oneway.is_none());
     }
 
     #[test]

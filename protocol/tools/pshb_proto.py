@@ -17,6 +17,8 @@ TYPE_INPUT = 0x01
 TYPE_HEARTBEAT = 0x02
 TYPE_PING = 0x03
 TYPE_PONG = 0x04
+TYPE_PING_TIMED = 0x05
+TYPE_PONG_TIMED = 0x06
 
 DIR_APP_TO_BOARD = 1
 DIR_BOARD_TO_APP = 2
@@ -27,6 +29,7 @@ STATUS_USB_MOUNTED = 0x01
 STATUS_USB_SUSPENDED = 0x02
 STATUS_FAILSAFE = 0x04
 STATUS_NO_PARTITION_TABLE = 0x08
+STATUS_TIMED_PING = 0x10
 STATUS_PLAINTEXT = 0x80
 
 UDP_PORT_DEFAULT = 45045
@@ -37,6 +40,7 @@ HEADER = struct.Struct("<BBQ")            # version, type, counter
 INPUT = struct.Struct("<QBB6sBhhbb")      # 23 bytes
 PING = struct.Struct("<QI")               # 12 bytes
 PONG = struct.Struct("<QIQIIBIIIII")      # 49 bytes
+PONG_TIMED = struct.Struct("<QIQIIBIIIIIQQ")  # 65 bytes: PONG + board_rx_us, board_tx_us
 NONCE = struct.Struct("<IQ")              # direction, counter
 
 PAYLOAD_LEN = {
@@ -44,6 +48,8 @@ PAYLOAD_LEN = {
     TYPE_HEARTBEAT: INPUT.size,
     TYPE_PING: PING.size,
     TYPE_PONG: PONG.size,
+    TYPE_PING_TIMED: PING.size,
+    TYPE_PONG_TIMED: PONG_TIMED.size,
 }
 
 
@@ -106,6 +112,21 @@ class Pong:
     def fw_version_str(self) -> str:
         v = self.fw_version
         return f"{(v >> 24) & 0xFF}.{(v >> 16) & 0xFF}.{v & 0xFFFF}"  # 0xMMmmpppp
+
+
+@dataclass
+class PongTimed(Pong):
+    """PONG_TIMED: a PONG plus the board's clock (µs since its start) when the
+    PING arrived and when the answer was built."""
+    board_rx_us: int = 0
+    board_tx_us: int = 0
+
+    @classmethod
+    def decode(cls, data: bytes) -> "PongTimed":
+        return cls(*PONG_TIMED.unpack(data))
+
+    def encode(self) -> bytes:
+        return super().encode() + struct.pack("<QQ", self.board_rx_us, self.board_tx_us)
 
 
 def header(version: int, ptype: int, counter: int) -> bytes:

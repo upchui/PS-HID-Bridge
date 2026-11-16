@@ -3,7 +3,7 @@
 use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use pshb_core::crypto::{OpenError, PacketKey};
-use pshb_core::protocol::{Direction, InputPayload, PacketType, Pong};
+use pshb_core::protocol::{Direction, InputPayload, PacketType, Pong, PongTimed};
 use serde_json::Value;
 
 const VECTORS: &str = include_str!("../../../protocol/vectors/v1.json");
@@ -92,7 +92,15 @@ fn packets() {
                 assert_eq!(p.rx_malformed as u64, f["rx_malformed"].as_u64().unwrap());
                 assert_eq!(p.encode().to_vec(), payload);
             }
-            PacketType::Ping => {}
+            PacketType::PongTimed => {
+                let p = PongTimed::decode(&payload);
+                assert_eq!(p.pong.session_id, f["session_id"].as_u64().unwrap());
+                assert_eq!(p.pong.status as u64, f["status"].as_u64().unwrap());
+                assert_eq!(p.board_rx_us, f["board_rx_us"].as_u64().unwrap());
+                assert_eq!(p.board_tx_us, f["board_tx_us"].as_u64().unwrap());
+                assert_eq!(p.encode().to_vec(), payload);
+            }
+            PacketType::Ping | PacketType::PingTimed => {}
         }
     }
 }

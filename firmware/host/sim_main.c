@@ -151,6 +151,7 @@ static void boot(void) {
     input_state_take_mouse_report(&S.input, mouse, false);
     bridge_init(&S.bridge, &S.input, S.have_session ? S.session : random_u64(), random_u64(), S.boot_us);
     S.bridge.allow_plaintext = S.plaintext;
+    S.bridge.clock_us = now_us;  // PONG_TIMED send stamp
     S.bridge.failsafe_us = S.failsafe_ms * 1000u;
     S.bridge.usb_status = S.usb_mounted ? PSHB_STATUS_USB_MOUNTED : 0;
     apply_settings(&S.settings);

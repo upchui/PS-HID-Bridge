@@ -36,12 +36,17 @@ static size_t make_input(uint8_t *out, const uint8_t *key, uint8_t type, uint64_
                       PSHB_MAX_PACKET_LEN);
 }
 
-static size_t make_ping(uint8_t *out, const uint8_t *key, uint64_t counter, uint64_t t, uint32_t seq) {
+static size_t make_ping_type(uint8_t *out, const uint8_t *key, uint8_t type, uint64_t counter,
+                             uint64_t t, uint32_t seq) {
     pshb_ping_t p = {.t_app_us = t, .seq = seq};
     uint8_t payload[PSHB_PING_PAYLOAD_LEN];
     pshb_ping_encode(payload, &p);
-    return proto_seal(key, PSHB_DIR_APP_TO_BOARD, PSHB_TYPE_PING, counter, payload, sizeof(payload),
-                      out, PSHB_MAX_PACKET_LEN);
+    return proto_seal(key, PSHB_DIR_APP_TO_BOARD, type, counter, payload, sizeof(payload), out,
+                      PSHB_MAX_PACKET_LEN);
+}
+
+static size_t make_ping(uint8_t *out, const uint8_t *key, uint64_t counter, uint64_t t, uint32_t seq) {
+    return make_ping_type(out, key, PSHB_TYPE_PING, counter, t, seq);
 }
 
 static void feed(fixture_t *f, const uint8_t *pkt, size_t len, uint64_t now) {
@@ -74,6 +79,58 @@ TEST(ping_gets_encrypted_pong) {
     pshb_header_t h;
     proto_check(f.reply, f.reply_len, &h);
     CHECK(h.counter <= PSHB_TX_COUNTER_MASK);
+}
+
+static uint64_t s_clock = 0;
+static uint64_t test_clock(void) {
+    return s_clock;
+}
+
+TEST(timed_ping_gets_time_stamps) {
+    fixture_t f;
+    setup(&f);
+    uint8_t pkt[PSHB_MAX_PACKET_LEN];
+    // Every PONG says that the board answers PING_TIMED.
+    feed(&f, pkt, make_ping(pkt, KEY, 100, 777, 5), T0 + 5000);
+    pshb_pong_t pong;
+    CHECK(decode_pong(&f, &pong));
+    CHECK(pong.status & PSHB_STATUS_TIMED_PING);
+
+    // Arrival as the platform noted it, answer time from its clock.
+    f.b.rx_at_us = T0 + 6000;
+    f.b.clock_us = test_clock;
+    s_clock = T0 + 6040;
+    feed(&f, pkt, make_ping_type(pkt, KEY, PSHB_TYPE_PING_TIMED, 101, 888, 6), T0 + 6020);
+    pshb_header_t h;
+    CHECK(proto_check(f.reply, f.reply_len, &h));
+    CHECK_EQ_U(h.type, PSHB_TYPE_PONG_TIMED);
+    CHECK_EQ_U(f.reply_len, PSHB_HDR_LEN + PSHB_PONG_TIMED_PAYLOAD_LEN + PSHB_TAG_LEN);
+    uint8_t payload[PSHB_PONG_TIMED_PAYLOAD_LEN];
+    CHECK(proto_decrypt(KEY, PSHB_DIR_BOARD_TO_APP, f.reply, f.reply_len, payload));
+    pshb_pong_timed_decode(payload, &pong);
+    CHECK_EQ_U(pong.t_app_us, 888);
+    CHECK_EQ_U(pong.seq, 6);
+    CHECK_EQ_U(pong.session_id, SESSION);
+    CHECK_EQ_U(pong.board_rx_us, T0 + 6000);
+    CHECK_EQ_U(pong.board_tx_us, T0 + 6040);
+    CHECK(f.b.rx_at_us == 0);  // good for one datagram only
+
+    // Without a noted arrival or a clock: the time of the call.
+    f.b.clock_us = NULL;
+    feed(&f, pkt, make_ping_type(pkt, KEY, PSHB_TYPE_PING_TIMED, 102, 999, 7), T0 + 7000);
+    CHECK(proto_decrypt(KEY, PSHB_DIR_BOARD_TO_APP, f.reply, f.reply_len, payload));
+    pshb_pong_timed_decode(payload, &pong);
+    CHECK_EQ_U(pong.board_rx_us, T0 + 7000);
+    CHECK_EQ_U(pong.board_tx_us, T0 + 7000);
+
+    // A PONG_TIMED sent to the board is no request.
+    uint32_t malformed = f.b.stats.rx_malformed;
+    uint8_t answer[PSHB_PONG_TIMED_PAYLOAD_LEN] = {0};
+    size_t n = proto_seal(KEY, PSHB_DIR_APP_TO_BOARD, PSHB_TYPE_PONG_TIMED, 103, answer, sizeof(answer), pkt,
+                          sizeof(pkt));
+    feed(&f, pkt, n, T0 + 8000);
+    CHECK_EQ_U(f.reply_len, 0);
+    CHECK_EQ_U(f.b.stats.rx_malformed, malformed + 1);
 }
 
 TEST(pong_reports_missing_partition_table) {
@@ -284,6 +341,7 @@ TEST(release_all_flag) {
 
 int main(void) {
     RUN(ping_gets_encrypted_pong);
+    RUN(timed_ping_gets_time_stamps);
     RUN(pong_reports_missing_partition_table);
     RUN(input_is_applied);
     RUN(replay_and_old_counter_rejected);

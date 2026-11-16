@@ -120,7 +120,7 @@ TEST(open_matches_vectors) {
     for (size_t i = 0; i < COUNT(k_packets); i++) {
         const vec_packet_t *v = &k_packets[i];
         pshb_header_t h;
-        uint8_t payload[PSHB_PONG_PAYLOAD_LEN];
+        uint8_t payload[PSHB_PONG_TIMED_PAYLOAD_LEN];
         CHECK(proto_check(v->packet, v->packet_len, &h));
         CHECK_EQ_U(h.type, v->type);
         CHECK_EQ_U(h.counter, v->counter);
@@ -161,7 +161,7 @@ TEST(invalid_vectors_rejected) {
             continue;
         }
         CHECK(structure_ok);
-        uint8_t payload[PSHB_PONG_PAYLOAD_LEN];
+        uint8_t payload[PSHB_PONG_TIMED_PAYLOAD_LEN];
         memset(payload, 0xAA, sizeof(payload));
         bool ok = proto_decrypt(v->key, v->direction, v->packet, v->packet_len, payload);
         if (ok) fprintf(stderr, "  %s: decrypt unexpectedly ok\n", v->name);

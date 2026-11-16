@@ -76,12 +76,26 @@ void pshb_pong_decode(const uint8_t in[PSHB_PONG_PAYLOAD_LEN], pshb_pong_t *p) {
     p->rx_malformed = pshb_rd32(&in[45]);
 }
 
+void pshb_pong_timed_encode(uint8_t out[PSHB_PONG_TIMED_PAYLOAD_LEN], const pshb_pong_t *p) {
+    pshb_pong_encode(out, p);
+    pshb_wr64(&out[49], p->board_rx_us);
+    pshb_wr64(&out[57], p->board_tx_us);
+}
+
+void pshb_pong_timed_decode(const uint8_t in[PSHB_PONG_TIMED_PAYLOAD_LEN], pshb_pong_t *p) {
+    pshb_pong_decode(in, p);
+    p->board_rx_us = pshb_rd64(&in[49]);
+    p->board_tx_us = pshb_rd64(&in[57]);
+}
+
 size_t pshb_payload_len(uint8_t type) {
     switch (type) {
     case PSHB_TYPE_INPUT:
     case PSHB_TYPE_HEARTBEAT: return PSHB_INPUT_PAYLOAD_LEN;
-    case PSHB_TYPE_PING: return PSHB_PING_PAYLOAD_LEN;
+    case PSHB_TYPE_PING:
+    case PSHB_TYPE_PING_TIMED: return PSHB_PING_PAYLOAD_LEN;
     case PSHB_TYPE_PONG: return PSHB_PONG_PAYLOAD_LEN;
+    case PSHB_TYPE_PONG_TIMED: return PSHB_PONG_TIMED_PAYLOAD_LEN;
     default: return 0;
     }
 }

@@ -631,6 +631,15 @@ fn cmd_run(
                     l.p50_us, l.p95_us, l.p99_us, l.max_us, l.samples
                 );
             }
+            let st = link.status();
+            if let Some(o) = &st.oneway {
+                println!(
+                    "PC -> board: median {:.0} µs, 95 % below {:.0} µs (round trip {:.0} µs)",
+                    o.p50_us,
+                    o.p95_us,
+                    st.rtt.map_or(0.0, |r| r.as_secs_f64() * 1e6)
+                );
+            }
         }
     }
 

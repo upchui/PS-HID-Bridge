@@ -34,6 +34,10 @@ def main() -> int:
             assert i.encode() == payload
         elif ptype == p.TYPE_PONG:
             assert vars(p.Pong.decode(payload)) == f, v["name"]
+        elif ptype == p.TYPE_PONG_TIMED:
+            pong = p.PongTimed.decode(payload)
+            assert vars(pong) == f, v["name"]
+            assert pong.encode() == payload
 
     for v in doc["invalid"]:
         try:

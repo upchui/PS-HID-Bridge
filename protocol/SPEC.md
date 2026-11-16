@@ -33,6 +33,8 @@ The first 10 bytes (version, type, counter) are not encrypted but enter the tag 
 | `0x02` | HEARTBEAT | app → board | 23 B | 49 B |
 | `0x03` | PING | app → board | 12 B | 38 B |
 | `0x04` | PONG | board → app | 49 B | 75 B |
+| `0x05` | PING_TIMED | app → board | 12 B | 38 B |
+| `0x06` | PONG_TIMED | board → app | 65 B | 91 B |
 
 ### Nonce
 
@@ -89,24 +91,38 @@ PING does not need a session id; the app learns the session from the answer.
 | 12 | 8 | session_id | the board's current session |
 | 20 | 4 | fw_version | `0xMMmmpppp`: major (8 bit), minor (8 bit), patch (16 bit, the number of commits since MAJOR.MINOR changed) |
 | 24 | 4 | uptime_ms | time since boot |
-| 28 | 1 | status | bit 0 USB connected, bit 1 USB suspended, bit 2 failsafe active, bit 3 no partition table (firmware updates overwrite the running firmware, no fallback slot), bit 7 unencrypted debug firmware |
+| 28 | 1 | status | bit 0 USB connected, bit 1 USB suspended, bit 2 failsafe active, bit 3 no partition table (firmware updates overwrite the running firmware, no fallback slot), bit 4 the board answers PING_TIMED, bit 7 unencrypted debug firmware |
 | 29 | 4 | rx_ok | valid packets |
 | 33 | 4 | rx_auth_fail | bad tag or no key set |
 | 37 | 4 | rx_replay | counter not greater than the last one, or wrong session |
 | 41 | 4 | rx_filtered | foreign sender IP |
 | 45 | 4 | rx_malformed | wrong length, version or unknown type |
 
+### PING_TIMED and PONG_TIMED (one-way time)
+
+PING_TIMED has the layout of PING; the board answers it with PONG_TIMED, which is a PONG (49 bytes, same fields) followed by two time stamps of the board's clock, in microseconds since it started:
+
+| Offset | Size | Field | Content |
+|---|---|---|---|
+| 0 | 49 | | as PONG |
+| 49 | 8 | board_rx_us | u64, when the PING arrived (the network chip's interrupt) |
+| 57 | 8 | board_tx_us | u64, when the answer was built (just before it is encrypted and sent) |
+
+With them the app can take the board's processing time (`board_tx_us - board_rx_us`) out of the round trip and estimate the one-way time app → board, which input packets take. Board and app have no common clock; the app estimates the offset between the two clocks (and its drift) from the fastest answers, assuming that those took equally long in both directions. Encrypting and sending the answer after `board_tx_us` (some 20–30 µs on the board) counts as network time on the way back.
+
+Only boards that set status bit 4 in their PONGs answer PING_TIMED; the app sends it only to them (older boards count an unknown type as malformed). Everything a PONG does, a PONG_TIMED does as well (session, connection, round trip).
+
 ## Processing on the board
 
 For every received packet the board checks, in this order:
 
-1. Length at least header + tag, version `0x01`, type INPUT, HEARTBEAT or PING, length matches the type. Otherwise `rx_malformed`.
+1. Length at least header + tag, version `0x01`, type INPUT, HEARTBEAT, PING or PING_TIMED, length matches the type. Otherwise `rx_malformed`.
 2. Sender IP inside the allowed address or subnet (if a sender filter is configured, e.g. `192.168.1.20` or `192.168.1.0/24`). Otherwise `rx_filtered`.
 3. `counter > last valid counter`. Otherwise `rx_replay`. This check is cheap and therefore comes before the cryptography.
 4. Verify the tag and decrypt. Otherwise `rx_auth_fail`.
 5. Only now: `last valid counter = counter`. A forged packet can therefore not push the counter up.
 6. INPUT/HEARTBEAT: `session_id` must match the current session. Otherwise `rx_replay`; at most every 100 ms the board answers with a PONG with `t_app_us = seq = 0` as a **session hint**, so the app learns the new session immediately.
-7. PING: PONG to the sender (IP and port of the received packet).
+7. PING: PONG to the sender (IP and port of the received packet); PING_TIMED: PONG_TIMED.
 
 The board creates a new **session id** from the TRNG on every boot. After a restart every previously recorded input packet is worthless, even though the board's own counter starts over.
 
@@ -121,7 +137,7 @@ The board creates a new **session id** from the TRNG on every boot. After a rest
 1. Send PING until a PONG arrives; take the `session_id` from it.
 2. Send an INPUT on every change, on average at most one per millisecond (two in a row are allowed, so a 1000 Hz mouse whose reports jitter a little is never held back). Motion that has to wait is summed up; whatever does not fit into i16 goes into the next packet.
 3. While the bridge is active: HEARTBEAT if nothing was sent for 50 ms.
-4. PING every second (more often for the latency view). If the `session_id` in a PONG changes, use the new one from now on and send the full state again.
+4. PING every second (more often for the latency view); PING_TIMED instead once a PONG has status bit 4. If the `session_id` in a PONG changes, use the new one from now on and send the full state again.
 5. When deactivating: INPUT with `RELEASE_ALL`.
 
 ## Unencrypted debug mode (version 0)

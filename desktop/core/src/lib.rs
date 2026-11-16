@@ -17,6 +17,7 @@ pub mod keymap;
 pub mod lockfile;
 pub mod lowlat;
 pub mod mouse;
+pub mod oneway;
 pub mod protocol;
 pub mod rt;
 pub mod script;

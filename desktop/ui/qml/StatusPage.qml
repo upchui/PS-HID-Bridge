@@ -264,10 +264,24 @@ AppPage {
             detail: "USB connection of the board"
         }
         StatTile {
+            id: wayTile
+            // PC -> board alone (what input takes) once the board sends time
+            // stamps; the round trip (there and back) underneath.
+            readonly property bool oneWay: AppController.upP50 >= 0
+            function fmt(ms) {
+                return ms < 1 ? (ms * 1000).toFixed(0) + " µs" : ms.toFixed(2) + " ms";
+            }
             icon: "latency"
-            label: "Round trip to the board"
-            value: AppController.rttMs >= 0 ? AppController.rttP50.toFixed(2) + " ms" : "–"
-            detail: AppController.rttMs >= 0 ? "median · 95 % below " + AppController.rttP95.toFixed(2) + " ms" : "measured while connected"
+            label: oneWay ? "PC → board" : "Round trip to the board"
+            value: oneWay ? fmt(AppController.upP50)
+                   : AppController.rttMs >= 0 ? AppController.rttP50.toFixed(2) + " ms" : "–"
+            detail: oneWay
+                    ? "median · 95 % below " + fmt(AppController.upP95)
+                      + (AppController.rttMs >= 0 ? " · round trip " + AppController.rttP50.toFixed(2) + " ms" : "")
+                    : AppController.rttMs >= 0
+                    ? "there and back, median · 95 % below " + AppController.rttP95.toFixed(2) + " ms"
+                      + (AppController.boardTimedPing ? "" : " · PC → board alone needs newer board firmware")
+                    : "measured while connected"
 
             Canvas {
                 id: spark
@@ -275,7 +289,9 @@ AppPage {
                 Layout.topMargin: 4
                 implicitHeight: 36
                 visible: AppController.connected
-                readonly property var values: JSON.parse(AppController.rttHistoryJson)
+                readonly property var values: JSON.parse(wayTile.oneWay ? AppController.upHistoryJson : AppController.rttHistoryJson)
+                // Lowest top of the scale (ms): one-way times are often below 0.1 ms.
+                readonly property real floor: wayTile.oneWay ? 0.1 : 1
                 readonly property color line: Style.accent
                 onValuesChanged: requestPaint()
                 onWidthChanged: requestPaint()
@@ -286,7 +302,7 @@ AppPage {
                     const v = values;
                     if (v.length < 2)
                         return;
-                    const max = Math.max(1, Math.max.apply(null, v) * 1.2);
+                    const max = Math.max(floor, Math.max.apply(null, v) * 1.2);
                     const x = i => (width - 2) * i / (v.length - 1) + 1;
                     const y = val => height - 2 - (height - 4) * val / max;
                     ctx.strokeStyle = line;

@@ -159,6 +159,11 @@ static inline void timing_pin(uint pin, bool on) {
 
 // ---------------------------------------------------------------- network input
 
+// Clock for the PONG_TIMED send stamp (bridge.c).
+static uint64_t bridge_clock_us(void) {
+    return time_us_64();
+}
+
 // ChaCha20 blocks for the datagram being read: computed from its header
 // while the DMA still brings in the rest (w5500_udp_recv's `early`).
 static pshb_aead_pre_t s_pre;
@@ -251,6 +256,7 @@ static void net_service(void) {
         } else {
             uint8_t reply[PSHB_MAX_PACKET_LEN];
             g_bridge.input_applied = false;
+            g_bridge.rx_at_us = edge;  // PONG_TIMED: when the datagram arrived (INTn)
             size_t rlen = bridge_handle_packet_pre(&g_bridge, pkt, (size_t)n, ip_to_u32(ip), t1, reply,
                                                    sizeof(reply), &s_pre);
             if (s_pre.valid) pshb_wipe(&s_pre, sizeof(s_pre));  // keystream
@@ -378,6 +384,7 @@ int main(void) {
     diag_init();
     bridge_init(&g_bridge, &g_input, get_rand_64(), get_rand_64(), time_us_64());
     g_bridge.allow_plaintext = PSHB_PLAINTEXT_DEBUG;
+    g_bridge.clock_us = bridge_clock_us;
     critical_section_init(&s_cfg_lock);
     load_settings(stored);
     hid_out_init(&g_input);

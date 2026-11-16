@@ -47,6 +47,11 @@ typedef struct {
     // maintained by the platform
     uint8_t usb_status;       // PSHB_STATUS_USB_* bits
     bool no_partition_table;  // reported as PSHB_STATUS_NO_PARTITION_TABLE
+    // PONG_TIMED time stamps: when the datagram being handled arrived (set
+    // before each call; 0 = use now_us), and a clock for the moment the
+    // answer is built (NULL = use now_us).
+    uint64_t rx_at_us;
+    uint64_t (*clock_us)(void);
 
     // protocol state
     uint64_t last_rx_counter; // last counter that passed authentication

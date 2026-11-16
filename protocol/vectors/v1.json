@@ -151,6 +151,43 @@
         "rx_filtered": 4,
         "rx_malformed": 5
       }
+    },
+    {
+      "name": "ping_timed",
+      "direction": 1,
+      "type": 5,
+      "counter": 1762790400000005,
+      "key": "3e2fde8ca2d4145265effd8a752e4380a6c1d111855d70c96ec7df1380f61579",
+      "payload": "fc1d99be1c00000008000000",
+      "packet": "010505009b9f3f430600c9e11404d6e9492cc740bf364a8aa7c9835f9f80891e26abb15a974e",
+      "fields": {
+        "t_app_us": 123456790012,
+        "seq": 8
+      }
+    },
+    {
+      "name": "pong_timed",
+      "direction": 2,
+      "type": 6,
+      "counter": 2623536861340474336,
+      "key": "3e2fde8ca2d4145265effd8a752e4380a6c1d111855d70c96ec7df1380f61579",
+      "payload": "fc1d99be1c0000000800000088776655443322110001000049ee000011e9030000020000000300000004000000050000009bc3e9330e000000dbc3e9330e000000",
+      "packet": "0106e09b5713e0ac6824235c82ca5b2442a047785b4df92a6b1c6d7e6fccca04fde9397be5d9d41ce5a58e6ed6214618c5ae8da98c0934c59cebffcad7bd12c8b9821c6be7a63f731a9f5a3d0fa28ccdff599daefa3ea09729d68d",
+      "fields": {
+        "t_app_us": 123456790012,
+        "seq": 8,
+        "session_id": 1234605616436508552,
+        "fw_version": 256,
+        "uptime_ms": 61001,
+        "status": 17,
+        "rx_ok": 1001,
+        "rx_auth_fail": 2,
+        "rx_replay": 3,
+        "rx_filtered": 4,
+        "rx_malformed": 5,
+        "board_rx_us": 61000500123,
+        "board_tx_us": 61000500187
+      }
     }
   ],
   "invalid": [

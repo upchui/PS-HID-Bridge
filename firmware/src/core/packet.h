@@ -37,6 +37,7 @@ typedef struct {
     uint32_t uptime_ms;
     uint8_t status;
     uint32_t rx_ok, rx_auth_fail, rx_replay, rx_filtered, rx_malformed;
+    uint64_t board_rx_us, board_tx_us;  // PONG_TIMED only
 } pshb_pong_t;
 
 void pshb_header_encode(uint8_t out[PSHB_HDR_LEN], const pshb_header_t *h);
@@ -50,6 +51,9 @@ void pshb_ping_decode(const uint8_t in[PSHB_PING_PAYLOAD_LEN], pshb_ping_t *p);
 
 void pshb_pong_encode(uint8_t out[PSHB_PONG_PAYLOAD_LEN], const pshb_pong_t *p);
 void pshb_pong_decode(const uint8_t in[PSHB_PONG_PAYLOAD_LEN], pshb_pong_t *p);
+// PONG_TIMED: the PONG fields followed by the two time stamps.
+void pshb_pong_timed_encode(uint8_t out[PSHB_PONG_TIMED_PAYLOAD_LEN], const pshb_pong_t *p);
+void pshb_pong_timed_decode(const uint8_t in[PSHB_PONG_TIMED_PAYLOAD_LEN], pshb_pong_t *p);
 
 // Expected payload length for a packet type (0 for unknown types).
 size_t pshb_payload_len(uint8_t type);

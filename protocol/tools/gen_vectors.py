@@ -77,12 +77,20 @@ def packets() -> list[dict]:
                   1000, 2, 3, 4, 5)
     out.append(packet("pong", p.DIR_BOARD_TO_APP, p.TYPE_PONG, BOARD_COUNTER, pong.encode(),
                       dict(vars(pong))))
+    ping_t = p.Ping(123_456_790_012, 8)
+    out.append(packet("ping_timed", p.DIR_APP_TO_BOARD, p.TYPE_PING_TIMED, APP_COUNTER + 5, ping_t.encode(),
+                      {"t_app_us": ping_t.t_app_us, "seq": ping_t.seq}))
+    pong_t = p.PongTimed(123_456_790_012, 8, SESSION, 0x000100, 61_001,
+                         p.STATUS_USB_MOUNTED | p.STATUS_TIMED_PING, 1001, 2, 3, 4, 5,
+                         61_000_500_123, 61_000_500_187)
+    out.append(packet("pong_timed", p.DIR_BOARD_TO_APP, p.TYPE_PONG_TIMED, BOARD_COUNTER + 1,
+                      pong_t.encode(), dict(vars(pong_t))))
     return out
 
 
 def invalid(valid: list[dict]) -> list[dict]:
     base = bytes.fromhex(valid[0]["packet"])
-    pong = bytes.fromhex(valid[-1]["packet"])
+    pong = bytes.fromhex(next(v for v in valid if v["name"] == "pong")["packet"])
 
     def flip(data: bytes, index: int) -> bytes:
         b = bytearray(data)

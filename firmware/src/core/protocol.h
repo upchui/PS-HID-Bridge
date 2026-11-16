@@ -19,6 +19,8 @@ enum {
     PSHB_TYPE_HEARTBEAT = 0x02,
     PSHB_TYPE_PING = 0x03,
     PSHB_TYPE_PONG = 0x04,
+    PSHB_TYPE_PING_TIMED = 0x05,  // like PING, answered with PONG_TIMED
+    PSHB_TYPE_PONG_TIMED = 0x06,
 };
 
 // Nonce = direction u32 LE || counter u64 LE
@@ -41,15 +43,21 @@ enum {
 //  24 uptime_ms u32 | 28 status u8 | 29 rx_ok u32 | 33 rx_auth_fail u32
 //  37 rx_replay u32 | 41 rx_filtered u32 | 45 rx_malformed u32
 #define PSHB_PONG_PAYLOAD_LEN 49
+
+// PONG_TIMED payload (65 bytes): PONG | 49 board_rx_us u64 | 57 board_tx_us u64
+// (the board's clock in µs since its start: when the PING arrived and when the
+// answer was built), for the one-way time PC -> board.
+#define PSHB_PONG_TIMED_PAYLOAD_LEN 65
 enum {
     PSHB_STATUS_USB_MOUNTED = 0x01,
     PSHB_STATUS_USB_SUSPENDED = 0x02,
     PSHB_STATUS_FAILSAFE = 0x04,  // no valid input recently: everything released
     PSHB_STATUS_NO_PARTITION_TABLE = 0x08,  // updates overwrite the firmware, no fallback slot
+    PSHB_STATUS_TIMED_PING = 0x10,  // answers PING_TIMED
     PSHB_STATUS_PLAINTEXT = 0x80,  // debug build without encryption
 };
 
-#define PSHB_MAX_PACKET_LEN (PSHB_HDR_LEN + PSHB_PONG_PAYLOAD_LEN + PSHB_TAG_LEN)
+#define PSHB_MAX_PACKET_LEN (PSHB_HDR_LEN + PSHB_PONG_TIMED_PAYLOAD_LEN + PSHB_TAG_LEN)
 
 static inline uint16_t pshb_rd16(const uint8_t *p) {
     return (uint16_t)(p[0] | (p[1] << 8));

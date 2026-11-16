@@ -72,6 +72,12 @@ pub struct ServiceStatus {
     pub rtt_p95_ms: Option<f64>,
     /// Recent round trips (ms), oldest first.
     pub rtt_history: Vec<f64>,
+    /// One-way time PC -> board (ms): latest, median, 95th percentile and
+    /// the recent samples, oldest first (boards that answer PING_TIMED).
+    pub up_ms: Option<f64>,
+    pub up_p50_ms: Option<f64>,
+    pub up_p95_ms: Option<f64>,
+    pub up_history: Vec<f64>,
     pub board: Option<Pong>,
     pub active: bool,
     pub pending: bool,
@@ -95,7 +101,7 @@ pub struct ServiceStatus {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ServiceEvent {
-    Status(ServiceStatus),
+    Status(Box<ServiceStatus>),
     Notice(Notice),
     /// Text form of a recorded combination, e.g. "Ctrl+Alt+P".
     Recorded(String),
@@ -492,6 +498,10 @@ impl Runner {
             rtt_p50_ms: percentile(&history, 0.50),
             rtt_p95_ms: percentile(&history, 0.95),
             rtt_history: history,
+            up_ms: st.oneway.as_ref().map(|o| o.last_us / 1000.0),
+            up_p50_ms: st.oneway.as_ref().map(|o| o.p50_us / 1000.0),
+            up_p95_ms: st.oneway.as_ref().map(|o| o.p95_us / 1000.0),
+            up_history: st.oneway.map(|o| o.history_ms).unwrap_or_default(),
             board: st.board,
             active: self.ctl.engine.is_active(),
             pending: self.ctl.engine.is_pending(),
@@ -507,7 +517,7 @@ impl Runner {
         };
         if status != self.last_status {
             self.last_status = status.clone();
-            self.emit(ServiceEvent::Status(status));
+            self.emit(ServiceEvent::Status(Box::new(status)));
         }
     }
 

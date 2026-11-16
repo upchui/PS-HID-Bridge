@@ -49,6 +49,13 @@ pub mod qobject {
         #[qproperty(f64, rtt_p50)]
         #[qproperty(f64, rtt_p95)]
         #[qproperty(QString, rtt_history_json)]
+        /// One-way time PC -> board in ms (-1 = not known: older board
+        /// firmware or no answers yet) and its recent samples.
+        /// The board answers timed pings (firmware that knows PING_TIMED).
+        #[qproperty(bool, board_timed_ping)]
+        #[qproperty(f64, up_p50)]
+        #[qproperty(f64, up_p95)]
+        #[qproperty(QString, up_history_json)]
         #[qproperty(f64, input_p50)]
         #[qproperty(f64, input_p95)]
         #[qproperty(f64, input_max)]
@@ -255,6 +262,10 @@ pub struct AppControllerRust {
     rtt_p50: f64,
     rtt_p95: f64,
     rtt_history_json: QString,
+    board_timed_ping: bool,
+    up_p50: f64,
+    up_p95: f64,
+    up_history_json: QString,
     /// Input event -> packet sent, in ms (-1 = no samples yet).
     input_p50: f64,
     input_p95: f64,
@@ -384,6 +395,10 @@ impl Default for AppControllerRust {
             rtt_p50: -1.0,
             rtt_p95: -1.0,
             rtt_history_json: QString::from("[]"),
+            board_timed_ping: false,
+            up_p50: -1.0,
+            up_p95: -1.0,
+            up_history_json: QString::from("[]"),
             input_p50: -1.0,
             input_p95: -1.0,
             input_max: -1.0,
@@ -750,6 +765,16 @@ impl qobject::AppController {
         self.as_mut().set_rtt_history_json(QString::from(
             &serde_json::to_string(&rounded).unwrap_or_default(),
         ));
+        self.as_mut().set_up_p50(st.up_p50_ms.unwrap_or(-1.0));
+        self.as_mut().set_up_p95(st.up_p95_ms.unwrap_or(-1.0));
+        // Microsecond steps: the one-way time is often below 0.1 ms.
+        let up: Vec<f64> = st
+            .up_history
+            .iter()
+            .map(|v| (v * 1000.0).round() / 1000.0)
+            .collect();
+        self.as_mut()
+            .set_up_history_json(QString::from(&serde_json::to_string(&up).unwrap_or_default()));
         let ms = |us: u32| f64::from(us) / 1000.0;
         let lat = st.input_latency;
         self.as_mut().set_input_p50(lat.map_or(-1.0, |l| ms(l.p50_us)));
@@ -784,6 +809,8 @@ impl qobject::AppController {
             self.as_mut().set_board_usb(QString::from(usb_text(p)));
             self.as_mut()
                 .set_board_no_partition_table(p.status & protocol::STATUS_NO_PARTITION_TABLE != 0);
+            self.as_mut()
+                .set_board_timed_ping(p.status & protocol::STATUS_TIMED_PING != 0);
             if let Some((want, _)) = self.rust().board_expected
                 && Version::of_firmware(p.fw_version) == want
             {
@@ -797,6 +824,7 @@ impl qobject::AppController {
             self.as_mut().set_board_firmware(QString::default());
             self.as_mut().set_board_usb(QString::default());
             self.as_mut().set_board_no_partition_table(false);
+            self.as_mut().set_board_timed_ping(false);
         }
         self.as_mut().refresh_board_update(st.connected);
         let text = if !st.connected {
@@ -825,7 +853,7 @@ impl qobject::AppController {
 
     fn on_service_event(mut self: Pin<&mut Self>, ev: ServiceEvent) {
         match ev {
-            ServiceEvent::Status(st) => self.as_mut().apply_status(st),
+            ServiceEvent::Status(st) => self.as_mut().apply_status(*st),
             ServiceEvent::Notice(n) => {
                 let msg = match n {
                     Notice::Activated => Some(("Bridge on", "Mouse and keyboard go to the PlayStation.")),

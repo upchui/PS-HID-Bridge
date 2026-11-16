@@ -286,6 +286,25 @@ AppPage {
             columns: 2
             columnSpacing: 16
             rowSpacing: 10
+            Controls.Label { text: "PC → board"; color: Style.text }
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Style.muted
+                text: AppController.upP50 >= 0
+                      ? `median ${(AppController.upP50 * 1000).toFixed(0)} µs · 95 % below ${(AppController.upP95 * 1000).toFixed(0)} µs (estimated with the board's time stamps)`
+                      : AppController.connected && !AppController.boardTimedPing ? "needs newer board firmware"
+                      : "–"
+            }
+            Controls.Label { text: "Round trip"; color: Style.text }
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Style.muted
+                text: AppController.rttMs >= 0
+                      ? `median ${(AppController.rttP50 * 1000).toFixed(0)} µs · 95 % below ${(AppController.rttP95 * 1000).toFixed(0)} µs (there and back, with the board's processing)`
+                      : "–"
+            }
             Controls.Label { text: "Network adapter"; color: Style.text }
             Controls.Label {
                 Layout.fillWidth: true
