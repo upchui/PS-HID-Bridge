@@ -16,6 +16,7 @@ use pshb_core::crypto::parse_key_hex;
 use pshb_core::engine::{Engine, Notice};
 use pshb_core::idle::IdleInhibitor;
 use pshb_core::input::{self, GrabGuard, InputMsg, InputSet, Waker};
+use pshb_core::lowlat::{self, CpuWake, CpuWakeState};
 use pshb_core::protocol::{self, Pong};
 use pshb_core::rt;
 use pshb_core::script;
@@ -454,6 +455,16 @@ fn cmd_run(
     }
 
     let link = Arc::new(start_link_rt(ctx, board, Duration::from_secs(1), true)?);
+    if let Some(d) = board_addr(ctx, board).ok().and_then(lowlat::adapter_delay) {
+        eprintln!(
+            "Note: the network adapter {iface} holds every packet back up to about {ms:.1} ms before \
+             sending it (USB adapter, cdc_ncm). To send at once:\n  \
+             echo 0 | sudo tee /sys/class/net/{iface}/cdc_ncm/tx_timer_usecs\n\
+             To keep it after a restart, see the README (section \"Latency\").",
+            iface = d.iface,
+            ms = 3.0 * d.timer_us as f64 / 1000.0,
+        );
+    }
     if link.wait_connected(Duration::from_secs(2)) {
         if let Some(p) = link.status().board {
             println!("Board connected: {}", describe(&p));
@@ -499,26 +510,41 @@ fn cmd_run(
 
     // Grab or release as the engine asks; a device that cannot be grabbed
     // switches the bridge off again. While grabbed, the screen stays on
-    // (the desktop sees no input then and would turn it off and lock it).
+    // (the desktop sees no input then and would turn it off and lock it)
+    // and the CPU out of deep sleep states (faster reaction to input).
     let mut idle = IdleInhibitor::new();
-    let apply_grab = |ctl: &mut Controller, inputs: &mut InputSet, idle: &mut IdleInhibitor| {
-        let forgotten = ctl.take_forgotten();
-        if !forgotten.is_empty() {
-            inputs.forget(&forgotten);
-        }
-        while let Some(on) = ctl.take_grab_request() {
-            let problems = inputs.set_grab(on);
-            if let Some(text) = input::grab_problems(&problems) {
-                eprintln!("{text}");
+    let mut cpu = CpuWake::new(ctx.config.keep_cpu_awake);
+    if stats {
+        println!(
+            "CPU sleep states: {}",
+            match cpu.state() {
+                CpuWakeState::Disabled => "left alone (keep_cpu_awake = false)",
+                CpuWakeState::Ready | CpuWakeState::Held => "kept light while the bridge is on",
+                CpuWakeState::NotPermitted => "may not be limited (no write access to /dev/cpu_dma_latency)",
+                CpuWakeState::Unavailable => "cannot be limited on this system",
             }
-            if problems.iter().any(|m| matches!(m, InputMsg::GrabFailed { .. })) {
-                for n in ctl.command(Action::Off) {
-                    println!("{}", notice_text(n));
+        );
+    }
+    let apply_grab =
+        |ctl: &mut Controller, inputs: &mut InputSet, idle: &mut IdleInhibitor, cpu: &mut CpuWake| {
+            let forgotten = ctl.take_forgotten();
+            if !forgotten.is_empty() {
+                inputs.forget(&forgotten);
+            }
+            while let Some(on) = ctl.take_grab_request() {
+                let problems = inputs.set_grab(on);
+                if let Some(text) = input::grab_problems(&problems) {
+                    eprintln!("{text}");
+                }
+                if problems.iter().any(|m| matches!(m, InputMsg::GrabFailed { .. })) {
+                    for n in ctl.command(Action::Off) {
+                        println!("{}", notice_text(n));
+                    }
                 }
             }
-        }
-        idle.set(grabbed.is_grabbed());
-    };
+            idle.set(grabbed.is_grabbed());
+            cpu.set_active(grabbed.is_grabbed());
+        };
 
     let mut connected = link.is_connected();
     let mut result = Ok(());
@@ -535,7 +561,7 @@ fn cmd_run(
                     for n in ctl.handle(event, Instant::now(), ts_us) {
                         println!("{}", notice_text(n));
                     }
-                    apply_grab(&mut ctl, &mut inputs, &mut idle);
+                    apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu);
                 }
                 // Its keys were released just before (InputSet sends key-ups).
                 InputMsg::Gone { path, error } => {
@@ -562,7 +588,7 @@ fn cmd_run(
             for n in ctl.command(Action::Off) {
                 println!("{}", notice_text(n));
             }
-            apply_grab(&mut ctl, &mut inputs, &mut idle);
+            apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu);
         }
         let now_connected = link.is_connected();
         if now_connected != connected {
@@ -589,7 +615,7 @@ fn cmd_run(
     }
 
     ctl.shutdown();
-    apply_grab(&mut ctl, &mut inputs, &mut idle);
+    apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu);
     drop(watchdog);
     drop(inputs);
     thread::sleep(Duration::from_millis(30));

@@ -129,6 +129,9 @@ pub struct Config {
     pub update_check: bool,
     /// Look of the app: "system" (follow the desktop), "light" or "dark".
     pub appearance: String,
+    /// Keep the CPU out of deep sleep states while the bridge is on (faster
+    /// reaction to input, a few watts more; see crate::lowlat::CpuWake).
+    pub keep_cpu_awake: bool,
     /// Settings this version does not know (written by a newer one): kept
     /// and written back as they are.
     #[serde(flatten)]
@@ -151,6 +154,7 @@ impl Default for Config {
             setup_done: false,
             update_check: true,
             appearance: "system".into(),
+            keep_cpu_awake: true,
             extra: toml::Table::new(),
         }
     }

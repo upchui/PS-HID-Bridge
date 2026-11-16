@@ -15,6 +15,7 @@ pub mod idle;
 pub mod input;
 pub mod keymap;
 pub mod lockfile;
+pub mod lowlat;
 pub mod mouse;
 pub mod protocol;
 pub mod rt;

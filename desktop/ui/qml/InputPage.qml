@@ -17,6 +17,25 @@ AppPage {
         DeviceList {
             Layout.fillWidth: true
         }
+        RowLayout {
+            visible: AppController.accessRuleInstalled
+            Layout.fillWidth: true
+            spacing: 12
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Style.muted
+                text: "Read access through /etc/udev/rules.d/70-ps-hid-bridge.rules. Removing it takes the access back: "
+                      + "the app can no longer read keyboard and mouse until it is set up again (administrator password)."
+            }
+            AppButton {
+                text: AppController.accessBusy ? "Working …" : "Remove access"
+                flat: true
+                enabled: !AppController.accessBusy && !AppController.active && !AppController.pending
+                onClicked: AppController.removeAccess()
+                Accessible.description: "Removes the device access rule; asks for the administrator password"
+            }
+        }
     }
 
     Card {

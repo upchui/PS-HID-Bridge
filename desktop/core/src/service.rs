@@ -19,6 +19,7 @@ use crate::engine::{Engine, Event, Notice};
 use crate::idle::IdleInhibitor;
 use crate::input::{self, DeviceInfo, GrabGuard, InputMsg, InputSet, Waker};
 use crate::keymap;
+use crate::lowlat::{self, AdapterDelay, CpuWake, CpuWakeState};
 use crate::mouse::MouseCurve;
 use crate::protocol::{KEY_LEN, Pong};
 use crate::rt;
@@ -31,6 +32,8 @@ const HOTPLUG_SETTLE: Duration = Duration::from_millis(200);
 const RESCAN_FALLBACK: Duration = Duration::from_secs(30);
 const RESCAN_POLL: Duration = Duration::from_secs(2);
 const STATUS: Duration = Duration::from_millis(250);
+/// Look at the network adapter on the way to the board this often.
+const NETWORK_CHECK: Duration = Duration::from_secs(30);
 /// At most one log line (journal) about input corrections per this time.
 const RESYNC_LOG_GAP: Duration = Duration::from_secs(10);
 
@@ -45,11 +48,19 @@ pub enum ServiceCmd {
     MouseCurve(MouseCurve),
     /// Ping more often while the latency view is visible.
     PingInterval(Duration),
+    /// Keep the CPU out of deep sleep states while the bridge is on.
+    KeepCpuAwake(bool),
+    /// Look at the network adapter and the CPU permissions again now (after
+    /// setting up low latency).
+    CheckLowLatency,
     Shutdown,
     /// Result of a device scan (internal: the scan runs on its own thread,
     /// the input thread must not stall on sysfs).
     #[doc(hidden)]
     Devices(Result<input::DeviceList, String>),
+    /// Result of a network adapter check (internal, own thread as well).
+    #[doc(hidden)]
+    Network(Option<AdapterDelay>),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -76,6 +87,10 @@ pub struct ServiceStatus {
     /// How often lost input events (e.g. a button release) were corrected
     /// from the kernel's key state.
     pub input_resyncs: u64,
+    /// The CPU is kept out of deep sleep states (see [`CpuWake`]).
+    pub cpu_wake: CpuWakeState,
+    /// The network adapter towards the board holds packets back.
+    pub adapter_delay: Option<AdapterDelay>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -120,11 +135,18 @@ impl Service {
         let waker = Arc::new(Waker::new().map_err(|e| e.to_string())?);
         let (tx, rx) = mpsc::channel();
         let devices = cfg.config.devices.clone();
+        let cpu = CpuWake::new(cfg.config.keep_cpu_awake);
+        let board = cfg.board;
         let w = waker.clone();
         let cmds = tx.clone();
         let thread = thread::Builder::new()
             .name("pshb-service".into())
-            .spawn(move || Runner::new(Engine::new(engine_cfg), link, devices, sink, w, cmds).run(rx))
+            .spawn(move || {
+                let mut r = Runner::new(Engine::new(engine_cfg), link, devices, sink, w, cmds);
+                r.cpu = cpu;
+                r.board = Some(board);
+                r.run(rx)
+            })
             .map_err(|e| e.to_string())?;
         Ok(Self {
             tx,
@@ -223,6 +245,15 @@ struct Runner {
     /// Keeps the screen on while the devices are grabbed (the desktop sees
     /// no input then and would turn it off and lock it).
     idle: IdleInhibitor,
+    /// Keeps the cores out of deep sleep states while the devices are grabbed.
+    cpu: CpuWake,
+    /// Where the board is (for the network adapter check).
+    board: Option<SocketAddr>,
+    adapter: Option<AdapterDelay>,
+    net_check_running: bool,
+    /// A check was asked for while one was running (its result may be old).
+    net_check_again: bool,
+    next_net_check: Instant,
 }
 
 impl Runner {
@@ -260,6 +291,12 @@ impl Runner {
             logged_resyncs: 0,
             logged_at: None,
             idle: IdleInhibitor::new(),
+            cpu: CpuWake::new(false),
+            board: None,
+            adapter: None,
+            net_check_running: false,
+            net_check_again: false,
+            next_net_check: Instant::now(),
         }
     }
 
@@ -289,7 +326,9 @@ impl Runner {
                 self.notices(n);
             }
         }
-        self.idle.set(self.guard.is_grabbed());
+        let grabbed = self.guard.is_grabbed();
+        self.idle.set(grabbed);
+        self.cpu.set_active(grabbed);
     }
 
     /// Devices that could not be grabbed or released: one message for the
@@ -305,22 +344,49 @@ impl Runner {
         let n = self.ctl.command(action);
         self.notices(n);
         self.apply_requests();
-        self.update_live("");
+        self.update_live(None);
     }
 
     /// Tell the GUI when what the PlayStation receives has changed;
-    /// `device`: the device whose event caused it ("" for a command).
-    fn update_live(&mut self, device: &str) {
+    /// `dev`: the device whose event caused it (None for a command).
+    fn update_live(&mut self, dev: Option<usize>) {
         let live = self.ctl.last_state();
         if live != self.last_live {
             self.last_live = live;
             if let Some(s) = live {
+                let device = dev
+                    .and_then(|d| self.inputs.info(d))
+                    .map(|d| d.name.clone())
+                    .unwrap_or_default();
                 self.emit(ServiceEvent::Live {
                     text: describe_state(&s),
-                    device: device.to_string(),
+                    device,
                 });
             }
         }
+    }
+
+    /// Look at the network adapter towards the board (on its own thread:
+    /// listing the interfaces asks the kernel over netlink); the result
+    /// arrives as [`ServiceCmd::Network`].
+    fn check_network(&mut self) {
+        self.next_net_check = Instant::now() + NETWORK_CHECK;
+        let Some(board) = self.board else {
+            return;
+        };
+        if self.net_check_running {
+            self.net_check_again = true;
+            return;
+        }
+        let cmds = self.cmds.clone();
+        let waker = self.waker.clone();
+        let spawned = thread::Builder::new()
+            .name("pshb-netcheck".into())
+            .spawn(move || {
+                let _ = cmds.send(ServiceCmd::Network(lowlat::adapter_delay(board)));
+                waker.wake();
+            });
+        self.net_check_running = spawned.is_ok();
     }
 
     /// Look at the device list again (on its own thread: walking sysfs
@@ -428,6 +494,8 @@ impl Runner {
             devices_open: self.inputs.len(),
             devices_blocked: self.blocked,
             input_resyncs: self.inputs.resyncs(),
+            cpu_wake: self.cpu.state(),
+            adapter_delay: self.adapter.clone(),
         };
         if status != self.last_status {
             self.last_status = status.clone();
@@ -481,8 +549,7 @@ impl Runner {
             self.last_identify = Some(Instant::now());
             self.emit(ServiceEvent::Identified(d.path.clone()));
         }
-        let device = self.inputs.info(dev).map(|d| d.name.clone()).unwrap_or_default();
-        self.update_live(&device);
+        self.update_live(Some(dev));
     }
 
     fn focus(&mut self, focused: bool) {
@@ -543,18 +610,39 @@ impl Runner {
                     Ok(ServiceCmd::Identify(on)) => self.identify = on,
                     Ok(ServiceCmd::MouseCurve(c)) => self.ctl.engine.set_mouse_curve(c),
                     Ok(ServiceCmd::PingInterval(d)) => self.link.set_ping_interval(d),
+                    Ok(ServiceCmd::KeepCpuAwake(on)) => self.cpu.set_enabled(on),
+                    Ok(ServiceCmd::CheckLowLatency) => {
+                        self.cpu.check();
+                        self.check_network();
+                    }
                     Ok(ServiceCmd::Devices(list)) => self.devices_listed(list),
+                    Ok(ServiceCmd::Network(found)) => {
+                        self.net_check_running = false;
+                        self.adapter = found;
+                        if std::mem::take(&mut self.net_check_again) {
+                            self.check_network();
+                        }
+                    }
                     Err(mpsc::TryRecvError::Empty) => break,
                 }
             }
             // Input (or a wake-up for a command), until the next periodic job
             let now = Instant::now();
-            let timeout = self.next_rescan.min(next_status).saturating_duration_since(now);
+            let timeout = self
+                .next_rescan
+                .min(next_status)
+                .min(self.next_net_check)
+                .saturating_duration_since(now);
             self.inputs.wait(timeout, &mut msgs);
             self.handle_msgs(&mut msgs);
             let now = Instant::now();
             if now >= self.next_rescan {
                 self.rescan();
+            }
+            if now >= self.next_net_check {
+                // Permissions may have been set up meanwhile, too.
+                self.cpu.check();
+                self.check_network();
             }
             if now >= next_status {
                 next_status = now + STATUS;

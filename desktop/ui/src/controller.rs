@@ -103,6 +103,19 @@ pub mod qobject {
         #[qproperty(bool, usb_board_found)]
         #[qproperty(bool, usb_busy)]
         #[qproperty(QString, usb_status)]
+        /// Network adapter towards the board that holds packets back ("" =
+        /// none) and how long at most (ms).
+        #[qproperty(QString, adapter_delay_iface)]
+        #[qproperty(f64, adapter_delay_ms)]
+        /// "disabled", "held", "ready", "not_permitted" or "unavailable"
+        /// (see pshb_core::lowlat::CpuWakeState).
+        #[qproperty(QString, cpu_wake_state)]
+        #[qproperty(bool, keep_cpu_awake)]
+        #[qproperty(bool, latency_setup_busy)]
+        #[qproperty(QString, latency_setup_message)]
+        /// The udev rules the app installed as root (see pshb_core::access).
+        #[qproperty(bool, access_rule_installed)]
+        #[qproperty(bool, latency_rule_installed)]
         type AppController = super::AppControllerRust;
 
         /// Switch the bridge on/off (same as the toggle trigger).
@@ -158,6 +171,21 @@ pub mod qobject {
         /// Ping faster while the latency view is visible.
         #[qinvokable]
         fn set_latency_view(self: Pin<&mut AppController>, visible: bool);
+        /// Keep the CPU out of deep sleep states while the bridge is on.
+        #[qinvokable]
+        fn enable_keep_cpu_awake(self: Pin<&mut AppController>, on: bool);
+        /// Network adapters send every packet at once, and the CPU may be
+        /// kept awake (udev rule, asks for the administrator password);
+        /// `latency_setup_busy` meanwhile, then `latency_setup_message`.
+        #[qinvokable]
+        fn setup_low_latency(self: Pin<&mut AppController>);
+        /// Undo setup_low_latency (asks for the administrator password).
+        #[qinvokable]
+        fn remove_low_latency(self: Pin<&mut AppController>);
+        /// Undo install_access: the app can no longer read keyboard and
+        /// mouse (asks for the administrator password).
+        #[qinvokable]
+        fn remove_access(self: Pin<&mut AppController>);
 
         #[qinvokable]
         fn finish_setup(self: Pin<&mut AppController>);
@@ -301,6 +329,15 @@ pub struct AppControllerRust {
     /// The USB watch thread runs while this is set.
     usb_watching: Arc<AtomicBool>,
     usb_cancel: Arc<AtomicBool>,
+
+    adapter_delay_iface: QString,
+    adapter_delay_ms: f64,
+    cpu_wake_state: QString,
+    keep_cpu_awake: bool,
+    latency_setup_busy: bool,
+    latency_setup_message: QString,
+    access_rule_installed: bool,
+    latency_rule_installed: bool,
 }
 
 /// The running service, shared with the threads that (re)start it, so that
@@ -406,6 +443,14 @@ impl Default for AppControllerRust {
             usb_status: QString::default(),
             usb_watching: Arc::default(),
             usb_cancel: Arc::default(),
+            adapter_delay_iface: QString::default(),
+            adapter_delay_ms: 0.0,
+            cpu_wake_state: QString::from("disabled"),
+            keep_cpu_awake: true,
+            latency_setup_busy: false,
+            latency_setup_message: QString::default(),
+            access_rule_installed: false,
+            latency_rule_installed: false,
         }
     }
 }
@@ -497,6 +542,15 @@ impl qobject::AppController {
         self.as_mut().set_setup_done(c.setup_done);
         self.as_mut().set_update_check(c.update_check);
         self.as_mut().set_appearance(QString::from(&c.appearance));
+        self.as_mut().set_keep_cpu_awake(c.keep_cpu_awake);
+        self.as_mut().publish_rules();
+    }
+
+    fn publish_rules(mut self: Pin<&mut Self>) {
+        self.as_mut()
+            .set_access_rule_installed(pshb_core::access::rule_installed());
+        self.as_mut()
+            .set_latency_rule_installed(pshb_core::access::latency_rule_installed());
     }
 
     fn command(&self, cmd: ServiceCmd) {
@@ -698,6 +752,14 @@ impl qobject::AppController {
         self.as_mut().set_devices_blocked(st.devices_blocked as i32);
         self.as_mut()
             .set_input_resyncs(st.input_resyncs.min(i32::MAX as u64) as i32);
+        self.as_mut()
+            .set_cpu_wake_state(QString::from(st.cpu_wake.as_str()));
+        let (iface, delay_ms) = st.adapter_delay.as_ref().map_or((String::new(), 0.0), |d| {
+            // A lone packet waits up to three rounds of the driver's timer.
+            (d.iface.clone(), 3.0 * f64::from(d.timer_us) / 1000.0)
+        });
+        self.as_mut().set_adapter_delay_iface(QString::from(&iface));
+        self.as_mut().set_adapter_delay_ms(delay_ms);
         if let Some(p) = &st.board {
             self.as_mut()
                 .set_board_firmware(QString::from(&p.fw_version_string()));
@@ -912,8 +974,110 @@ impl qobject::AppController {
         }
     }
 
+    pub fn enable_keep_cpu_awake(mut self: Pin<&mut Self>, on: bool) {
+        self.as_mut().rust_mut().config.keep_cpu_awake = on;
+        self.as_mut().save_config();
+        self.as_mut().publish_config();
+        // Takes effect at once, the bridge stays as it is.
+        self.command(ServiceCmd::KeepCpuAwake(on));
+    }
+
+    pub fn setup_low_latency(self: Pin<&mut Self>) {
+        self.change_low_latency(true);
+    }
+
+    pub fn remove_low_latency(self: Pin<&mut Self>) {
+        self.change_low_latency(false);
+    }
+
+    /// Install (`on`) or remove the low-latency rule.
+    fn change_low_latency(mut self: Pin<&mut Self>, on: bool) {
+        if *self.latency_setup_busy() {
+            return;
+        }
+        self.as_mut().set_latency_setup_busy(true);
+        self.as_mut().set_latency_setup_message(QString::default());
+        let qt = self.qt_thread();
+        // pkexec waits for the password dialog: never on the UI thread.
+        let spawned = thread::Builder::new().name("pshb-lowlat".into()).spawn(move || {
+            let result = if on {
+                pshb_core::access::install_latency_rule()
+            } else {
+                pshb_core::access::remove_latency_rule()
+            };
+            if result.is_ok() {
+                // udev applies the ACLs asynchronously.
+                thread::sleep(Duration::from_millis(500));
+            }
+            let _ = qt.queue(move |obj| obj.low_latency_changed(on, result));
+        });
+        if let Err(e) = spawned {
+            self.as_mut().set_latency_setup_busy(false);
+            self.as_mut()
+                .set_latency_setup_message(QString::from(&e.to_string()));
+        }
+    }
+
+    fn low_latency_changed(mut self: Pin<&mut Self>, on: bool, result: Result<(), String>) {
+        self.as_mut().set_latency_setup_busy(false);
+        self.as_mut().publish_rules();
+        let text = match result {
+            Ok(()) => {
+                // The service looks at the adapter and the permissions again.
+                self.command(ServiceCmd::CheckLowLatency);
+                if on {
+                    "Set up: packets go out at once, and the CPU may be kept awake.".to_string()
+                } else {
+                    "Undone: the rule is gone, USB network adapters bundle packets again (400 µs), \
+                     and this user may no longer keep the CPU awake (unless the system allows it anyway)."
+                        .to_string()
+                }
+            }
+            Err(e) => e,
+        };
+        self.as_mut().set_latency_setup_message(QString::from(&text));
+    }
+
+    pub fn remove_access(mut self: Pin<&mut Self>) {
+        if *self.access_busy() {
+            return;
+        }
+        if *self.active() || *self.pending() {
+            self.as_mut()
+                .set_access_message(QString::from("Switch the bridge off first."));
+            return;
+        }
+        self.as_mut().set_access_busy(true);
+        self.as_mut().set_access_message(QString::default());
+        let qt = self.qt_thread();
+        let spawned = thread::Builder::new().name("pshb-access".into()).spawn(move || {
+            let result = pshb_core::access::remove_rule();
+            if result.is_ok() {
+                thread::sleep(Duration::from_millis(500));
+            }
+            let _ = qt.queue(move |obj| obj.access_removed(result));
+        });
+        if let Err(e) = spawned {
+            self.as_mut().set_access_busy(false);
+            self.as_mut().set_access_message(QString::from(&e.to_string()));
+        }
+    }
+
+    fn access_removed(mut self: Pin<&mut Self>, result: Result<(), String>) {
+        self.as_mut().set_access_busy(false);
+        self.as_mut().publish_rules();
+        if let Err(e) = result {
+            self.as_mut().set_access_message(QString::from(&e));
+            return;
+        }
+        self.as_mut().refresh_devices();
+        // Devices still open keep working until they are closed: start over.
+        self.restart_service();
+    }
+
     fn access_installed(mut self: Pin<&mut Self>, result: Result<(), String>) {
         self.as_mut().set_access_busy(false);
+        self.as_mut().publish_rules();
         if let Err(e) = result {
             self.as_mut().set_access_message(QString::from(&e));
             return;

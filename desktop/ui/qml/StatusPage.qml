@@ -95,6 +95,20 @@ AppPage {
             }
         ]
     }
+    Banner {
+        kind: "warn"
+        visible: AppController.adapterDelayIface !== ""
+        text: "The network adapter " + AppController.adapterDelayIface + " holds every packet back up to about "
+              + AppController.adapterDelayMs.toFixed(1) + " ms before sending it, to bundle packets (USB adapter, cdc_ncm). "
+              + "This comes on top of “Input → network” and shows in the round trip."
+              + (AppController.latencySetupMessage !== "" ? "\n" + AppController.latencySetupMessage : "")
+        actions: AppButton {
+            text: AppController.latencySetupBusy ? "Setting up …" : "Send at once"
+            enabled: !AppController.latencySetupBusy
+            onClicked: AppController.setupLowLatency()
+            Accessible.description: "Asks for the administrator password"
+        }
+    }
 
     // ------------------------------------------------------------ hero
     Rectangle {
@@ -298,6 +312,15 @@ AppPage {
                     visible: AppController.connected
                     level: AppController.realtime ? "ok" : "warn"
                     text: AppController.realtime ? "real-time priority" : "normal priority"
+                }
+                Pill {
+                    visible: AppController.cpuWakeState === "held" || AppController.cpuWakeState === "not_permitted"
+                    level: AppController.cpuWakeState === "held" ? "ok" : "warn"
+                    text: AppController.cpuWakeState === "held" ? "CPU kept awake" : "CPU may sleep deeply"
+                }
+                HelpHint {
+                    visible: AppController.cpuWakeState === "not_permitted"
+                    text: "While the bridge is on, the app keeps the processor out of deep sleep states, so no input has to wait for a core to wake up first (now and then a few hundred microseconds). This user may not do that yet: set it up on the Latency page (asks for the administrator password)."
                 }
                 HelpHint {
                     visible: AppController.connected && !AppController.realtime

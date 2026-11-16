@@ -9,7 +9,7 @@ import PSHIDBridge
 AppPage {
     id: page
     title: "Latency"
-    subtitle: "Measured by the board itself, from the network chip's interrupt to the report the PlayStation fetches."
+    subtitle: "Measured by the board itself, from the network chip's interrupt to the report the PlayStation fetches; at the end, what this PC adds."
 
     readonly property var info: {
         try {
@@ -268,6 +268,86 @@ AppPage {
                 wrapMode: Text.WordWrap
                 color: Style.muted
                 text: AppController.active ? "Switch the bridge off first: the board restarts." : AppController.clockMessage
+            }
+        }
+    }
+
+    // ---- this PC: what happens before the packet reaches the network
+    Card {
+        title: "This PC"
+        subtitle: AppController.inputP50 >= 0
+                  ? `input → network: median ${(AppController.inputP50 * 1000).toFixed(0)} µs · max ${(AppController.inputMax * 1000).toFixed(0)} µs`
+                  : "input → network is measured while the bridge is on"
+        icon: "network"
+        help: "Before the board sees a packet, this PC has to notice the input and send it. Two things in the system can add more than the board's whole input path: USB network adapters that hold packets back to bundle them (about 1 ms), and now and then a core that has to wake up from a deep sleep state first (a few hundred µs)."
+
+        GridLayout {
+            Layout.fillWidth: true
+            columns: 2
+            columnSpacing: 16
+            rowSpacing: 10
+            Controls.Label { text: "Network adapter"; color: Style.text }
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: AppController.adapterDelayIface !== "" ? Style.stateColor("warn") : Style.muted
+                text: AppController.adapterDelayIface !== ""
+                      ? `${AppController.adapterDelayIface} holds every packet back up to about ${AppController.adapterDelayMs.toFixed(1)} ms (USB adapter, cdc_ncm)`
+                      : AppController.connected ? "sends packets at once" : "–"
+            }
+            Controls.Label { text: "Processor sleep"; color: Style.text }
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: AppController.cpuWakeState === "not_permitted" ? Style.stateColor("warn") : Style.muted
+                text: !AppController.keepCpuAwake ? "deep sleep states allowed (switched off below)"
+                      : AppController.cpuWakeState === "held" ? "kept out of deep sleep states now"
+                      : AppController.cpuWakeState === "ready" ? "kept out of deep sleep states while the bridge is on"
+                      : AppController.cpuWakeState === "not_permitted" ? "may not be kept awake by this user yet"
+                      : AppController.cpuWakeState === "unavailable" ? "cannot be kept awake on this system"
+                      : "–"
+            }
+        }
+        RowLayout {
+            spacing: 12
+            AppSwitch {
+                checked: AppController.keepCpuAwake
+                onToggled: AppController.enableKeepCpuAwake(checked)
+                Accessible.name: "Keep the processor awake while the bridge is on"
+            }
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Style.muted
+                text: "Keep the processor awake while the bridge is on: no input has to wait for a core to wake up from deep sleep (now and then a few hundred µs). The PC uses a few watts more meanwhile."
+            }
+        }
+        RowLayout {
+            id: setupRow
+            readonly property bool needed: AppController.adapterDelayIface !== "" || AppController.cpuWakeState === "not_permitted"
+            visible: needed || AppController.latencyRuleInstalled || AppController.latencySetupMessage !== ""
+            spacing: 12
+            AppButton {
+                text: AppController.latencySetupBusy ? "Working …" : "Set up"
+                highlighted: true
+                visible: setupRow.needed
+                enabled: !AppController.latencySetupBusy
+                onClicked: AppController.setupLowLatency()
+            }
+            AppButton {
+                text: AppController.latencySetupBusy && !setupRow.needed ? "Working …" : "Undo"
+                visible: AppController.latencyRuleInstalled
+                enabled: !AppController.latencySetupBusy
+                onClicked: AppController.removeLowLatency()
+                Accessible.description: "Removes the low-latency rule; asks for the administrator password"
+            }
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Style.muted
+                text: AppController.latencySetupMessage !== "" ? AppController.latencySetupMessage
+                      : setupRow.needed ? "Asks for the administrator password once and installs a udev rule: USB network adapters send every packet at once, and this user may keep the processor awake."
+                      : "Set up through /etc/udev/rules.d/70-ps-hid-bridge-latency.rules. “Undo” removes it: network adapters bundle packets again, and the permission for the processor goes away (administrator password)."
             }
         }
     }
