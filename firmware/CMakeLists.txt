@@ -46,6 +46,24 @@ set(PSHB_PICO_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/web_server.c
 )
 
+# pshb_make_ota(<target>): the image can be installed over the network --
+# booted "on trial" (TBYB) after an update and confirmed by the firmware
+# itself; hashed so the bootrom rejects corrupted images; versioned so the
+# bootrom picks the newer slot.
+function(pshb_make_ota name)
+    target_compile_definitions(${name} PRIVATE PICO_CRT0_IMAGE_TYPE_TBYB=1)
+    target_link_libraries(${name} PRIVATE boot_picobin_headers boot_picoboot_headers)
+    pico_hash_binary(${name})
+    # What pico_set_binary_version(MAJOR .. MINOR ..) does, but only for
+    # assembler sources: crt0.S embeds the version, and a define on every
+    # C file would rebuild the whole image on each commit. The boot ROM
+    # only knows two 16-bit parts, so MAJOR.MINOR becomes the first one
+    # (major * 256 + minor) and PATCH the second.
+    target_compile_definitions(${name} PRIVATE
+        $<$<COMPILE_LANGUAGE:ASM>:PICO_CRT0_VERSION_MAJOR=${PSHB_BIN_VERSION_MAJOR}>
+        $<$<COMPILE_LANGUAGE:ASM>:PICO_CRT0_VERSION_MINOR=${PSHB_BUILD}>)
+endfunction()
+
 # pshb_add_firmware(<name> [OTA] [DEFINES d1 d2 ...]) -> <name>.uf2
 # Each image compiles the core itself so build-time options apply everywhere.
 # OTA: image can be installed over the network -- booted "on trial" (TBYB)
@@ -80,17 +98,7 @@ function(pshb_add_firmware name)
     pico_enable_stdio_uart(${name} 1)
     pico_enable_stdio_usb(${name} 0)
     if(ARG_OTA)
-        target_compile_definitions(${name} PRIVATE PICO_CRT0_IMAGE_TYPE_TBYB=1)
-        target_link_libraries(${name} PRIVATE boot_picobin_headers boot_picoboot_headers)
-        pico_hash_binary(${name})
-        # What pico_set_binary_version(MAJOR .. MINOR ..) does, but only for
-        # assembler sources: crt0.S embeds the version, and a define on every
-        # C file would rebuild the whole image on each commit. The boot ROM
-        # only knows two 16-bit parts, so MAJOR.MINOR becomes the first one
-        # (major * 256 + minor) and PATCH the second.
-        target_compile_definitions(${name} PRIVATE
-            $<$<COMPILE_LANGUAGE:ASM>:PICO_CRT0_VERSION_MAJOR=${PSHB_BIN_VERSION_MAJOR}>
-            $<$<COMPILE_LANGUAGE:ASM>:PICO_CRT0_VERSION_MINOR=${PSHB_BUILD}>)
+        pshb_make_ota(${name})
     endif()
     pico_add_extra_outputs(${name})
 endfunction()
@@ -148,14 +156,18 @@ pshb_add_firmware(ps-hid-bridge-hidtest-mouse8 DEFINES PSHB_TEST_PATTERN=1 PSHB_
 
 # Controller-mode test images (README, "Controller mode"): the USB host port
 # (Pico-PIO-USB on core 1, D+ GP2, D- GP3) and a log over the network
-# (src/pico/netlog.c, tools/boardlog.py); no input from the app.
+# (src/pico/netlog.c, tools/boardlog.py); no input from the app. Installed
+# over the network like a firmware update, they never confirm themselves:
+# the next reset (or power cut) returns to the normal firmware.
 set(PSHB_USBHOST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/core/crc32.c
     ${CMAKE_CURRENT_LIST_DIR}/src/core/logbuf.c
     ${CMAKE_CURRENT_LIST_DIR}/src/core/settings.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/core/uf2_writer.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/clock.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/flash_store.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/netlog.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/pico/ota.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/w5500_port.c
 )
 function(pshb_add_usbhost_image name)
@@ -183,6 +195,7 @@ function(pshb_add_usbhost_image name)
         ${ARG_LIBS}
     )
     pico_set_binary_type(${name} copy_to_ram)
+    pshb_make_ota(${name})
     # The log is its own stdio driver (netlog.c), which also feeds UART0.
     pico_enable_stdio_uart(${name} 0)
     pico_enable_stdio_usb(${name} 0)

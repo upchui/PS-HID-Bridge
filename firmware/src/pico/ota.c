@@ -119,6 +119,17 @@ void ota_activate(void) {
     }
 }
 
+void ota_restart_on_trial(void) {
+    // The running partition is mapped at XIP_BASE; its first sector (4 KiB
+    // units) is in the QMI address translation (see ota_running_slot).
+    uint32_t base = (qmi_hw->atrans[0] & QMI_ATRANS0_BASE_BITS) >> QMI_ATRANS0_BASE_LSB;
+    int r = rom_reboot(REBOOT2_FLAG_REBOOT_TYPE_FLASH_UPDATE, 100, XIP_BASE + base * 4096u, 0);
+    if (r != BOOTROM_OK) watchdog_reboot(0, 0, 0);
+    for (;;) {
+        __wfi();
+    }
+}
+
 bool ota_trial_boot(void) {
     return rom_get_last_boot_type() == BOOT_TYPE_FLASH_UPDATE;
 }

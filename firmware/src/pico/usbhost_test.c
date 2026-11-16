@@ -9,8 +9,13 @@
 // (yet) enumerated; steady = enumerated and sending reports; three flashes =
 // a problem (see the log), e.g. D+/D- look swapped.
 //
-// Commands (tools/boardlog.py IP CMD): "status", "swap" (restart with D+ and
-// D- swapped, for a socket wired the other way round), "reboot".
+// Commands (tools/boardlog.py IP -c CMD): "status", "swap" (start again with
+// D+ and D- swapped, for a socket wired the other way round), "restart"
+// (start this test image again), "back" (restart into the normal firmware).
+//
+// Installed over the network (pshb-cli update --firmware --file ...), it
+// runs on trial and never confirms itself: any reset or power cut returns
+// to the normal firmware.
 #include <stdio.h>
 #include <string.h>
 
@@ -28,6 +33,7 @@
 
 #include "flash_store.h"
 #include "netlog.h"
+#include "ota.h"
 #include "pshb_config.h"
 #include "pshb_version.h"
 #include "settings.h"
@@ -226,19 +232,36 @@ static void core1_main(void) {
 
 // ------------------------------------------------------------- core 0
 
+// Commands "restart" and "back". A test image installed over the network
+// runs on trial and never confirms itself: a plain reset returns to the
+// normal firmware, a restart on trial keeps the test image.
+static void restart_test_image(void) {
+    uint64_t until = time_us_64() + 300000;
+    while (time_us_64() < until) netlog_service();  // let the log go out
+    ota_restart_on_trial();
+}
+
+static void back_to_firmware(void) {
+    printf("back to the normal firmware\n");
+    uint64_t until = time_us_64() + 300000;
+    while (time_us_64() < until) netlog_service();
+    watchdog_reboot(0, 0, 10);
+}
+
 static void on_command(const char *cmd) {
     if (strcmp(cmd, "swap") == 0) {
         watchdog_hw->scratch[ORIENT_SCRATCH] = s_swapped ? 0 : ORIENT_SWAPPED;
-        printf("restarting with D+ on GP%u and D- on GP%u\n", s_pin_dm, s_pin_dp);
-        sleep_ms(200);  // let the log go out
-        watchdog_reboot(0, 0, 10);
-    } else if (strcmp(cmd, "reboot") == 0) {
-        watchdog_reboot(0, 0, 10);
+        printf("starting again with D+ on GP%u and D- on GP%u\n", s_pin_dm, s_pin_dp);
+        restart_test_image();
+    } else if (strcmp(cmd, "restart") == 0) {
+        restart_test_image();
+    } else if (strcmp(cmd, "back") == 0) {
+        back_to_firmware();
     } else if (strcmp(cmd, "status") == 0) {
         printf("status: device %u, %lu reports, D+ GP%u, D- GP%u%s\n", s_dev_addr, (unsigned long)s_reports,
                s_pin_dp, s_pin_dm, s_swapped ? " (swapped)" : "");
     } else {
-        printf("unknown command (status, swap, reboot)\n");
+        printf("unknown command (status, swap, restart, back)\n");
     }
 }
 
@@ -341,6 +364,9 @@ int main(void) {
     printf("chip: RP2350 revision %u, CPU at %lu MHz\n", rp2350_chip_version(),
            (unsigned long)(clock_get_hz(clk_sys) / 1000000));
     printf("host port: D+ GP%u, D- GP%u%s\n", s_pin_dp, s_pin_dm, s_swapped ? " (swapped by command)" : "");
+    printf("image: slot %s, %s\n", ota_running_slot(),
+           ota_trial_boot() ? "on trial (a reset returns to the normal firmware; \"back\" does that)"
+                            : "not on trial (installed via BOOTSEL)");
 
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
@@ -365,6 +391,9 @@ int main(void) {
     multicore_launch_core1_with_stack(core1_main, core1_stack, sizeof core1_stack);
 
     // Restart if core 1 (the host) stops: the log is kept.
+    // Core 1 (the host) stopped: start the test image again (the log is
+    // kept). If core 0 hangs, the watchdog resets the board, which returns
+    // to the normal firmware.
     watchdog_enable(4000, true);
     uint32_t beat = 0;
     uint64_t beat_at = time_us_64();
@@ -374,7 +403,11 @@ int main(void) {
             beat = s_core1_beat;
             beat_at = now;
         }
-        if (now - beat_at < 2500000) watchdog_update();
+        if (now - beat_at > 2500000) {
+            printf("core 1 (USB host) hangs: starting the test image again\n");
+            restart_test_image();
+        }
+        watchdog_update();
         netlog_service();
         line_service();
         power_service();

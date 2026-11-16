@@ -15,14 +15,18 @@
 // RELAY_TIMEOUT_US). Input reports go 1:1 to the PlayStation, output
 // reports 1:1 to the DualSense.
 //
-// Variants (settings, "variant a|b", the board restarts):
+// Variants (settings, "variant a|b", the test image starts again):
 //  a: the DualSense's HID interface alone (renumbered to 0);
 //  b: all its interfaces; audio is accepted and dropped (PIO-USB has no
 //     isochronous transfers), audio class requests are relayed as well.
 //
 // Commands: status, pattern on|off (the left stick circles: proves that
 // the PlayStation takes input that is not the DualSense's), variant a|b,
-// reboot.
+// restart (start the test image again), back (the normal firmware).
+//
+// Installed over the network (pshb-cli update --firmware --file ...), it
+// runs on trial and never confirms itself: any reset or power cut returns
+// to the normal firmware.
 //
 // LED: slow blink = no DualSense; fast blink = DualSense there, the
 // PlayStation has not configured the board; steady = configured, reports
@@ -50,6 +54,7 @@
 #include "ds_desc.h"
 #include "flash_store.h"
 #include "netlog.h"
+#include "ota.h"
 #include "pshb_config.h"
 #include "pshb_version.h"
 #include "settings.h"
@@ -734,6 +739,22 @@ static void led_service(void) {
     gpio_put(PICO_DEFAULT_LED_PIN, on);
 }
 
+// Commands "restart" and "back". A test image installed over the network
+// runs on trial and never confirms itself: a plain reset returns to the
+// normal firmware, a restart on trial keeps the test image.
+static void restart_test_image(void) {
+    uint64_t until = time_us_64() + 300000;
+    while (time_us_64() < until) netlog_service();  // let the log go out
+    ota_restart_on_trial();
+}
+
+static void back_to_firmware(void) {
+    printf("back to the normal firmware\n");
+    uint64_t until = time_us_64() + 300000;
+    while (time_us_64() < until) netlog_service();
+    watchdog_reboot(0, 0, 10);
+}
+
 static void on_command(const char *cmd) {
     if (strcmp(cmd, "pattern on") == 0 || strcmp(cmd, "pattern off") == 0) {
         s_pattern = cmd[9] == 'n';
@@ -741,17 +762,18 @@ static void on_command(const char *cmd) {
     } else if (strcmp(cmd, "variant a") == 0 || strcmp(cmd, "variant b") == 0) {
         s_settings.ds_test_variant = cmd[8] == 'b';
         bool ok = settings_save(&g_settings_flash, &s_settings);
-        printf("variant %c %s, restarting\n", cmd[8], ok ? "saved" : "NOT saved");
-        sleep_ms(300);
-        watchdog_reboot(0, 0, 10);
-    } else if (strcmp(cmd, "reboot") == 0) {
-        watchdog_reboot(0, 0, 10);
+        printf("variant %c %s, starting again\n", cmd[8], ok ? "saved" : "NOT saved");
+        restart_test_image();
+    } else if (strcmp(cmd, "restart") == 0) {
+        restart_test_image();
+    } else if (strcmp(cmd, "back") == 0) {
+        back_to_firmware();
     } else if (strcmp(cmd, "status") == 0) {
         printf("status: variant %c, DualSense %s, PlayStation %s%s, pattern %s, relayed %lu\n", 'a' + s_variant,
                s_host_mounted ? "ready" : "missing", s_ps_configured ? "configured" : "not configured",
                s_ps_suspended ? " (suspended)" : "", s_pattern ? "on" : "off", (unsigned long)s_seq);
     } else {
-        printf("unknown command (status, pattern on|off, variant a|b, reboot)\n");
+        printf("unknown command (status, pattern on|off, variant a|b, restart, back)\n");
     }
 }
 
@@ -766,6 +788,9 @@ int main(void) {
     printf("chip: RP2350 revision %u, CPU at %lu MHz; variant %c (%s)\n", rp2350_chip_version(),
            (unsigned long)(clock_get_hz(clk_sys) / 1000000), 'a' + s_variant,
            s_variant ? "all interfaces" : "HID interface only");
+    printf("image: slot %s, %s\n", ota_running_slot(),
+           ota_trial_boot() ? "on trial (a reset returns to the normal firmware; \"back\" does that)"
+                            : "not on trial (installed via BOOTSEL)");
 
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
@@ -791,6 +816,9 @@ int main(void) {
     static uint32_t core1_stack[8192 / sizeof(uint32_t)];
     multicore_launch_core1_with_stack(core1_main, core1_stack, sizeof core1_stack);
 
+    // Core 1 (the host) stopped: start the test image again (the log is
+    // kept). If core 0 hangs, the watchdog resets the board, which returns
+    // to the normal firmware.
     watchdog_enable(4000, true);
     uint32_t beat = 0;
     uint64_t beat_at = time_us_64();
@@ -800,7 +828,11 @@ int main(void) {
             beat = s_core1_beat;
             beat_at = now;
         }
-        if (now - beat_at < 2500000) watchdog_update();
+        if (now - beat_at > 2500000) {
+            printf("core 1 (USB host) hangs: starting the test image again\n");
+            restart_test_image();
+        }
+        watchdog_update();
         device_service();
         relay_service();
         input_service();

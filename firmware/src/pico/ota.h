@@ -34,4 +34,9 @@ bool ota_has_partition_table(void);
 // "A", "B", "none" (no partition table) or "?" (not identified).
 const char *ota_running_slot(void);
 
+// Start the running image again, on trial (does not return). For the test
+// images, which never confirm themselves: a plain reset returns to the
+// confirmed firmware, this one keeps the test image.
+void ota_restart_on_trial(void);
+
 #endif

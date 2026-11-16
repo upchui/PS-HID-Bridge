@@ -234,7 +234,7 @@ The app and `pshb-cli flash` can put the firmware, the HID test images and the e
 | `ps-hid-bridge-rollbacktest.uf2` | **testing only:** never confirms itself after an update, the board must return to the previous version |
 | `ps-hid-bridge-timing.uf2` | **measuring only:** normal firmware plus measuring pins GP6/GP7, a latency summary on the UART every 10 s and an upload sink for load tests (`tools/fw_bench.py`, see [docs/latency.md](docs/latency.md)) |
 | `ps-hid-bridge-nuke.uf2` | erases the whole flash |
-| `ps-hid-bridge-usbhosttest.uf2` | **controller mode, testing only:** checks the USB host port for a DualSense, logs over the network (see [docs/controller-mode.md](docs/controller-mode.md)) |
+| `ps-hid-bridge-usbhosttest.uf2` | **controller mode, testing only:** checks the USB host port for a DualSense, logs over the network; installed over the network it runs until the next reset (see [docs/controller-mode.md](docs/controller-mode.md)) |
 | `ps-hid-bridge-dspassthrough.uf2` | **controller mode, testing only:** a DualSense on the host port passed through to the PlayStation, its authentication included (see [docs/controller-mode.md](docs/controller-mode.md)) |
 
 Console: UART0 (GP0/GP1, 115200 baud). The USB ID `1209:0001` is the pid.codes test PID and meant for private use only.

@@ -45,11 +45,17 @@ GP2/GP3 are used for nothing else. The timing image's measuring pins moved to GP
 | `ps-hid-bridge-usbhosttest.uf2` | **Wiring test** at the PC, without the PlayStation. It describes whatever is plugged into the socket: speed, IDs, descriptors, for a DualSense also some feature reports and its sticks and buttons. It also logs the supply voltage and which data line is pulled up. |
 | `ps-hid-bridge-dspassthrough.uf2` | **Passthrough test:** a real DualSense in the socket, the board on the PlayStation. The board shows the PlayStation the DualSense's own descriptors and passes through every class request (its authentication included), its input reports and the PlayStation's output reports (rumble, light, triggers). |
 
-Install them like the HID test images:
-- **By hand:** hold BOOTSEL, connect the board to the PC, copy the file onto the drive `RP2350`.
-- **From the app:** "Firmware & updates" → "Install via USB" → "Choose file …".
+Install them over the network like a firmware update (no BOOTSEL needed):
 
-To return, install `ps-hid-bridge.uf2` ("Firmware only"); key, password and network settings stay.
+```sh
+pshb-cli update --firmware --file out/ps-hid-bridge-usbhosttest.uf2
+```
+
+The board restarts into the test image. `pshb-cli` then waits a minute for the board's web interface, which the test images do not have, and says "did not come back"; that is expected.
+
+A test image installed this way runs **on trial** and never confirms itself: any reset or power cut returns to the normal firmware, with key, password and network settings as they were. The command `back` does that on purpose. Where the test image has to start again itself (`restart`, `swap`, `variant`, a hanging USB host), it starts again on trial and stays.
+
+Via BOOTSEL (copy the file onto the drive `RP2350`) they can be installed as well; then they stay until `ps-hid-bridge.uf2` is installed again ("Firmware only").
 
 ## The log
 
@@ -63,20 +69,21 @@ tools/boardlog.py 192.168.1.50 -o ds.log      # also save it
 tools/boardlog.py 192.168.1.50 -c status      # send a command
 ```
 
-- **Timestamps and restarts:** every line carries the seconds since start. The log survives a restart by the watchdog (it restarts the board when the USB host hangs for more than 2.5 s).
+- **Timestamps and restarts:** every line carries the seconds since start. The log survives the test image starting again (e.g. when the USB host hangs for more than 2.5 s).
 - **Commands:**
-  - Wiring test: `status`, `swap` (restarts with D+ and D− swapped, for a socket wired the other way round), `reboot`.
-  - Passthrough test: `status`, `pattern on|off`, `variant a|b`, `reboot`.
+  - Both: `status`, `restart` (start the test image again), `back` (back to the normal firmware).
+  - Wiring test: `swap` (starts again with D+ and D− swapped, for a socket wired the other way round).
+  - Passthrough test: `pattern on|off`, `variant a|b`.
     - `pattern on`: the left stick circles. This proves the PlayStation accepts input the DualSense did not send.
     - `variant a`: the PlayStation sees only the DualSense's HID interface (the default).
-    - `variant b`: it sees all four interfaces; audio is accepted and dropped. Saved in the settings; the board restarts.
+    - `variant b`: it sees all four interfaces; audio is accepted and dropped. Saved in the settings; the test image starts again.
 
 ## Checklists
 
 ### 1. Wiring test (at the PC)
 
 1. Multimeter: pin 4 to the socket's D+, pin 5 to D−; no short between VBUS and GND.
-2. Install `ps-hid-bridge-usbhosttest.uf2`. Leave the board on the PC (power) with the network cable plugged in, and start `tools/boardlog.py`.
+2. Start `tools/boardlog.py`, then install `ps-hid-bridge-usbhosttest.uf2`. The board needs power (USB, on the PC or the PlayStation) and the network cable.
 3. Plug in the DualSense. Expected:
    - `line: D+ (GP2) high: a full-speed device is attached`, then `054c:0ce6, full speed (DualSense)`.
    - A configuration descriptor of 227 bytes with 4 interfaces, and an HID report descriptor of 273 bytes.
@@ -84,13 +91,14 @@ tools/boardlog.py 192.168.1.50 -c status      # send a command
    - `ds:` lines that change when you move the sticks and press buttons. The LED is steady.
    - `D- (GP3) high` means D+ and D− are swapped: fix the wiring, or send `swap`.
 4. Unplug and plug in again a few times. Watch the `power:` lines while the DualSense charges; VSYS should stay above 4.3 V.
+5. `back`: the board runs the normal firmware again.
 
 ### 2. Passthrough test (on the PlayStation)
 
 1. Install `ps-hid-bridge-dspassthrough.uf2`. Board on the PlayStation (its USB port, as usual), DualSense in the socket, network cable plugged in. Start `tools/boardlog.py`.
 2. Switch the PlayStation on, press the PS button, move through the menus.
 3. Play a native PS5 game for more than 15 minutes; the PlayStation checks controllers again after about 8 minutes.
-4. Rest mode and waking up; restarting the PlayStation.
+4. Rest mode and waking up; restarting the PlayStation. If the board loses power on the way, it runs the normal firmware afterwards: install the test image again.
 5. `pattern on` in the game: the left stick must circle.
 6. If variant a fails (not recognised, or dropped after a while), try `variant b`.
 
