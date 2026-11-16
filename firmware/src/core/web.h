@@ -4,6 +4,8 @@
 //
 // Security:
 //  * login with Argon2id password, growing lockout after failed attempts
+//    (counted per sender address, so guessing from one address does not
+//    lock the owner out at another)
 //  * session cookie (HttpOnly, SameSite=Strict), 30 min idle timeout
 //  * every POST from the browser needs the header "X-PSHB: 1" (no
 //    cross-site requests); requests signed with the key (protocol/SPEC.md)
@@ -25,6 +27,8 @@
 
 #define WEB_SESSIONS 2
 #define WEB_CHALLENGES 4  // outstanding challenges for signed requests and uploads
+#define WEB_LOCKOUTS 8    // sender addresses whose failed password attempts are counted
+#define WEB_LOCKOUT_FORGET_US (15ull * 60 * 1000000)  // a failed attempt counts this long
 #define WEB_HOSTNAME_MAX 24
 #define WEB_SESSION_IDLE_US (30ull * 60 * 1000000)
 
@@ -115,6 +119,14 @@ typedef struct {
     void (*ota_activate)(void *ctx);
 } web_backend_t;
 
+// Failed password attempts from one sender address.
+typedef struct {
+    uint32_t ip;        // a.b.c.d as 0xaabbccdd
+    uint32_t failed;    // 0 = free entry
+    uint64_t last_us;   // the last failed attempt
+    uint64_t until_us;  // locked out until
+} web_lockout_t;
+
 typedef struct {
     const web_backend_t *be;
     pshb_settings_t *settings;
@@ -123,17 +135,17 @@ typedef struct {
         uint64_t last_us;
         bool used;
     } sessions[WEB_SESSIONS];
-    uint32_t failed_logins;
-    uint64_t lockout_until_us;
+    web_lockout_t lockouts[WEB_LOCKOUTS];
     // The connection streaming a firmware image (one update at a time).
     const void *ota_owner;
     // Challenges for requests and uploads signed with the key (see
     // protocol/SPEC.md): each good for one use until `until_us` (0 = free).
     // Several at once, so the app, pshb-cli and an update do not take each
-    // other's.
+    // other's; `ip` is who asked for it.
     struct {
         uint8_t nonce[16];
         uint64_t until_us;
+        uint32_t ip;
     } challenges[WEB_CHALLENGES];
     // The board's own name ("ps-hid-bridge-xxxxxx"), allowed as Host.
     char hostname[WEB_HOSTNAME_MAX];
@@ -168,6 +180,9 @@ typedef struct {
     // rest is read and thrown away before closing, so the client, still
     // sending, gets the answer instead of a reset connection.
     uint32_t discard_left;
+    // The client's address (a.b.c.d as 0xaabbccdd; 0 = unknown): set by the
+    // platform after web_conn_reset.
+    uint32_t peer_ip;
 } web_conn_t;
 
 void web_app_init(web_app_t *app, const web_backend_t *be, pshb_settings_t *settings);

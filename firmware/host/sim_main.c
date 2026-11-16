@@ -393,11 +393,14 @@ static int bind_socket(int type, const char *addr_s, int port, int *bound_port) 
 static void http_service(web_app_t *app, http_slot_t *slots, int listen_fd, uint64_t t) {
     for (int i = 0; i < MAX_CONNS; i++) {
         if (slots[i].fd < 0) {
-            int fd = accept(listen_fd, NULL, NULL);
+            struct sockaddr_in peer;
+            socklen_t plen = sizeof(peer);
+            int fd = accept(listen_fd, (struct sockaddr *)&peer, &plen);
             if (fd < 0) break;
             fcntl(fd, F_SETFL, O_NONBLOCK);
             slots[i].fd = fd;
             web_conn_reset(&slots[i].conn, t);
+            slots[i].conn.peer_ip = ntohl(peer.sin_addr.s_addr);
         }
     }
     for (int i = 0; i < MAX_CONNS; i++) {

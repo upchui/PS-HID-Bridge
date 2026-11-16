@@ -251,23 +251,53 @@ static void h_state(web_app_t *app, web_conn_t *c, bool logged_in) {
     respond_json(c, 200, &w, NULL);
 }
 
+// Failed password attempts are counted per sender address: one address
+// guessing cannot lock the owner out at another. They are forgotten
+// WEB_LOCKOUT_FORGET_US after the last one.
+static web_lockout_t *lockout_of(web_app_t *app, uint32_t ip, uint64_t t) {
+    web_lockout_t *found = NULL;
+    for (int i = 0; i < WEB_LOCKOUTS; i++) {
+        web_lockout_t *l = &app->lockouts[i];
+        if (l->failed && t - l->last_us >= WEB_LOCKOUT_FORGET_US) l->failed = 0;
+        if (l->failed && l->ip == ip) found = l;
+    }
+    return found;
+}
+
 // After failed password checks (login or password change): answer 429 and
-// return true while the lockout lasts.
+// return true while the sender's lockout lasts.
 static bool locked_out(web_app_t *app, web_conn_t *c, uint64_t t) {
-    if (t >= app->lockout_until_us) return false;
+    const web_lockout_t *l = lockout_of(app, c->peer_ip, t);
+    if (!l || t >= l->until_us) return false;
     char msg[80];
     snprintf(msg, sizeof(msg), "Too many failed attempts. Please wait %u s.",
-             (unsigned)((app->lockout_until_us - t) / 1000000 + 1));
+             (unsigned)((l->until_us - t) / 1000000 + 1));
     respond_error(c, 429, msg);
     return true;
 }
 
-static void password_failed(web_app_t *app, uint64_t t) {
-    app->failed_logins++;
-    if (app->failed_logins >= 3) {
-        uint32_t shift = app->failed_logins - 3 > 6 ? 6 : app->failed_logins - 3;
-        app->lockout_until_us = t + (1000000ull << shift);  // 1 s ... 64 s
+static void password_failed(web_app_t *app, web_conn_t *c, uint64_t t) {
+    web_lockout_t *l = lockout_of(app, c->peer_ip, t);
+    if (!l) {
+        // A free entry, else the one whose last attempt is the oldest.
+        l = &app->lockouts[0];
+        for (int i = 0; i < WEB_LOCKOUTS && l->failed; i++) {
+            web_lockout_t *e = &app->lockouts[i];
+            if (!e->failed || e->last_us < l->last_us) l = e;
+        }
+        *l = (web_lockout_t){.ip = c->peer_ip};
     }
+    l->failed++;
+    l->last_us = t;
+    if (l->failed >= 3) {
+        uint32_t shift = l->failed - 3 > 6 ? 6 : l->failed - 3;
+        l->until_us = t + (1000000ull << shift);  // 1 s ... 64 s
+    }
+}
+
+static void password_ok(web_app_t *app, web_conn_t *c, uint64_t t) {
+    web_lockout_t *l = lockout_of(app, c->peer_ip, t);
+    if (l) l->failed = 0;
 }
 
 static void h_login(web_app_t *app, web_conn_t *c) {
@@ -283,11 +313,11 @@ static void h_login(web_app_t *app, web_conn_t *c) {
     bool ok = password_verify(app->settings, pw);
     crypto_wipe(pw, sizeof(pw));
     if (!ok) {
-        password_failed(app, t);
+        password_failed(app, c, t);
         respond_error(c, 401, "Wrong password");
         return;
     }
-    app->failed_logins = 0;
+    password_ok(app, c, t);
     char token[33];
     session_create(app, token);
     char cookie[128];
@@ -324,7 +354,7 @@ static void h_password(web_app_t *app, web_conn_t *c, int session) {
     bool old_ok = password_verify(app->settings, old_pw);
     crypto_wipe(old_pw, sizeof(old_pw));
     if (!old_ok) {
-        password_failed(app, t);
+        password_failed(app, c, t);
         respond_error(c, 403, "Current password is wrong");
     } else if (n < PSHB_PASSWORD_MIN_LEN || n > PSHB_PASSWORD_MAX_LEN) {
         respond_error(c, 400, "The new password must be 8 to 64 characters long");
@@ -336,7 +366,7 @@ static void h_password(web_app_t *app, web_conn_t *c, int session) {
         pshb_settings_t next = *app->settings;
         password_set(&next, new_pw, salt);
         if (save_apply(app, c, &next)) {
-            app->failed_logins = 0;
+            password_ok(app, c, t);
             for (int i = 0; i < WEB_SESSIONS; i++) {
                 if (i != session) app->sessions[i].used = false;
             }
@@ -499,10 +529,11 @@ static void h_clock_set(web_app_t *app, web_conn_t *c) {
 }
 
 // The challenge a signed request or upload names in X-PSHB-Nonce, or,
-// without that header (older apps), the newest one. It is used up
-// either way, also if the signature turns out wrong. False (answered with
-// 403) if there is no such challenge that is still fresh.
-static bool take_challenge(web_app_t *app, web_conn_t *c, uint8_t nonce[16]) {
+// without that header (older apps), the newest one. -1 (answered with 403)
+// if there is no such challenge that is still fresh. It is used up only by
+// a request whose signature is right (use_challenge): a forged request
+// cannot take the app's.
+static int find_challenge(web_app_t *app, web_conn_t *c) {
     const http_req_t *r = &c->req;
     uint64_t t = now(app);
     int pick = -1;
@@ -518,17 +549,17 @@ static bool take_challenge(web_app_t *app, web_conn_t *c, uint8_t nonce[16]) {
             pick = i;
         }
     }
-    if (pick < 0) {
-        respond_error(c, 403, "Challenge missing or expired (GET /api/ota/challenge first)");
-        return false;
-    }
-    memcpy(nonce, app->challenges[pick].nonce, 16);
-    app->challenges[pick].until_us = 0;
-    return true;
+    if (pick < 0) respond_error(c, 403, "Challenge missing or expired (GET /api/ota/challenge first)");
+    return pick;
+}
+
+static void use_challenge(web_app_t *app, int i) {
+    app->challenges[i].until_us = 0;
+    crypto_wipe(app->challenges[i].nonce, sizeof(app->challenges[i].nonce));
 }
 
 // A request signed with the key (the app): a fresh challenge (used up
-// here), and BLAKE2b-256(key = K_ota, "pshb-req-v1" || nonce ||
+// here if the signature is right), and BLAKE2b-256(key = K_ota, "pshb-req-v1" || nonce ||
 // method || " " || path || "\n" || body). Returns 1 if it is valid, 0 if
 // the request is not signed, -1 if it is signed wrongly (answered).
 static int check_signature(web_app_t *app, web_conn_t *c) {
@@ -538,8 +569,8 @@ static int check_signature(web_app_t *app, web_conn_t *c) {
         respond_error(c, 403, "No key set on the board");
         return -1;
     }
-    uint8_t nonce[16];
-    if (!take_challenge(app, c, nonce)) return -1;
+    int ch = find_challenge(app, c);
+    if (ch < 0) return -1;
     uint8_t key[32], mac[32];
     ota_key(app->settings->psk, key);
     crypto_blake2b_ctx h;
@@ -547,7 +578,7 @@ static int check_signature(web_app_t *app, web_conn_t *c) {
     crypto_wipe(key, sizeof(key));
     const char *method = r->method == HTTP_POST ? "POST" : "GET";
     crypto_blake2b_update(&h, (const uint8_t *)REQ_MAC_LABEL, strlen(REQ_MAC_LABEL));
-    crypto_blake2b_update(&h, nonce, sizeof(nonce));
+    crypto_blake2b_update(&h, app->challenges[ch].nonce, sizeof(app->challenges[ch].nonce));
     crypto_blake2b_update(&h, (const uint8_t *)method, strlen(method));
     crypto_blake2b_update(&h, (const uint8_t *)" ", 1);
     crypto_blake2b_update(&h, (const uint8_t *)r->path, strlen(r->path));
@@ -558,6 +589,7 @@ static int check_signature(web_app_t *app, web_conn_t *c) {
         respond_error(c, 403, "Signature does not match (wrong key?)");
         return -1;
     }
+    use_challenge(app, ch);
     return 1;
 }
 
@@ -703,25 +735,30 @@ static void ota_key(const uint8_t psk[32], uint8_t out[32]) {
 }
 
 // A fresh random challenge for the next signed request or upload. It takes
-// a free (or expired) place, else the oldest one's.
+// a free (or expired) place; else the oldest of the asker's own, so asking
+// again and again cannot push out the challenge another program waits to
+// use; else the oldest one.
 static void h_ota_challenge(web_app_t *app, web_conn_t *c) {
     if (!app->settings->psk_set) {
         respond_error(c, 403, "No key set on the board");
         return;
     }
     uint64_t t = now(app);
-    int slot = 0;
+    int slot = -1, own = -1, oldest = 0;
     for (int i = 0; i < WEB_CHALLENGES; i++) {
         uint64_t until = app->challenges[i].until_us;
         if (until == 0 || t >= until) {
             slot = i;
             break;
         }
-        if (until < app->challenges[slot].until_us) slot = i;
+        if (app->challenges[i].ip == c->peer_ip && (own < 0 || until < app->challenges[own].until_us)) own = i;
+        if (until < app->challenges[oldest].until_us) oldest = i;
     }
+    if (slot < 0) slot = own >= 0 ? own : oldest;
     uint8_t *nonce = app->challenges[slot].nonce;
     app->be->random(app->be->ctx, nonce, 16);
     app->challenges[slot].until_us = t + OTA_CHALLENGE_US;
+    app->challenges[slot].ip = c->peer_ip;
     char hex[2 * 16 + 1];
     hex_encode(nonce, 16, hex);
     json_writer_t w;
@@ -927,6 +964,7 @@ void web_conn_reset(web_conn_t *c, uint64_t now_us) {
     c->sink = false;
     c->sink_bytes = 0;
     c->discard_left = 0;
+    c->peer_ip = 0;
 }
 
 typedef struct {
@@ -944,8 +982,9 @@ static void ota_body(void *ctx, const uint8_t *data, size_t len) {
     if (!b->conn->ota_failed && !b->app->be->ota_write(b->app->be->ctx, data, len)) b->conn->ota_failed = true;
 }
 
-// Signed upload: the key must be set, the challenge fresh (it is used up
-// here, so a recorded upload cannot be sent again) and the signature right,
+// Signed upload: the key must be set, the challenge fresh (used up here
+// once the signature is right, so a recorded upload cannot be sent again)
+// and the signature right,
 // all before a single byte reaches the flash. The signature covers the hash
 // of the body; the body itself is hashed while it streams in and compared
 // at the end (ota_done).
@@ -961,8 +1000,8 @@ static bool ota_signed_start(web_app_t *app, web_conn_t *c) {
         respond_error(c, 403, "Please update the app: this board needs a newer signature for firmware updates");
         return false;
     }
-    uint8_t nonce[16];
-    if (!take_challenge(app, c, nonce)) return false;
+    int ch = find_challenge(app, c);
+    if (ch < 0) return false;
     uint8_t key[32], mac[32];
     ota_key(app->settings->psk, key);
     crypto_blake2b_ctx h;
@@ -971,7 +1010,7 @@ static bool ota_signed_start(web_app_t *app, web_conn_t *c) {
     uint32_t n = r->content_length;
     const uint8_t len[4] = {(uint8_t)n, (uint8_t)(n >> 8), (uint8_t)(n >> 16), (uint8_t)(n >> 24)};
     crypto_blake2b_update(&h, (const uint8_t *)OTA_MAC_LABEL, strlen(OTA_MAC_LABEL));
-    crypto_blake2b_update(&h, nonce, sizeof(nonce));
+    crypto_blake2b_update(&h, app->challenges[ch].nonce, sizeof(app->challenges[ch].nonce));
     crypto_blake2b_update(&h, len, sizeof(len));
     crypto_blake2b_update(&h, r->ota_hash, sizeof(r->ota_hash));
     crypto_blake2b_final(&h, mac);
@@ -979,6 +1018,7 @@ static bool ota_signed_start(web_app_t *app, web_conn_t *c) {
         respond_error(c, 403, "Signature does not match (wrong key?)");
         return false;
     }
+    use_challenge(app, ch);
     memcpy(app->ota_signed_hash, r->ota_hash, sizeof(app->ota_signed_hash));
     crypto_blake2b_init(&app->ota_hash, 32);
     return true;

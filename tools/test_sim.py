@@ -557,6 +557,24 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 429)
         self.assertIn("wait", r["error"])
 
+    def login_from(self, source: str, password: str) -> int:
+        """Status of POST /api/login sent from another local address (127.0.0.x)."""
+        body = json.dumps({"password": password}).encode()
+        head = (f"POST /api/login HTTP/1.1\r\nHost: 127.0.0.1:{self.sim.http_port}\r\nX-PSHB: 1\r\n"
+                f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n")
+        with socket.create_connection(("127.0.0.1", self.sim.http_port), timeout=5,
+                                      source_address=(source, 0)) as s:
+            s.sendall(head.encode() + body)
+            line = s.makefile("rb").readline().decode()
+        return int(line.split()[1])
+
+    def test_login_lockout_is_per_address(self):
+        # Someone guessing at one address does not lock the owner out at another.
+        for _ in range(3):
+            self.assertEqual(self.login_from("127.0.0.2", "falsch"), 401)
+        self.assertEqual(self.login_from("127.0.0.2", "ps-hid-bridge"), 429)
+        self.assertEqual(self.web.login("ps-hid-bridge")[0], 200)
+
     def test_password_change_counts_towards_the_lockout(self):
         self.assertEqual(self.web.login("ps-hid-bridge")[0], 200)
         for _ in range(3):
@@ -729,14 +747,14 @@ class WebTests(unittest.TestCase):
         key = self.setup_key()
         uf2 = make_uf2(400)
         # Wrong key: refused before a single byte reaches the flash (and the answer arrives
-        # while the file is still being sent). The challenge is used up all the same.
+        # while the file is still being sent). The challenge stays: a forged request must not
+        # take the app's away.
         nonce = bytes.fromhex(Web(self.sim.http_port).req("GET", "/api/ota/challenge")[1]["nonce"])
-        status, r = self.signed_upload(uf2, bytes(32), nonce)
+        status, r = self.signed_upload(uf2, bytes(32), nonce, name_nonce=True)
         self.assertEqual(status, 403)
         self.assertIn("Signature", r["error"])
-        status, r = self.signed_upload(uf2, key, nonce)
-        self.assertEqual(status, 403)
-        self.assertIn("Challenge", r["error"])
+        self.assertEqual(self.signed("GET", "/api/status", key, nonce=nonce, name_nonce=True)[0], 200)
+        self.assertEqual(self.signed("GET", "/api/status", key, nonce=nonce, name_nonce=True)[0], 403)
         # Only the old signature (an app before 1.0.9), checked after the data: refused even with
         # the right key, otherwise anyone could write files into the flash.
         status, r = self.signed_upload(uf2, key, v2=False)
@@ -915,6 +933,25 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.signed("GET", "/api/status", key, nonce=old[1], name_nonce=True)[0], 200)
         status, r = self.signed_upload(make_uf2(20), key, old[4], name_nonce=True)
         self.assertEqual((status, r), (200, {"ok": True, "reboot": True}))
+
+    def challenge_from(self, source: str) -> int:
+        """Status of GET /api/ota/challenge sent from another local address (127.0.0.x)."""
+        with socket.create_connection(("127.0.0.1", self.sim.http_port), timeout=5,
+                                      source_address=(source, 0)) as s:
+            s.sendall(f"GET /api/ota/challenge HTTP/1.1\r\nHost: 127.0.0.1:{self.sim.http_port}\r\n\r\n".encode())
+            line = s.makefile("rb").readline().decode()
+        return int(line.split()[1])
+
+    def test_challenges_cannot_be_taken_away(self):
+        key = self.setup_key()
+        anon = Web(self.sim.http_port)
+        mine = bytes.fromhex(anon.req("GET", "/api/ota/challenge")[1]["nonce"])
+        # Another address asking again and again replaces only its own challenges ...
+        for _ in range(10):
+            self.assertEqual(self.challenge_from("127.0.0.2"), 200)
+        # ... and a request with a wrong signature does not use one up.
+        self.assertEqual(self.signed("GET", "/api/status", bytes(32), nonce=mine, name_nonce=True)[0], 403)
+        self.assertEqual(self.signed("GET", "/api/status", key, nonce=mine, name_nonce=True)[0], 200)
 
     def raw_status(self, host: str | None, path: str = "/api/clock") -> int:
         """Status of a GET with exactly this Host header (None: none at all)."""

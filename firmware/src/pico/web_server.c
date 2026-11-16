@@ -47,17 +47,26 @@ void web_server_init(const web_backend_t *be, pshb_settings_t *settings) {
     web_app_set_hostname(&s_app, name);
 }
 
+// A new request on socket `sn`: start it over and note the client's address
+// (failed logins and challenges are counted per address).
+static void conn_start(web_conn_t *c, uint8_t sn, uint64_t now) {
+    web_conn_reset(c, now);
+    uint8_t ip[4];
+    getSn_DIPR(sn, ip);
+    c->peer_ip = ((uint32_t)ip[0] << 24) | ((uint32_t)ip[1] << 16) | ((uint32_t)ip[2] << 8) | ip[3];
+}
+
 static void serve(int i, uint8_t sn) {
     web_conn_t *c = &s_conn[i];
     uint64_t now = time_us_64();
 
     if (getSn_IR(sn) & Sn_IR_CON) {
         setSn_IR(sn, Sn_IR_CON);
-        web_conn_reset(c, now);
+        conn_start(c, sn, now);
         s_open[i] = true;
     }
     if (!s_open[i]) {
-        web_conn_reset(c, now);
+        conn_start(c, sn, now);
         s_open[i] = true;
     }
 
