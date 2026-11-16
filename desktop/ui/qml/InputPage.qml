@@ -118,4 +118,83 @@ AppPage {
             accel: accel.value
         }
     }
+
+    Card {
+        title: "Touchpad and touchscreen"
+        icon: "touchpad"
+        subtitle: "One finger moves, two fingers scroll. A touchscreen works like a large touchpad: the PlayStation knows a mouse only."
+        help: "Clicking a clickpad: left; with two fingers on it or in the bottom-right corner right, with three fingers middle. A thumb resting on the bottom of a clickpad does not move the pointer, so it can click while another finger moves. A tap is no click right after a key press (a palm on the touchpad while typing). The mouse sensitivity above applies too."
+        actions: AppButton {
+            text: "Defaults"
+            flat: true
+            enabled: touchSpeed.value !== 1 || !AppController.tapToClick || AppController.naturalScroll
+            onClicked: {
+                touchSpeed.value = 1;
+                AppController.setTouchpad(1, true, false);
+            }
+        }
+
+        // Applied shortly after the slider stops moving.
+        Timer {
+            id: applyTouch
+            interval: 250
+            onTriggered: AppController.setTouchpad(touchSpeed.value, AppController.tapToClick, AppController.naturalScroll)
+        }
+
+        GridLayout {
+            Layout.fillWidth: true
+            columns: 3
+            columnSpacing: 12
+            Controls.Label {
+                text: "Speed"
+                color: Style.text
+            }
+            Controls.Slider {
+                id: touchSpeed
+                Layout.fillWidth: true
+                // The range the app accepts (also set with pshb-cli).
+                from: 0.1
+                to: 8
+                stepSize: 0.05
+                value: AppController.touchpadSpeed
+                onMoved: applyTouch.restart()
+            }
+            Controls.Label {
+                Layout.preferredWidth: 56
+                text: touchSpeed.value.toFixed(2) + "×"
+                color: Style.muted
+                horizontalAlignment: Text.AlignRight
+            }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 12
+            AppSwitch {
+                checked: AppController.tapToClick
+                onToggled: AppController.setTouchpad(touchSpeed.value, checked, AppController.naturalScroll)
+                Accessible.name: "Tap to click"
+            }
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Style.text
+                text: "Tap to click: one finger left, two right, three middle"
+            }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 12
+            AppSwitch {
+                checked: AppController.naturalScroll
+                onToggled: AppController.setTouchpad(touchSpeed.value, AppController.tapToClick, checked)
+                Accessible.name: "Natural scrolling"
+            }
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Style.text
+                text: "Natural scrolling: the content follows the fingers"
+            }
+        }
+    }
 }

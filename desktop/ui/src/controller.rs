@@ -80,6 +80,11 @@ pub mod qobject {
         #[qproperty(bool, iso_keyboard)]
         #[qproperty(f64, sensitivity)]
         #[qproperty(f64, accel)]
+        /// Touchpads and touchscreens: speed factor, tap to click, natural
+        /// scrolling (config [touchpad]).
+        #[qproperty(f64, touchpad_speed)]
+        #[qproperty(bool, tap_to_click)]
+        #[qproperty(bool, natural_scroll)]
         #[qproperty(bool, setup_done)]
         #[qproperty(bool, recording)]
         #[qproperty(QString, recorded)]
@@ -178,6 +183,9 @@ pub mod qobject {
         fn set_keyboard_type(self: Pin<&mut AppController>, iso: bool);
         #[qinvokable]
         fn set_mouse(self: Pin<&mut AppController>, sensitivity: f64, accel: f64);
+        /// Touchpads and touchscreens: speed factor, tap to click, natural scrolling.
+        #[qinvokable]
+        fn set_touchpad(self: Pin<&mut AppController>, speed: f64, tap: bool, natural: bool);
         /// Gain of the acceleration curve at a given speed (for the curve plot).
         #[qinvokable]
         fn curve_gain(self: &AppController, speed: f64) -> f64;
@@ -292,6 +300,9 @@ pub struct AppControllerRust {
     iso_keyboard: bool,
     sensitivity: f64,
     accel: f64,
+    touchpad_speed: f64,
+    tap_to_click: bool,
+    natural_scroll: bool,
     setup_done: bool,
     recording: bool,
     recorded: QString,
@@ -425,6 +436,9 @@ impl Default for AppControllerRust {
             iso_keyboard: true,
             sensitivity: 1.0,
             accel: 0.0,
+            touchpad_speed: 1.0,
+            tap_to_click: true,
+            natural_scroll: false,
             setup_done: false,
             recording: false,
             recorded: QString::default(),
@@ -495,9 +509,29 @@ struct DeviceGroup {
     paths: Vec<String>,
 }
 
+/// The kind of a device with several nodes: a keyboard, and the pointing
+/// device that says the most (a touchpad's "Mouse" sibling node is the
+/// touchpad).
+fn merge_kinds(a: &str, b: &str) -> &'static str {
+    let keyboard = a.contains("keyboard") || b.contains("keyboard");
+    let pointer = ["touchscreen", "touchpad", "mouse"]
+        .into_iter()
+        .find(|p| a.contains(p) || b.contains(p));
+    match (keyboard, pointer) {
+        (true, Some("touchscreen")) => "keyboard + touchscreen",
+        (true, Some("touchpad")) => "keyboard + touchpad",
+        (true, Some(_)) => "keyboard + mouse",
+        (true, None) => "keyboard",
+        (false, Some("touchscreen")) => "touchscreen",
+        (false, Some("touchpad")) => "touchpad",
+        (false, Some(_)) => "mouse",
+        (false, None) => "other",
+    }
+}
+
 fn group_devices(devices: &[DeviceInfo], config: &Config) -> Vec<DeviceGroup> {
     let mut groups: Vec<DeviceGroup> = Vec::new();
-    for d in devices.iter().filter(|d| d.keyboard || d.mouse) {
+    for d in devices.iter().filter(|d| d.keyboard || d.pointer()) {
         let id = d.id_string();
         // Selected by its id, or by a path or part of the name (pshb-cli).
         let selected = config.devices.iter().any(|s| d.matches(s));
@@ -506,17 +540,13 @@ fn group_devices(devices: &[DeviceInfo], config: &Config) -> Vec<DeviceGroup> {
             g.nodes += 1;
             g.accessible &= d.accessible;
             g.paths.push(d.path.display().to_string());
-            if d.name.len() < g.name.len() {
+            // The shortest name, but a touchpad's own name before its
+            // "… Mouse" sibling node's.
+            let touch = d.touchpad || d.touchscreen;
+            if touch || (d.name.len() < g.name.len() && !g.kind.contains("touch")) {
                 g.name = d.name.clone();
             }
-            let kinds = [g.kind.as_str(), d.kind()];
-            g.kind = if kinds.iter().any(|k| k.contains("keyboard"))
-                && kinds.iter().any(|k| k.contains("mouse"))
-            {
-                "keyboard + mouse".into()
-            } else {
-                g.kind.clone()
-            };
+            g.kind = merge_kinds(&g.kind, d.kind()).into();
         } else {
             groups.push(DeviceGroup {
                 selected,
@@ -567,6 +597,9 @@ impl qobject::AppController {
         self.as_mut().set_iso_keyboard(c.iso_keyboard);
         self.as_mut().set_sensitivity(c.mouse.sensitivity);
         self.as_mut().set_accel(c.mouse.accel);
+        self.as_mut().set_touchpad_speed(c.touchpad.speed);
+        self.as_mut().set_tap_to_click(c.touchpad.tap_to_click);
+        self.as_mut().set_natural_scroll(c.touchpad.natural_scroll);
         self.as_mut().set_setup_done(c.setup_done);
         self.as_mut().set_update_check(c.update_check);
         self.as_mut().set_appearance(QString::from(&c.appearance));
@@ -1222,6 +1255,19 @@ impl qobject::AppController {
         self.as_mut().publish_config();
         let curve = self.config_ref().mouse_curve();
         self.command(ServiceCmd::MouseCurve(curve));
+    }
+
+    pub fn set_touchpad(mut self: Pin<&mut Self>, speed: f64, tap: bool, natural: bool) {
+        {
+            let t = &mut self.as_mut().rust_mut().config.touchpad;
+            t.speed = speed.clamp(0.1, 8.0);
+            t.tap_to_click = tap;
+            t.natural_scroll = natural;
+        }
+        self.as_mut().save_config();
+        self.as_mut().publish_config();
+        let settings = self.config_ref().touchpad.settings();
+        self.command(ServiceCmd::Touchpad(settings));
     }
 
     pub fn curve_gain(&self, speed: f64) -> f64 {

@@ -47,12 +47,19 @@ Rectangle {
                 Layout.fillWidth: true
                 spacing: 0
                 RowLayout {
+                    Layout.fillWidth: true
                     spacing: 6
+                    // Wraps when the card is too narrow (next to its
+                    // buttons), else as wide as the text (rounded up: the
+                    // layout rounds down), the "?" right after it.
                     Controls.Label {
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: Math.ceil(implicitWidth) + 1
                         text: card.title
                         color: Style.text
                         font.pointSize: Style.fontSize * 1.1
                         font.weight: Font.DemiBold
+                        wrapMode: Text.WordWrap
                     }
                     HelpHint {
                         visible: card.help !== ""

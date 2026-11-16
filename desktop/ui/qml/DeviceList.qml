@@ -137,7 +137,7 @@ ColumnLayout {
     Controls.Label {
         Layout.fillWidth: true
         visible: list.groups.length === 0
-        text: "No keyboard and no mouse found."
+        text: "No keyboard, mouse, touchpad or touchscreen found."
         color: Style.muted
     }
 
@@ -175,7 +175,8 @@ ColumnLayout {
                 spacing: 12
 
                 AppIcon {
-                    name: (row.kind === "keyboard" ? "keyboard" : row.kind === "mouse" ? "mouse" : "input")
+                    name: row.kind === "keyboard" ? "keyboard" : row.kind === "mouse" ? "mouse"
+                          : row.kind === "touchpad" || row.kind === "touchscreen" ? "touchpad" : "input"
                     color: row.selected ? Style.accent : Style.muted
                     implicitWidth: 22
                     implicitHeight: 22

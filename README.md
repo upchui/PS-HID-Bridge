@@ -63,7 +63,7 @@ Every commit on `main` is built and tested automatically and published as a rele
 
 - **Wizard** on first start: board (address, key, connection test; or first install the firmware over USB) → devices and keyboard type → trigger → live test that shows what reaches the PlayStation. "Run setup again" in the sidebar starts it again.
 - **Status:** bridge on/off, the keys that currently go to the PlayStation, tiles for the board, the PlayStation (connected/rest mode), the network latency to the board (PC → board: median, 95th percentile, history; the round trip underneath) and the path from input to network, all in microseconds; a tile "Input → PlayStation" adds up the whole way from the input reaching the PC to the PlayStation fetching the report (this PC, network, board, waiting for the PlayStation's poll; medians, the board's part fetched from the board every 5 s while the page is shown), plus "Release all keys", "Pause" and "Reconnect". If the app fell behind for a moment and the kernel dropped input events (fast mice send several thousand per second), the app compares with the real key state right away, so no button stays held on the PlayStation; the page then shows "N× input corrected". As a safety net it also does that every 250 ms.
-- **Input:** keyboards and mice, grouped per device, selected ones first; "Identify" marks the device you are typing on, "Set up access" appears for devices the user may not read. The keyboard type (ISO or ANSI), and mouse sensitivity and acceleration with a curve preview (the default is the raw values).
+- **Input:** keyboards, mice, touchpads and touchscreens, grouped per device, selected ones first; "Identify" marks the device you are typing on, "Set up access" appears for devices the user may not read. The keyboard type (ISO or ANSI), mouse sensitivity and acceleration with a curve preview (the default is the raw values), and the touchpad's speed, tap to click and natural scrolling (see [Touchpads and touchscreens](#touchpads-and-touchscreens)).
 - **Triggers:** key combination, mouse button (`Mouse4`, `Mouse5`), *Hold* (bridge on only while pressed) and *Double tap* (while the bridge is on, both taps also reach the PlayStation); each with the action Toggle, Switch on, Switch off, Pause or Release all (lets go of everything on the PlayStation, also a button the mouse still reports held, see [A mouse button stays pressed](docs/troubleshooting.md#a-mouse-button-stays-pressed)). "Record" takes over the combination you press. Also the window rule (see below).
 - **Board:** address and key, connection state, "Open web interface".
 - **Latency:** what the board measures on its input path (see [docs/latency.md](docs/latency.md)): packet → report ready (median, 99 %, slowest), the PlayStation's fetch, the wait for the SPI bus, missed polls and the decryption time; where the time of a typical packet goes, the spread of every stage, how long before each poll the mouse report is filled, the board's details, and its clock speed (the board restarts to apply it; not while the bridge is on). The app asks with the key (signed requests), not with the web password, and only while its window is shown; "Start over" resets the statistics.
@@ -96,6 +96,20 @@ The type only matters for the key next to Enter (`#'` on a German keyboard, `\|`
 
 With the command line tool: `pshb-cli config set --keyboard iso` or `--keyboard ansi`.
 
+### Touchpads and touchscreens
+
+The PlayStation knows a relative mouse only, so the app turns finger contacts into mouse input:
+
+- **One finger** moves the mouse. The motion is accelerated: slow movements are precise, fast ones cover distance. The speed is set on the Input page; the mouse sensitivity applies too.
+- **Two fingers** scroll (wheel steps), along the axis they mostly move on. "Natural scrolling" reverses the direction.
+- **Clicking a clickpad** (the whole surface is the button): left; with two fingers on it, or pressing in the bottom-right corner, right; with three fingers middle. A thumb resting on the bottom of a clickpad moves nothing, so it can click while another finger moves. Touchpads with separate buttons pass them on.
+- **Tapping** (on by default): one finger left, two right, three middle. A tap right after a key press does not click: a palm resting on the touchpad while you type with WASD stays harmless, moving the mouse still works.
+- **Touchscreens** work like a large touchpad: dragging moves the mouse, a tap clicks. While the bridge is on, a selected touchscreen belongs to the PlayStation like any selected device.
+
+Many laptop touchpads have a second node named "… Mouse" next to the "… Touchpad": both are in the same group in the list, selecting the group takes both.
+
+With the command line tool: `pshb-cli config set --touchpad-speed 1.5 --tap-to-click on --natural-scroll off`.
+
 ### Window rule
 
 The window rule switches the bridge on by itself while a certain window has the focus, and off again when the focus moves elsewhere. It needs KDE Plasma (a small KWin script reports the active window).
@@ -125,7 +139,7 @@ By hand: `pshb-cli list-devices` shows vendor and product ID in the "ID" column;
 `out/pshb-cli` does the same without a user interface (and without the window rule); `pshb-cli run` also keeps the screen on while the bridge is on.
 
 ```sh
-pshb-cli list-devices                              # keyboards and mice with access status
+pshb-cli list-devices                              # keyboards, mice, touchpads, touchscreens with access status
 pshb-cli config set --board 192.168.1.50 --device 046d:c52b --device "G Pro"
 pshb-cli config set --keyboard ansi                # physical keyboard type (iso or ansi)
 pshb-cli config set-psk <64 hex digits>            # store the key
