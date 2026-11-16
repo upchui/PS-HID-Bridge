@@ -76,6 +76,8 @@ The pictures in [images/](images/) come from the app itself and from the board's
 - With `--screenshot-live` as well, the app connects to the board first, switches the bridge on after 4 s and collects values on the status page for 25 s before it takes the pictures. It refuses to start next to a running app (packet counter). It grabs the devices selected in the settings, so point it at a copy of the settings (`XDG_CONFIG_HOME`) that selects only a virtual device with an ID no real device has. Moving that device (uinput) fills "Input → network" and "Input → PlayStation". The device needs `uaccess`: give it the keys 1–31 as well, then udev counts it as a keyboard and the rule from "Set up access" covers it.
 - The web interface: any browser that can be scripted, e.g. Firefox with `--headless --marionette` and an empty profile. Leave out the "Details" card: it shows the MAC address.
 
+To check the layout, `make ui-shots` takes every page at the window widths 612 (the minimum), 760, 1008 and 1400 px, light and dark, into `out/ui-shots/`. The start document [`tools/ui_demo.qml`](../tools/ui_demo.qml) fills the app with worst-case values: every pill, warning and banner at once, long device names, big numbers. It runs offscreen with an empty config, so it contacts no board and grabs nothing. `UI_STATES=plain` shows the app as after a fresh start; `UI_WIDTHS` and `UI_THEMES` pick fewer pictures.
+
 ## Checks on real hardware
 
 For a new board or a bigger firmware change. The order is chosen so that each step builds on the previous one. The images are listed under [Other images](../README.md#other-images).

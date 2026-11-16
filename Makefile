@@ -65,6 +65,7 @@ FW_RUN      = $(DOCKER_RUN) $(FW_IMAGE)
 
 .PHONY: help all firmware desktop desktop-cli test test-firmware test-desktop test-appimage \
         test-sim test-protocol test-uf2 sim udp-test fmt submodules check-pins check-version check-icons images \
+        ui-shots \
         image-firmware image-rust image-desktop image-apptest print-version print-release-tag \
         print-toolchain-tag \
         shell-fw shell-desktop clean distclean dirs
@@ -77,6 +78,7 @@ help:
 	@echo "  make test          unit tests, protocol vectors, simulator"
 	@echo "  make sim           board simulator: UDP $(SIM_PORT), web http://localhost:$(SIM_HTTP_PORT)"
 	@echo "  make udp-test IP=a.b.c.d ARGS='--plain ping'   test traffic to a board"
+	@echo "  make ui-shots      screenshots of every page, busy demo values -> out/ui-shots/"
 	@echo "  make all           everything above"
 	@echo "  make submodules    fetch firmware libraries (non-recursive)"
 	@echo "  make check-pins    verify submodule tags against versions.env"
@@ -191,6 +193,24 @@ fmt: image-rust dirs
 test-appimage: desktop image-apptest dirs
 	$(DOCKER_RUN) -e APPIMAGE_EXTRACT_AND_RUN=1 -e TMPDIR=/tmp -e LANG=C.UTF-8 $(APPTEST_IMAGE) \
 		bash -c 'timeout 120 out/PS-HID-Bridge-x86_64.AppImage --self-test'
+
+# Screenshots of every page at several window widths, light and dark, with
+# the demo values of tools/ui_demo.qml (every pill, warning and banner at
+# once): out/ui-shots/<state>-<width>-<theme>/<page>.png. Offscreen in the
+# AppImage test image with an empty config: no board is contacted and no
+# device is grabbed. UI_STATES=plain: as after a fresh start.
+UI_WIDTHS ?= 612 760 1008 1400
+UI_THEMES ?= light dark
+UI_STATES ?= busy
+ui-shots: desktop image-apptest dirs
+	$(DOCKER_RUN) -e APPIMAGE_EXTRACT_AND_RUN=1 -e TMPDIR=/tmp -e LANG=C.UTF-8 \
+		-e XDG_CONFIG_HOME=/tmp/pshb-ui-shots $(APPTEST_IMAGE) \
+		bash -c 'set -e; export PSHB_STARTUP_QML="$$(cat tools/ui_demo.qml)"; \
+		for s in $(UI_STATES); do for w in $(UI_WIDTHS); do for t in $(UI_THEMES); do \
+			d=/work/out/ui-shots/$$s-$$w-$$t; mkdir -p $$d; \
+			timeout 120 out/PS-HID-Bridge-x86_64.AppImage --screenshot $$d --screenshot-height 2400 \
+				--demo-width $$w --demo-theme $$t --demo-state $$s; \
+		done; done; done'
 
 # ---------------------------------------------------------------- manual testing
 SIM_PORT ?= 45045
