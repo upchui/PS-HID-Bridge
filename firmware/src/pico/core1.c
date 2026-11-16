@@ -36,6 +36,9 @@
 #define UDP_TOS_EF          0xB8  // DSCP Expedited Forwarding, like the app's packets
 #define BOOTSEL_POLL_MS     100
 #define FACTORY_RESET_HOLD_MS 5000
+// A firmware on trial is confirmed after core 1 ran this long (core1_main),
+// well inside GUARD_TRIAL_MS.
+#define CONFIRM_AFTER_MS    3000
 
 typedef enum { C1_NO_LINK, C1_DHCP, C1_DHCP_WAIT, C1_READY } c1_state_t;
 
@@ -452,8 +455,16 @@ void core1_main(void) {
     web_server_init(&k_backend, &g_settings);
 
     absolute_time_t next_web = get_absolute_time();
+    // A new firmware on trial is confirmed once this loop (network, web
+    // server) has run this long; core 0 is alive too, or the guard would
+    // have let the watchdog reset the board.
+    absolute_time_t confirm_at = make_timeout_time_ms(CONFIRM_AFTER_MS);
     for (;;) {
         guard_core1_alive();
+        if (g_confirm_trial && time_reached(confirm_at)) {
+            g_confirm_trial = false;
+            if (ota_confirm_if_trial()) guard_confirmed();
+        }
         network_service();
         if (s_state == C1_READY && (web_server_busy() || time_reached(next_web))) {
             next_web = make_timeout_time_us(WEB_IDLE_POLL_US);

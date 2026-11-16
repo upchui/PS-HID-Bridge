@@ -40,6 +40,7 @@ pshb_settings_t g_settings;
 bridge_t g_bridge;
 pshb_diag_t g_diag;
 const char *g_running_slot = "-";
+volatile bool g_confirm_trial;
 
 static input_state_t g_input;
 static bool s_chip_ok;
@@ -406,8 +407,11 @@ int main(void) {
     g_bridge.no_partition_table = !ota_has_partition_table();
     // After an update the bootrom runs us "on trial": confirm only once the
     // essentials work, otherwise the next reset returns to the old firmware.
+    // Core 1 does that after both cores have run for a few seconds
+    // (core1.c): an image whose core 1 hangs is never confirmed, the guard
+    // stops feeding the watchdog after GUARD_TRIAL_MS.
 #if !PSHB_OTA_NO_CONFIRM
-    if (s_chip_ok && ota_confirm_if_trial()) guard_confirmed();
+    g_confirm_trial = s_chip_ok && ota_trial_boot();
 #endif
     guard_service();
     if (s_chip_ok) {

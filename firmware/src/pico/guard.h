@@ -34,7 +34,7 @@ void guard_core1_launched(void);
 // Core 1's loop and its longer waits.
 void guard_core1_alive(void);
 
-// The new firmware works and is confirmed (core 0, at start).
+// The new firmware works and is confirmed (core 1, a few seconds after start).
 void guard_confirmed(void);
 
 // Before a restart on purpose (either core): no more feeding, so the

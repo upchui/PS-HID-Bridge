@@ -11,7 +11,7 @@ static bool s_core1_launched;
 static uint32_t s_launch_us;
 static volatile bool s_core1_started;
 static volatile uint32_t s_core1_seen_us; // core 1's last sign of life (time_us_32)
-static bool s_unconfirmed;
+static volatile bool s_unconfirmed;  // cleared by core 1 (guard_confirmed)
 static bool s_watchdog_reset;
 static uint32_t s_start_us, s_fed_us;
 
