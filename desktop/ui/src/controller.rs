@@ -1702,6 +1702,12 @@ impl cxx_qt::Initialize for qobject::AppController {
         self.as_mut().refresh_devices();
 
         let self_test = std::env::args().any(|a| a == "--self-test" || a == "--screenshot");
+        // Screenshots with live values: the service runs (no tray, no window
+        // rule, no update check).
+        let live = std::env::args().any(|a| a == "--screenshot-live");
+        if self_test && live && self.config_ref().setup_done {
+            self.as_mut().restart_service();
+        }
         if !self_test {
             let handle = tray::spawn(self.qt_thread());
             self.as_mut().rust_mut().tray = handle;

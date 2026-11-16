@@ -3,6 +3,9 @@
 //! Options:
 //!   --self-test            load every page offscreen, then quit (warnings are fatal)
 //!   --screenshot DIR       write a PNG of every page into DIR, then quit
+//!   --screenshot-live      with --screenshot: connect to the board first and
+//!                          switch the bridge on, so the pages show live values
+//!                          (select only a virtual device in the settings)
 
 mod controller;
 mod focus;
@@ -48,7 +51,10 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let self_test = args.iter().any(|a| a == "--self-test");
     let screenshot = args.iter().any(|a| a == "--screenshot");
-    if !self_test && !screenshot {
+    // A live screenshot talks to the board like the app does (packet
+    // counter, devices): never next to a running instance.
+    let live = screenshot && args.iter().any(|a| a == "--screenshot-live");
+    if !self_test && (!screenshot || live) {
         single_instance();
     }
 

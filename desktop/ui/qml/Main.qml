@@ -224,6 +224,19 @@ Controls.ApplicationWindow {
         }
     }
 
+    // --screenshot-live: connected to the board; the bridge goes on after a
+    // few seconds and the status page collects values before the pictures.
+    Timer {
+        id: liveOn
+        interval: 4000
+        onTriggered: AppController.setOn(true)
+    }
+    Timer {
+        id: liveWarmup
+        interval: 25000
+        onTriggered: root.nextAutoPage()
+    }
+
     function nextAutoPage() {
         if (autoPages.length === 0) {
             Qt.quit();
@@ -238,6 +251,14 @@ Controls.ApplicationWindow {
         const shot = args.indexOf("--screenshot");
         if (shot >= 0 || args.indexOf("--self-test") >= 0) {
             screenshotDir = shot >= 0 && shot + 1 < args.length ? args[shot + 1] : "";
+            if (shot >= 0 && args.indexOf("--screenshot-live") >= 0) {
+                autoPages = pageNames.slice();
+                autoTimer.interval = 3000; // the page fetches from the board
+                show("status");
+                liveOn.start();
+                liveWarmup.start();
+                return;
+            }
             autoPages = ["wizard"].concat(pageNames);
             Qt.callLater(nextAutoPage);
             return;

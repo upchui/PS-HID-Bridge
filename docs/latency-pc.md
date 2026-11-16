@@ -32,11 +32,15 @@ While the app runs, other programs' packets through the adapter go out at once t
 
 By hand: `sudo rm /etc/udev/rules.d/70-ps-hid-bridge-latency.rules`, then plug the adapter in again; the permission ends with the next restart.
 
+![The "This PC" card on the Latency page: network latency to the board, round trip, the network adapter sending at once, processor sleep, the keep-awake switch and "Undo"](images/app-this-pc.png)
+
 ## The board
 
 Core 0 handles nothing but USB and the input socket; network management and the web interface run on core 1. From the W5500's interrupt to the input being ready for the next report takes 52–56 µs (median, SPI at 25 MHz): the datagram comes in by DMA while both cores decrypt it, and core 1 gives the SPI bus to core 0 after at most one 128-byte piece. Details, measurements and the way there: [latency.md](latency.md).
 
 ## Measuring
+
+![The status page with the bridge on: network latency to the board, input → network, and "Input → PlayStation" split into this PC, network, board and waiting for the PlayStation's poll](images/app-status.png)
 
 - **App, status page:**
   - "Input → network": the kernel time of the event until the packet is sent, with median, 95 % and maximum.

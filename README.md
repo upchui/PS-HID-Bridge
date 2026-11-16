@@ -2,6 +2,8 @@
 
 Control a PlayStation with the mouse and keyboard of a Linux PC while the picture comes in via Remote Play (chiaki-ng).
 
+![The desktop app's status page: bridge on, board and PlayStation connected, about 0.8 ms from the input reaching the PC to the PlayStation fetching it](docs/images/app-status.png)
+
 ## Why
 
 Remote Play only carries controller input: a game that supports mouse and keyboard on the PlayStation never gets them from the PC. PS HID Bridge adds that path through a small board on the PlayStation's USB port. The PlayStation sees an ordinary USB keyboard and mouse, and the controller keeps working through Remote Play.
@@ -71,6 +73,8 @@ Every commit on `main` is built and tested automatically and published as a rele
 - **Updates:** when a new release is out, the Status page shows a banner with "Update app" (the AppImage replaces itself, then "Restart now") and "Update board" (firmware over the network, signed with the key; the bridge must be off). See "Updates from the app and the command line".
 - **Emergency stop:** `Ctrl+Alt+Shift+Esc` always releases mouse and keyboard at once and lets go of everything on the PlayStation. This combination cannot be switched off.
 - **Every keyboard counts:** triggers and the emergency stop work on every keyboard, also on ones that are not selected (e.g. the laptop keyboard next to a gaming keyboard). Those are only watched: never grabbed, nothing of them goes to the PlayStation. The Triggers page offers "Set up access" if a keyboard cannot be read yet.
+
+![The Input page: keyboards and mice with their access status, the keyboard type, mouse sensitivity and acceleration](docs/images/app-input.png)
 
 The bridge only switches on once all keys are released: if the devices were grabbed while a key is down, that key would stay stuck on the desktop. *Hold* triggers are the exception, because their key is down by definition: the desktop saw it go down before the devices were grabbed, but never sees it (or any other key held at that moment) go up, because that happens while they are grabbed. It keeps that key pressed afterwards, and pressing it again does not help (the hold starts again and swallows the release); only reconnecting the device or logging out does. Use a hold key on a device that is not selected (a second keyboard, see "Every keyboard counts"), or one the desktop does not need. The emergency stop and "Switch off" end a hold until its key is released. If the app hangs, a watchdog releases the devices after one second.
 
@@ -167,6 +171,8 @@ At `http://<board IP>/`, light or dark like the browser. The tab is part of the 
 - **Security:** generate a pre-shared key (shown exactly once) or enter an existing one, sender filter (one address such as `192.168.1.20` or a subnet such as `192.168.1.0/24`), change the password.
 - **System:** firmware update, clock speed (CPU 150 or 200 MHz, SPI to the network chip standard or fast; see [docs/latency.md](docs/latency.md), "Clock speeds"), restart, factory reset.
 
+![The board's web interface, Status tab: ready, network, firmware and slot, latency, packet counters](docs/images/web-status.png)
+
 Open it by the board's address or its name `ps-hid-bridge-XXXXXX` (also with the router's domain, e.g. `ps-hid-bridge-a1b2c3.fritz.box`); other names are refused (421), so no web page can pass itself off as the board through its own DNS name. The web interface uses unencrypted HTTP in the local network. The password protects against accidental changes and against other devices in the network, not against someone who can capture the network traffic. The input itself is always encrypted.
 
 ### Network and LED
@@ -185,6 +191,8 @@ This needs the partition table from the first installation (`ps-hid-bridge-pt.uf
 
 The System page shows when a newer firmware is available (your browser asks GitHub; the board itself cannot reach the internet) and links the file.
 
+![The web interface, System tab: firmware upload, clock speed, restart and factory reset](docs/images/web-system.png)
+
 ### Updates from the app and the command line
 
 The desktop app and `pshb-cli update` install the newest release themselves (see [Command line tool](#command-line-tool); for the app: section "Updates" on the board page):
@@ -201,6 +209,8 @@ For the first installation or for recovery, the app ("Firmware & updates" → "I
 - **First installation** (`--image first-install`, the default): partition table, then — after the board came back as a drive — the firmware.
 - **Firmware only**, the **HID test images** and **Erase everything** (`--image firmware`, `hidtest`, `hidtest-mouse8`, `erase`): see [Other images](#other-images). Erasing asks first (in the CLI unless `--yes`).
 - The files come from the newest release (checked against `SHA256SUMS`); "Choose file …" in the app or `--file X.uf2` uses your own file instead (for the first installation it replaces the firmware, the partition table still comes from the release). Only UF2 files for the RP2350 are accepted.
+
+![The app's "Firmware & updates" page: installed versions and "Install via USB" with its three steps](docs/images/app-firmware.png)
 
 If the board is not found: use a USB cable with data lines, hold BOOTSEL *while* plugging in, and check that `udisks2` runs (`systemctl status udisks2`).
 
@@ -267,5 +277,5 @@ The board's side, stage by stage with measurements and clock speeds: [docs/laten
 | [docs/troubleshooting.md](docs/troubleshooting.md) | problems and where to look |
 | [docs/latency-pc.md](docs/latency-pc.md) | what the app does for a short input path on the PC and the network, how to undo it, how to measure |
 | [docs/latency.md](docs/latency.md) | the board's input path, stage by stage, with measurements |
-| [docs/development.md](docs/development.md) | test status, building, continuous integration, testing without a board, checks on real hardware, directories |
+| [docs/development.md](docs/development.md) | test status, building, continuous integration, testing without a board, screenshots, checks on real hardware, directories |
 | [protocol/SPEC.md](protocol/SPEC.md) | the packet format |

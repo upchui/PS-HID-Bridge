@@ -1,6 +1,6 @@
 # Development
 
-Test status, building, continuous integration, testing without a board and the checks on real hardware. For installing and using PS HID Bridge, see the [README](../README.md).
+Test status, building, continuous integration, testing without a board, screenshots and the checks on real hardware. For installing and using PS HID Bridge, see the [README](../README.md).
 
 ## Status
 
@@ -67,6 +67,14 @@ The same goes for [`dropped_events.rs`](../desktop/core/tests/dropped_events.rs)
 ```sh
 cd desktop && cargo test -p pshb-core --test dropped_events -- --ignored --test-threads=1
 ```
+
+## Screenshots
+
+The pictures in [images/](images/) come from the app itself and from the board's web interface:
+
+- `PS-HID-Bridge-x86_64.AppImage --screenshot DIR [--screenshot-height N]` writes a PNG of every page into `DIR` (offscreen, no board connection) and quits.
+- With `--screenshot-live` as well, the app connects to the board first, switches the bridge on after 4 s and collects values on the status page for 25 s before it takes the pictures. It refuses to start next to a running app (packet counter). It grabs the devices selected in the settings, so point it at a copy of the settings (`XDG_CONFIG_HOME`) that selects only a virtual device with an ID no real device has. Moving that device (uinput) fills "Input → network" and "Input → PlayStation". The device needs `uaccess`: give it the keys 1–31 as well, then udev counts it as a keyboard and the rule from "Set up access" covers it.
+- The web interface: any browser that can be scripted, e.g. Firefox with `--headless --marionette` and an empty profile. Leave out the "Details" card: it shows the MAC address.
 
 ## Checks on real hardware
 

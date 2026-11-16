@@ -24,6 +24,10 @@ P99, max; percentiles are bucket upper edges), shown under "Latency of the
 input path" in the web interface, on the app's Latency page and in
 `GET /api/diag`.
 
+![The app's Latency page: packet → report ready, the PlayStation's fetch, where the time goes, the spread of every stage, mouse report timing, clock speed and "This PC"](images/app-latency.png)
+
+![The web interface, Status → "Latency of the input path": median · 99 % · slowest of every stage](images/web-latency.png)
+
 ## Method
 
 - `tools/fw_bench.py` (runs in the firmware Docker image with `--network host`):
