@@ -47,22 +47,61 @@ TEST(earlier_measurement_is_taken) {
     CHECK_EQ_U(t.phase_us, T0 + P + 2);
 }
 
-TEST(miss_makes_the_lead_longer) {
+TEST(host_skipping_a_poll_keeps_the_lead) {
     usb_timing_t t;
     usb_timing_init(&t);
     usb_timing_fetched(&t, T0);
     usb_timing_armed(&t, T0 + P - 20);
-    CHECK(usb_timing_fetched(&t, T0 + 2 * P + 5));  // went out a frame later
-    CHECK_EQ_U(t.lead_us, USB_TIMING_LEAD_START_US + USB_TIMING_LEAD_UP_US);
+    CHECK(usb_timing_fetched(&t, T0 + 2 * P + 5));  // went out a frame later: the host skipped
+    CHECK_EQ_U(t.lead_us, USB_TIMING_LEAD_START_US);
     // The phase stays on the frame grid.
     uint64_t next = usb_timing_next_fetch(&t, T0 + 2 * P + 100);
     CHECK(next >= T0 + 3 * P && next <= T0 + 3 * P + 1);
-    for (int i = 0; i < 50; i++) {
-        uint64_t f = T0 + (uint64_t)(3 + 2 * i) * P;
-        usb_timing_armed(&t, f - 1);
-        usb_timing_fetched(&t, f + P);
-    }
+}
+
+TEST(late_arming_makes_the_lead_longer) {
+    usb_timing_t t;
+    usb_timing_init(&t);
+    usb_timing_late(&t);
+    CHECK_EQ_U(t.lead_us, USB_TIMING_LEAD_START_US + USB_TIMING_LEAD_UP_US);
+    for (int i = 0; i < 50; i++) usb_timing_late(&t);
     CHECK_EQ_U(t.lead_us, USB_TIMING_LEAD_MAX_US);
+}
+
+TEST(late_means_waiting_since_before_the_previous_window) {
+    usb_timing_t t;
+    usb_timing_init(&t);
+    usb_timing_fetched(&t, T0);  // fetches at T0 + k * P
+    uint32_t lead = t.lead_us;
+    uint64_t arm = T0 + 2 * P - lead;  // window of the fetch at T0 + 2P
+    uint64_t prev_window = T0 + P - lead;
+    // Motion waiting since before the previous window, endpoint free: missed.
+    CHECK(usb_timing_was_late(&t, arm, prev_window - 1, T0));
+    // Motion that came within the previous window waits by design.
+    CHECK(!usb_timing_was_late(&t, arm, prev_window + 1, T0));
+    // The endpoint was busy then (fetched only after the window opened).
+    CHECK(!usb_timing_was_late(&t, arm, prev_window - 1, T0 + P));
+    // Nothing waiting.
+    CHECK(!usb_timing_was_late(&t, arm, 0, T0));
+}
+
+TEST(floor_limits_the_lead) {
+    usb_timing_t t;
+    usb_timing_init(&t);
+    usb_timing_set_floor(&t, 300);
+    CHECK_EQ_U(t.lead_us, 300);
+    usb_timing_set_floor(&t, 10);  // below the lowest floor
+    CHECK_EQ_U(t.floor_us, USB_TIMING_LEAD_MIN_US);
+    CHECK_EQ_U(t.lead_us, 300);  // a lower floor does not shorten the lead by itself
+    usb_timing_set_floor(&t, 200);
+    usb_timing_fetched(&t, T0);
+    uint64_t now = T0;
+    for (int i = 0; i < 100 * USB_TIMING_HITS_FOR_DOWN; i++) {
+        now += P;
+        usb_timing_armed(&t, now - t.lead_us);
+        usb_timing_fetched(&t, now);
+    }
+    CHECK_EQ_U(t.lead_us, 200);
 }
 
 TEST(long_run_of_hits_makes_the_lead_shorter) {
@@ -122,7 +161,10 @@ int main(void) {
     RUN(arms_shortly_before_the_next_fetch);
     RUN(hit_keeps_lead_and_phase);
     RUN(earlier_measurement_is_taken);
-    RUN(miss_makes_the_lead_longer);
+    RUN(host_skipping_a_poll_keeps_the_lead);
+    RUN(late_arming_makes_the_lead_longer);
+    RUN(late_means_waiting_since_before_the_previous_window);
+    RUN(floor_limits_the_lead);
     RUN(long_run_of_hits_makes_the_lead_shorter);
     RUN(follows_clock_drift);
     RUN(old_phase_is_not_trusted);

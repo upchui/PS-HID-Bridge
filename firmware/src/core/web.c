@@ -414,6 +414,8 @@ static void h_diag(web_app_t *app, web_conn_t *c) {
     jw_lat(&w, "spi", &d.spi);
     jw_lat(&w, "handle", &d.handle);
     jw_lat(&w, "usb", &d.usb);
+    jw_lat(&w, "gap", &d.gap);
+    jw_lat(&w, "armed", &d.armed);
     jw_int(&w, "rounds", d.rounds);
     jw_int(&w, "datagrams", d.datagrams);
     jw_int(&w, "core0_spi", d.core0_spi);
@@ -423,6 +425,8 @@ static void h_diag(web_app_t *app, web_conn_t *c) {
     jw_int(&w, "mouse_fetches", d.mouse_fetches);
     jw_int(&w, "mouse_misses", d.mouse_misses);
     jw_int(&w, "mouse_lead_us", d.mouse_lead_us);
+    jw_int(&w, "mouse_host_skips", d.mouse_host_skips);
+    jw_int(&w, "mouse_floor_us", d.mouse_floor_us);
     jw_int(&w, "crypto_min_ns", d.crypto_min_ns);
     jw_int(&w, "crypto_avg_ns", d.crypto_avg_ns);
     jw_int(&w, "crypto_max_ns", d.crypto_max_ns);

@@ -301,6 +301,8 @@ STAGES = [
     ("spi", "  SPI: read the datagram"),
     ("handle", "  checks + decryption + apply"),
     ("usb", "packet -> report fetched by the host"),
+    ("gap", "  between two mouse reports fetched"),
+    ("armed", "  mouse report armed -> fetched"),
 ]
 
 
@@ -328,8 +330,11 @@ def report(results: list[dict]) -> None:
             fetches = d.get("mouse_fetches", 0)
             misses = d.get("mouse_misses", 0)
             if fetches:
+                skips = d.get("mouse_host_skips")
                 print(f"  missed polls: {misses} of {fetches} ({100 * misses / fetches:.3f} %), "
-                      f"lead {d.get('mouse_lead_us')} µs")
+                      f"lead {d.get('mouse_lead_us')} µs"
+                      + (f" (floor {d.get('mouse_floor_us')}), host skipped {skips} "
+                         f"({100 * skips / fetches:.3f} %)" if skips is not None else ""))
             if d.get("rounds"):
                 print(f"  {d['datagrams']} datagrams in {d['rounds']} receive rounds "
                       f"({d['datagrams'] / d['rounds']:.2f} per round)")

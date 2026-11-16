@@ -232,6 +232,8 @@ static void be_diag(void *ctx, web_diag_t *out) {
     lat(&out->spi, &g_diag.spi);
     lat(&out->handle, &g_diag.handle);
     lat(&out->usb, &g_diag.usb);
+    lat(&out->gap, &g_diag.gap);
+    lat(&out->armed, &g_diag.armed);
     out->rounds = g_diag.rounds;
     out->datagrams = g_diag.datagrams;
     out->core0_spi = w5500_core0_spi();
@@ -241,6 +243,8 @@ static void be_diag(void *ctx, web_diag_t *out) {
     out->mouse_fetches = g_diag.mouse_fetches;
     out->mouse_misses = g_diag.mouse_misses;
     out->mouse_lead_us = g_diag.mouse_lead_us;
+    out->mouse_host_skips = g_diag.mouse_host_skips;
+    out->mouse_floor_us = g_diag.mouse_floor_us;
     out->crypto_min_ns = g_diag.crypto_min_ns;
     out->crypto_avg_ns = g_diag.crypto_avg_ns;
     out->crypto_max_ns = g_diag.crypto_max_ns;

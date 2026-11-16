@@ -122,7 +122,7 @@ static void crypto_select(void) {
 void diag_init(void) {
     // Kept: the crypto measurement (made once at start) and the current lead.
     uint32_t cmin = g_diag.crypto_min_ns, cavg = g_diag.crypto_avg_ns, cmax = g_diag.crypto_max_ns;
-    uint32_t lead = g_diag.mouse_lead_us;
+    uint32_t lead = g_diag.mouse_lead_us, floor = g_diag.mouse_floor_us;
     bool fast = g_diag.crypto_fast;
     memset(&g_diag, 0, sizeof(g_diag));
     g_diag.crypto_fast = fast;
@@ -134,10 +134,13 @@ void diag_init(void) {
     latency_init(&g_diag.bus, 4);
     latency_init(&g_diag.spi, 1);
     latency_init(&g_diag.handle, 1);
+    latency_init(&g_diag.gap, 20);
+    latency_init(&g_diag.armed, 20);
     g_diag.crypto_min_ns = cmin;
     g_diag.crypto_avg_ns = cavg;
     g_diag.crypto_max_ns = cmax;
     g_diag.mouse_lead_us = lead;
+    g_diag.mouse_floor_us = floor;
     w5500_core0_spi_reset();
 }
 
@@ -213,6 +216,9 @@ static void net_service(void) {
     int got = 0;
     s_rx_more = false;
     for (int i = 0; i < RX_PER_ROUND; i++) {
+        // A mouse report that fell due while the previous datagram was
+        // processed goes out first.
+        if (i > 0) hid_out_service();
         uint8_t pkt[PSHB_MAX_PACKET_LEN];
         uint8_t ip[4];
         uint16_t port;

@@ -59,10 +59,14 @@ typedef struct {
     web_lat_t spi;     // reading one datagram over SPI
     web_lat_t handle;  // checks + decryption + apply
     web_lat_t usb;     // INTn -> report fetched by the host
+    web_lat_t gap;     // between two mouse reports fetched by the host
+    web_lat_t armed;   // mouse report armed -> fetched
     uint32_t rounds, datagrams;  // receive rounds and datagrams read in them
     uint32_t core0_spi;          // SPI transactions by core 0
     uint32_t cr_busy;            // command register still busy at the next command
     uint32_t mouse_inputs, mouse_waits, mouse_fetches, mouse_misses, mouse_lead_us;
+    uint32_t mouse_host_skips;   // armed in time, fetched a frame later (the host skipped)
+    uint32_t mouse_floor_us;     // lowest lead right now
     uint32_t crypto_min_ns, crypto_avg_ns, crypto_max_ns;  // decrypting one INPUT packet
     bool crypto_fast;            // optimised ChaCha20 for this CPU in use
     uint32_t spi_hz;             // SPI clock to the W5500

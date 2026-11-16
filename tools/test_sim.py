@@ -788,11 +788,12 @@ class WebTests(unittest.TestCase):
         self.setup_password()
         status, d, _ = self.web.req("GET", "/api/diag")
         self.assertEqual(status, 200)
-        for stage in ("ready", "ready1", "detect", "bus", "spi", "handle", "usb"):
+        for stage in ("ready", "ready1", "detect", "bus", "spi", "handle", "usb", "gap", "armed"):
             for part in ("n", "min", "p50", "p99", "max"):
                 self.assertIn(f"{stage}_{part}", d)
         for k in ("rounds", "datagrams", "core0_spi", "cr_busy", "mouse_inputs", "mouse_waits",
-                  "mouse_fetches", "mouse_misses", "mouse_lead_us", "crypto_min_ns", "crypto_avg_ns",
+                  "mouse_fetches", "mouse_misses", "mouse_lead_us", "mouse_host_skips", "mouse_floor_us",
+                  "crypto_min_ns", "crypto_avg_ns",
                   "crypto_max_ns", "crypto_fast", "spi_hz"):
             self.assertIn(k, d)
         self.assertEqual(d["rounds"], 0)

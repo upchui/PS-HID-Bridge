@@ -2,6 +2,7 @@
 
 void usb_timing_init(usb_timing_t *t) {
     t->lead_us = USB_TIMING_LEAD_START_US;
+    t->floor_us = USB_TIMING_LEAD_MIN_US;
     usb_timing_reset(t);
 }
 
@@ -27,19 +28,12 @@ void usb_timing_armed(usb_timing_t *t, uint64_t now) {
 }
 
 bool usb_timing_fetched(usb_timing_t *t, uint64_t now) {
-    bool missed = false;
     uint64_t planned = t->armed_for_us;
     t->armed_for_us = 0;
-    if (planned && now > planned + USB_TIMING_PERIOD_US / 2) {
-        missed = true;
+    bool skipped = planned && now > planned + USB_TIMING_PERIOD_US / 2;
+    if (planned && !skipped && ++t->hits >= USB_TIMING_HITS_FOR_DOWN) {
         t->hits = 0;
-        t->lead_us += USB_TIMING_LEAD_UP_US;
-        if (t->lead_us > USB_TIMING_LEAD_MAX_US) t->lead_us = USB_TIMING_LEAD_MAX_US;
-    } else if (planned && ++t->hits >= USB_TIMING_HITS_FOR_DOWN) {
-        t->hits = 0;
-        if (t->lead_us >= USB_TIMING_LEAD_MIN_US + USB_TIMING_LEAD_DOWN_US) {
-            t->lead_us -= USB_TIMING_LEAD_DOWN_US;
-        }
+        if (t->lead_us >= t->floor_us + USB_TIMING_LEAD_DOWN_US) t->lead_us -= USB_TIMING_LEAD_DOWN_US;
     }
 
     // New phase. The callback runs in the main loop, so every measured time
@@ -52,5 +46,26 @@ bool usb_timing_fetched(usb_timing_t *t, uint64_t now) {
     } else {
         t->phase_us = expected + (now - expected + 15) / 16;  // rounded up: drift of < 1 µs per frame
     }
-    return missed;
+    return skipped;
+}
+
+bool usb_timing_was_late(const usb_timing_t *t, uint64_t now, uint64_t pending_since, uint64_t last_fetch) {
+    uint64_t target = usb_timing_next_fetch(t, now);
+    if (!target || !pending_since || target < USB_TIMING_PERIOD_US + t->lead_us) return false;
+    // The window for the fetch before `target` opened here.
+    uint64_t window = target - USB_TIMING_PERIOD_US - t->lead_us;
+    return pending_since < window && last_fetch < window;
+}
+
+void usb_timing_late(usb_timing_t *t) {
+    t->hits = 0;
+    t->lead_us += USB_TIMING_LEAD_UP_US;
+    if (t->lead_us > USB_TIMING_LEAD_MAX_US) t->lead_us = USB_TIMING_LEAD_MAX_US;
+}
+
+void usb_timing_set_floor(usb_timing_t *t, uint32_t floor_us) {
+    if (floor_us < USB_TIMING_LEAD_MIN_US) floor_us = USB_TIMING_LEAD_MIN_US;
+    if (floor_us > USB_TIMING_LEAD_MAX_US) floor_us = USB_TIMING_LEAD_MAX_US;
+    t->floor_us = floor_us;
+    if (t->lead_us < floor_us) t->lead_us = floor_us;
 }

@@ -148,7 +148,7 @@ function renderStatus(st) {
   $("s-lat-waits").textContent = st.mouse_inputs
     ? `${st.mouse_waits} of ${st.mouse_inputs} (${(100 * st.mouse_waits / st.mouse_inputs).toFixed(1)} %)` : "–";
   $("s-lat-timing").textContent = st.mouse_lead_us
-    ? `filled ${st.mouse_lead_us} µs before the fetch · ${st.mouse_misses} fetches missed`
+    ? `filled ${st.mouse_lead_us} µs before the fetch · ${st.mouse_misses} polls missed`
     : "filled right after the previous fetch";
   for (const [id, n, bad] of [["s-ok", st.rx_ok, false], ["s-auth", st.rx_auth_fail, true],
     ["s-replay", st.rx_replay, true], ["s-filtered", st.rx_filtered, true], ["s-malformed", st.rx_malformed, true]]) {
@@ -187,7 +187,10 @@ function renderDiag(d) {
     ? `${d[k + "_p50"]} · ${d[k + "_p99"]} · ${d[k + "_max"]} (${d[k + "_n"]}×)` : "–";
   for (const k of ["ready", "ready1", "detect", "bus", "spi", "handle", "usb"]) $("d-" + k).textContent = stage(k);
   $("d-miss").textContent = d.mouse_fetches
-    ? `${d.mouse_misses} of ${d.mouse_fetches} (${(100 * d.mouse_misses / d.mouse_fetches).toFixed(2)} %), filled ${d.mouse_lead_us} µs before the fetch`
+    ? `${d.mouse_misses} of ${d.mouse_fetches} (${(100 * d.mouse_misses / d.mouse_fetches).toFixed(2)} %), filled ${d.mouse_lead_us} µs before the fetch (at least ${d.mouse_floor_us} µs)`
+    : "–";
+  $("d-skip").textContent = d.mouse_fetches
+    ? `${d.mouse_host_skips} (${(100 * d.mouse_host_skips / d.mouse_fetches).toFixed(2)} %): the report was ready, the PlayStation came a frame later`
     : "–";
   $("d-crypto").textContent = d.crypto_avg_ns
     ? `${(d.crypto_avg_ns / 1000).toFixed(1)} µs on average${d.crypto_fast ? " (optimised for this CPU)" : ""}` : "–";
