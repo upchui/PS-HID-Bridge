@@ -2,7 +2,21 @@
 
 Control a PlayStation with the mouse and keyboard of a Linux PC while the picture comes in via Remote Play (chiaki-ng).
 
-Remote Play only carries controller input. Mouse and keyboard therefore take a separate path through a small board on the PlayStation's USB port:
+## Why
+
+Remote Play only carries controller input: a game that supports mouse and keyboard on the PlayStation never gets them from the PC. PS HID Bridge adds that path through a small board on the PlayStation's USB port. The PlayStation sees an ordinary USB keyboard and mouse, and the controller keeps working through Remote Play.
+
+| Path | Time |
+|---|---|
+| Picture: PlayStation encoder → network → chiaki-ng → display | tens of milliseconds |
+| Mouse and keyboard: PC → network → board → the PlayStation's USB port | about 1–2 ms |
+
+So the input adds next to nothing to what you see. The app's status page shows the time measured on your setup live (tile "Input → PlayStation", see [Latency](#latency)).
+
+- **Safe:** the input travels encrypted. If no valid packet arrives for 250 ms, the board releases all keys. `Ctrl+Alt+Shift+Esc` always gives mouse and keyboard back to the PC and lets go of everything on the PlayStation.
+- **Status:** version 1.0 works on real hardware (WIZnet W5500-EVB-Pico2 on a PlayStation, desktop app on Linux), and every part is tested automatically on each commit ([docs/development.md](docs/development.md)).
+
+## How it works
 
 1. The desktop app reads mouse and keyboard via evdev and grabs them exclusively.
 2. It encrypts the input (ChaCha20-Poly1305) and sends it over the LAN via UDP.
@@ -11,31 +25,35 @@ Remote Play only carries controller input. Mouse and keyboard therefore take a s
 
 The packet format is described in [protocol/SPEC.md](protocol/SPEC.md). If no valid packet arrives for 250 ms, the board releases all keys (failsafe).
 
-## Status
+## What you need
 
-**Version 1.0: works on real hardware** (WIZnet W5500-EVB-Pico2 on a PlayStation, desktop app on Linux). Besides that, every part is tested automatically on each commit: unit tests, shared protocol test vectors and a board simulator that runs the real firmware core on the PC. The checklist under "Checks on real hardware" below is the way to check a new board or a bigger change.
-
-| Part | Status |
+| | |
 |---|---|
-| Firmware: USB HID (keyboard, mouse with 5 buttons, both wheels) | ✅ real hardware, host tests |
-| Firmware: network (W5500, DHCP/static IP), encrypted protocol, failsafe | ✅ real hardware, simulator |
-| Board web interface (password, key, network, update) | ✅ real hardware, simulator |
-| Firmware update over the network (A/B with fallback) | ✅ real hardware, simulator |
-| Command line tool `pshb-cli` | ✅ |
-| Desktop app (Kirigami, setup wizard, triggers, tray) | ✅ real hardware, offscreen self-test |
+| **Board** | WIZnet W5500-EVB-Pico2 (RP2350 with the W5500 network chip) |
+| **USB cable** | with data lines: board → PC for the first installation, then board → PlayStation |
+| **Network cable** | from the board to your router or switch, in the same network as the PC (DHCP or a static address) |
+| **PC** | Linux on x86_64 (glibc 2.34 or newer) with Wayland or X11, by cable or Wi-Fi (a cable is better); the administrator password once, so the app may read mouse and keyboard |
+| **PlayStation** | a free USB port |
+
+Optional:
+
+- A Remote Play client such as chiaki-ng, for the picture on the PC. The bridge itself does not need it.
+- rtkit for real-time priority (desktops with PipeWire usually have it).
+- KDE Plasma for the [window rule](#window-rule) (bridge on while a certain window has the focus).
+- Only to build it yourself: Docker, make and git (see [Building](docs/development.md#building)).
+
+## Quick start
+
+1. **Get the files:** download them from the [latest release](https://github.com/upchui/PS-HID-Bridge/releases/latest), or build them yourself with `make submodules && make all` (see [Building](docs/development.md#building); the first run takes long because of Qt).
+2. **Flash the board:** hold BOOTSEL and plug the board into the PC via USB; the drive `RP2350` appears. First copy `out/ps-hid-bridge-pt.uf2` onto it (partition table; the board comes back as a drive afterwards), then `out/ps-hid-bridge.uf2`. Or let the app do it (setup wizard or "Firmware & updates" → "Install via USB") or `pshb-cli flash` (see [Flashing over USB from the PC](#flashing-over-usb-from-the-pc)).
+3. **Connect the board:** network cable, USB to the PlayStation. Look up the IP in your router (`ps-hid-bridge-XXXXXX`) and open it in the browser.
+4. **Web interface:** log in with `ps-hid-bridge`, set your own password, generate a key under "Security".
+5. **App:** start `out/PS-HID-Bridge-x86_64.AppImage`. The wizard asks for the board address and key, the devices, the keyboard type and the trigger.
+6. **PlayStation:** set the keyboard language to the layout of your keyboard (see [Keyboard layout](#keyboard-layout)) and switch on USB power in rest mode in the power saving settings.
 
 ## Download
 
 Every commit on `main` is built and tested automatically and published as a release on the [releases page](https://github.com/upchui/PS-HID-Bridge/releases), named after its version, e.g. `v1.0.3`; the newest one is marked "Latest". Each release contains the AppImage, the command line tool (`pshb-cli-x86_64-linux`), all firmware images and `SHA256SUMS`. The last part of the version is the number of commits since the version (`1.0`) was raised, so every commit has a higher version than the one before; the app, `pshb-cli --version` and the firmware (web interface, "Status" page of the app) all show the same version.
-
-## Quick start
-
-1. **Get the files:** download them from the latest release, or build them yourself with `make submodules && make all` (see "Building"; the first run takes long because of Qt).
-2. **Flash the board:** hold BOOTSEL and plug the board into the PC via USB; the drive `RP2350` appears. First copy `out/ps-hid-bridge-pt.uf2` onto it (partition table; the board comes back as a drive afterwards), then `out/ps-hid-bridge.uf2`. Or let the app do it (setup wizard or "Firmware & updates" → "Install via USB") or `pshb-cli flash` (see "Flashing over USB from the PC").
-3. **Connect the board:** network cable, USB to the PlayStation. Look up the IP in your router (`ps-hid-bridge-XXXXXX`) and open it in the browser.
-4. **Web interface:** log in with `ps-hid-bridge`, set your own password, generate a key under "Security".
-5. **App:** start `out/PS-HID-Bridge-x86_64.AppImage`. The wizard asks for the board address and key, the devices, the keyboard type and the trigger.
-6. **PlayStation:** set the keyboard language to the layout of your keyboard (see "Keyboard layout") and switch on USB power in rest mode in the power saving settings.
 
 ## Desktop app
 
@@ -44,10 +62,10 @@ Every commit on `main` is built and tested automatically and published as a rele
 - **Wizard** on first start: board (address, key, connection test; or first install the firmware over USB) → devices and keyboard type → trigger → live test that shows what reaches the PlayStation. "Run setup again" in the sidebar starts it again.
 - **Status:** bridge on/off, the keys that currently go to the PlayStation, tiles for the board, the PlayStation (connected/rest mode), the network latency to the board (PC → board: median, 95th percentile, history; the round trip underneath) and the path from input to network, all in microseconds; a tile "Input → PlayStation" adds up the whole way from the input reaching the PC to the PlayStation fetching the report (this PC, network, board, waiting for the PlayStation's poll; medians, the board's part fetched from the board every 5 s while the page is shown), plus "Release all keys", "Pause" and "Reconnect". If the app fell behind for a moment and the kernel dropped input events (fast mice send several thousand per second), the app compares with the real key state right away, so no button stays held on the PlayStation; the page then shows "N× input corrected". As a safety net it also does that every 250 ms.
 - **Input:** keyboards and mice, grouped per device, selected ones first; "Identify" marks the device you are typing on, "Set up access" appears for devices the user may not read. The keyboard type (ISO or ANSI), and mouse sensitivity and acceleration with a curve preview (the default is the raw values).
-- **Triggers:** key combination, mouse button (`Mouse4`, `Mouse5`), *Hold* (bridge on only while pressed) and *Double tap*; each with the action Toggle, Switch on, Switch off, Pause or Release all (lets go of everything on the PlayStation, also a button the mouse still reports held, see "A mouse button stays pressed"). "Record" takes over the combination you press. Also the window rule (see below).
+- **Triggers:** key combination, mouse button (`Mouse4`, `Mouse5`), *Hold* (bridge on only while pressed) and *Double tap*; each with the action Toggle, Switch on, Switch off, Pause or Release all (lets go of everything on the PlayStation, also a button the mouse still reports held, see [A mouse button stays pressed](docs/troubleshooting.md#a-mouse-button-stays-pressed)). "Record" takes over the combination you press. Also the window rule (see below).
 - **Board:** address and key, connection state, "Open web interface".
 - **Latency:** what the board measures on its input path (see [docs/latency.md](docs/latency.md)): packet → report ready (median, 99 %, slowest), the PlayStation's fetch, the wait for the SPI bus, missed polls and the decryption time; where the time of a typical packet goes, the spread of every stage, how long before each poll the mouse report is filled, the board's details, and its clock speed (the board restarts to apply it; not while the bridge is on). The app asks with the key (signed requests), not with the web password, and only while its window is shown; "Start over" resets the statistics.
-- **Firmware & updates:** installed and newest version of app and board firmware, "Check now", the automatic check (at start and every six hours), and "Install via USB" (see "Flashing over USB from the PC").
+- **Firmware & updates:** installed and newest version of app and board firmware, "Check now", the automatic check (at start and every six hours), and "Install via USB" (see [Flashing over USB from the PC](#flashing-over-usb-from-the-pc)).
 - **Tray icon:** grey = board not reachable, blue = ready, green = bridge on. A click toggles; its menu has "Show window", "Release all keys" and "Quit". A Plasma notification appears when the bridge switches.
 - **Screen stays on:** while the bridge is on, the desktop sees no input from the grabbed mouse and keyboard and would dim the screen, turn it off and lock it. The app asks it not to (D-Bus: `org.freedesktop.ScreenSaver`, else the desktop portal's idle inhibition, e.g. on GNOME) until the bridge switches off, pauses or the app quits; Plasma lists PS HID Bridge in the power applet meanwhile. `pshb-cli run` does the same.
 - **Updates:** when a new release is out, the Status page shows a banner with "Update app" (the AppImage replaces itself, then "Restart now") and "Update board" (firmware over the network, signed with the key; the bridge must be off). See "Updates from the app and the command line".
@@ -169,7 +187,7 @@ The System page shows when a newer firmware is available (your browser asks GitH
 
 ### Updates from the app and the command line
 
-The desktop app and `pshb-cli update` install the newest release themselves (see "Command line tool"; for the app: section "Updates" on the board page):
+The desktop app and `pshb-cli update` install the newest release themselves (see [Command line tool](#command-line-tool); for the app: section "Updates" on the board page):
 
 - **Where from:** the releases of [upchui/PS-HID-Bridge](https://github.com/upchui/PS-HID-Bridge/releases), found through `github.com/upchui/PS-HID-Bridge/releases/latest` over HTTPS (not the GitHub API, whose limit of 60 requests per hour is shared by everything behind the same internet address). Every download is checked against the release's `SHA256SUMS` before it is used.
 - **App and CLI** replace their own file (written next to it, then renamed over it).
@@ -178,10 +196,10 @@ The desktop app and `pshb-cli update` install the newest release themselves (see
 
 ### Flashing over USB from the PC
 
-For the first installation or for recovery, the app ("Firmware & updates" → "Install via USB", also offered on the first page of the setup wizard) and `pshb-cli flash` do what is described under "Quick start" by hand: hold BOOTSEL while connecting the board to the PC via USB, and the board shows up as the drive `RP2350`. The program finds that drive through UDisks2 (the service file managers use; no root needed), mounts it if necessary, checks `INFO_UF2.TXT`, copies the files and waits for the board to take them:
+For the first installation or for recovery, the app ("Firmware & updates" → "Install via USB", also offered on the first page of the setup wizard) and `pshb-cli flash` do what is described under [Quick start](#quick-start) by hand: hold BOOTSEL while connecting the board to the PC via USB, and the board shows up as the drive `RP2350`. The program finds that drive through UDisks2 (the service file managers use; no root needed), mounts it if necessary, checks `INFO_UF2.TXT`, copies the files and waits for the board to take them:
 
 - **First installation** (`--image first-install`, the default): partition table, then — after the board came back as a drive — the firmware.
-- **Firmware only**, the **HID test images** and **Erase everything** (`--image firmware`, `hidtest`, `hidtest-mouse8`, `erase`): see "Other images". Erasing asks first (in the CLI unless `--yes`).
+- **Firmware only**, the **HID test images** and **Erase everything** (`--image firmware`, `hidtest`, `hidtest-mouse8`, `erase`): see [Other images](#other-images). Erasing asks first (in the CLI unless `--yes`).
 - The files come from the newest release (checked against `SHA256SUMS`); "Choose file …" in the app or `--file X.uf2` uses your own file instead (for the first installation it replaces the firmware, the partition table still comes from the release). Only UF2 files for the RP2350 are accepted.
 
 If the board is not found: use a USB cable with data lines, hold BOOTSEL *while* plugging in, and check that `udisks2` runs (`systemctl status udisks2`).
@@ -211,113 +229,43 @@ Console: UART0 (GP0/GP1, 115200 baud). The USB ID `1209:0001` is the pid.codes t
 
 ## Latency
 
-The input path takes about 1–2 ms from a key press or mouse movement to the PlayStation; the video path (PlayStation encoder → network → chiaki-ng → display) takes tens of milliseconds. The input path is built to stay short even when the PC is busy:
+The input path takes about 1–2 ms from a key press or mouse movement to the PlayStation; the video path (PlayStation encoder → network → chiaki-ng → display) takes tens of milliseconds. Where the time goes, from the input reaching the PC to the PlayStation fetching the report:
 
-- **App:** one thread waits on all selected devices, runs the trigger logic and sends the packet itself, without handing the event to another thread. It runs with real-time priority (through rtkit, which desktops with PipeWire usually have, or directly if the user may use `SCHED_FIFO`, e.g. via a `realtime` group). If neither works, the status page says "normal priority".
-- **Processor sleep:** idle cores of a modern CPU sleep in states that take long to wake up from (laptops in particular). Most wake-ups are fast anyway, but now and then one takes a few hundred microseconds (measured on a laptop, waking a waiting thread from another core: median 7 µs either way, slowest 290 µs → 45 µs with the request below). While the bridge is on, the app keeps them out of these states (PM QoS request through `/dev/cpu_dma_latency`: wake-up within 20 µs, light sleep stays allowed); when the bridge is off, they sleep as usual. The PC uses a few watts more meanwhile; switch it off on the Latency page ("This PC") or with `keep_cpu_awake = false` in the settings file. Switching needs no root: the app opens and closes the device itself. It belongs to root on many systems, though (on some to the group `audio`, which may use it anyway): there "Set up" on the Latency page adds a line to `/etc/udev/rules.d/70-ps-hid-bridge-latency.rules` that lets the logged-in user use it. `pshb-cli run` does the same.
+| Part | Typical | Shown in the app |
+|---|---|---|
+| This PC: input event → packet sent | about 0.1 ms | Status: "Input → network" |
+| Network: PC → board, on a cable | 0.1–0.2 ms | Status: "Network latency to the board" |
+| Board: packet → report ready | 52–56 µs | Latency page |
+| Waiting for the PlayStation's poll (once per millisecond) | about 0.5 ms on average | Latency page |
+
+The tile "Input → PlayStation" on the status page adds up the medians measured on your setup. Not included: the time until the PC fetches the input from the mouse or keyboard (their own USB polling).
+
+What the app does by itself (details, how to do it by hand and how to measure: [docs/latency-pc.md](docs/latency-pc.md)):
+
+- **Real-time priority** for the thread that reads the devices and sends the packets: through rtkit, which desktops with PipeWire usually have, or directly if the user may use `SCHED_FIFO`, e.g. via a `realtime` group. If neither works, the status page says "normal priority".
+- **Processor sleep:** while the bridge is on, idle cores stay out of the deep sleep states that take long to wake up from (switch it off on the Latency page, "This PC"). Where `/dev/cpu_dma_latency` belongs to root, "Set up" on the Latency page allows it once (administrator password).
 - **Network:** packets are marked DSCP EF, so Wi-Fi sends them in the voice queue. A cable is still better: connect the PC and the PlayStation by cable and the board to the same switch.
-- **USB network adapters** with the `cdc_ncm` driver (many USB-C docks and USB Ethernet adapters, e.g. ASIX AX88179) hold every outgoing packet back to bundle it with others: a lone packet waits up to three rounds of the driver's timer, by default 3 × 400 µs, before it goes out. "Input → network" does not see this (it ends when the packet is handed to the network stack); the round trip does (a ping to the router above 1 ms on a cable). The setting belongs to the adapter, not to a program, so the app switches it only while it runs: `tx_timer_usecs` 0 when it starts, back to the old value (400) when it is closed (a crash is put right at the next start). Writing it needs root, so it is set up once: the app notices such an adapter on the way to the board and offers "Set up" (status page, administrator password). The udev rule `70-ps-hid-bridge-latency.rules` then hands `tx_timer_usecs` of such adapters to your user, now and whenever one is plugged in; after that the app switches without a password. By hand: `sudo chown $USER /sys/class/net/eth0/cdc_ncm/tx_timer_usecs` (until the adapter is plugged in again). While the app runs, other programs' packets through the adapter go out at once too; large downloads cost a little more CPU time then. `pshb-cli run` switches it the same way while it runs.
-- **Undoing it:** "Undo" on the Latency page ("This PC", administrator password) removes `70-ps-hid-bridge-latency.rules`, gives the adapters' setting back to root (at the driver's 400 µs) and takes back the permission for `/dev/cpu_dma_latency` (unless the system grants it anyway, e.g. to the group `audio`). By hand: `sudo rm /etc/udev/rules.d/70-ps-hid-bridge-latency.rules`, then plug the adapter in again; the permission ends with the next restart.
-- **Board:** core 0 handles nothing but USB and the input socket; network management and the web interface run on core 1. From the W5500's interrupt to the input being ready for the next report takes 52–56 µs (median, SPI at 25 MHz): the datagram comes in by DMA while both cores decrypt it, and core 1 gives the SPI bus to core 0 after at most one 128-byte piece. Details, measurements and the way there: [docs/latency.md](docs/latency.md).
+- **USB network adapters** with the `cdc_ncm` driver (many USB-C docks and USB Ethernet adapters) hold every outgoing packet back by up to 3 × 400 µs. The app switches that off while it runs and back when it is closed. Writing the setting needs root, so the app offers "Set up" once (status page, administrator password); after that it switches without a password.
+- **Undo:** "Undo" on the Latency page ("This PC", administrator password) removes these system settings again.
 
-Measuring:
+The board's side, stage by stage with measurements and clock speeds: [docs/latency.md](docs/latency.md).
 
-- App, status page: "Input → network" (kernel time of the event until the packet is sent), median, 95 % and maximum; whether the processor is kept awake; "Network latency to the board", the time a packet takes from this PC to the board (PC → board), with the round trip (there and back) underneath. Answers to pings sent before the board answered for the first time (address resolution still running) stay out of these statistics. The Latency page sums it up under "This PC". On the command line: `pshb-cli run --stats`.
-- The exact PC → board time needs board firmware that answers timed pings (PING_TIMED, see protocol/SPEC.md): the board notes when a ping arrived (the network chip's interrupt) and when it answered, so its processing time comes out of the round trip. PC and board have no common clock; the app works out the offset between the two (and how it drifts) from the fastest answers, assuming those took equally long both ways. Delays on the way out (a busy uplink, an adapter that bundles packets) then show where they happen; if even the fastest answers took longer one way, the estimate is off by half the difference. With older firmware the app shows half the round trip instead, marked "≈". A plain `ping` to the board is answered by the network chip itself and leaves out the firmware.
-- Board, web interface (Status): "Latency" with the time from a packet to the report fetched by the PlayStation; under "Latency of the input path" every stage (median, 99 %, slowest), the wait for the SPI bus, missed polls and the polls the PlayStation skipped, with a button to start over. The app shows the same as charts on its Latency page. `tools/fw_bench.py` drives such measurements under load (see docs/latency.md).
-- Mouse reports are filled shortly before the PlayStation fetches them (once per millisecond), not right after the previous fetch: the board learns when the fetches happen and fills the report about 100–150 µs before, at least as long as its main loop was busy at most lately (receiving and decrypting a datagram) plus 20 µs, so the report carries all motion up to then. On average an input waits half a millisecond plus that lead. A poll the PlayStation skips (about 1 %) is counted but does not make the lead longer. For comparison: `make firmware FW_CMAKE_ARGS=-DPSHB_MOUSE_LATE_ARM=OFF`.
-- `tools/latency_bench.py --cli out/pshb-cli --vendor VVVV --product PPPP [--load 16]` measures the app from outside: it creates a virtual mouse via `/dev/uinput`, plays the board and reports percentiles, optionally with busy processes on every core. It needs write access to `/dev/uinput` and read access to the virtual device (`--vendor`/`--product` of a device that your udev rule covers). Typical on a desktop with real-time priority: median about 0.1 ms, 99 % below 0.3 ms, also with every core busy.
+## Troubleshooting
 
-## A mouse button stays pressed
+- [A mouse button stays pressed](docs/troubleshooting.md#a-mouse-button-stays-pressed)
+- [The board is not found over USB](docs/troubleshooting.md#the-board-is-not-found-over-usb)
+- [Wrong characters on the PlayStation](docs/troubleshooting.md#wrong-characters-on-the-playstation)
+- [The app cannot read mouse or keyboard](docs/troubleshooting.md#the-app-cannot-read-mouse-or-keyboard)
+- [The status page says "normal priority"](docs/troubleshooting.md#the-status-page-says-normal-priority)
+- [The status page warns about the network adapter](docs/troubleshooting.md#the-status-page-warns-about-the-network-adapter)
+- [The board went back to the previous firmware after an update](docs/troubleshooting.md#the-board-went-back-to-the-previous-firmware-after-an-update)
 
-The status page shows what goes to the PlayStation and which device reports it ("from …"); a mouse button held for more than 3 s gets a hint. The app forwards what the kernel reports, so first find out where the button is held:
+## More documentation
 
-1. **Kernel:** with the button stuck, `sudo evtest --query /dev/input/eventN EV_KEY BTN_LEFT` (exit code 10 = held; the node is in `pshb-cli list-devices`). Held there although you let go: the mouse, its receiver or the USB path never delivered the release, not the app.
-2. **Mouse/receiver:** `sudo cat /dev/hidrawN | xxd -c 12` shows the raw reports (first byte = buttons). A wireless receiver that sends only the release edge when you click the stuck button again (no press before it) had lost the earlier release itself. Seen with an MSI VERSA PRO WIRELESS: a release was lost when another button changed within a few hundred milliseconds.
-3. **App:** held in the app but not in the kernel is a bug: please report it with the output of `journalctl --user | grep "PS HID Bridge"`.
-
-What helps with a receiver that loses releases: the mouse wired, the receiver on a USB extension close to the mouse and away from other 2.4 GHz receivers, USB 3 ports and docks, the newest mouse and receiver firmware (vendor tool), another polling rate. To free a stuck button without clicking each one: "Release all keys" on the status page, or bind the trigger action *Release all* to a key; it lets go of everything on the PlayStation and ignores the stuck button until its next real release.
-
-## Checks on real hardware
-
-For a new board or a bigger firmware change. The order is chosen so that each step builds on the previous one:
-
-1. `picotool info -a` (BOOTSEL mode): RP2350A, 2 MB flash.
-2. `ps-hid-bridge-hidtest.uf2` on the PC: `lsusb -v` (1209:0001, two HID interfaces), `evtest` (the mouse moves in a square), polling rate 1000 Hz (`usbhid-dump` / usbmon).
-3. The same image on the PlayStation: mouse in the menu and in a game with mouse support, also during a running Remote Play session (Aimlabs). If the mouse does not react: try `-hidtest-mouse8.uf2`.
-4. Partition table + `ps-hid-bridge-plain.uf2`: DHCP, host name in the router, `make udp-test IP=… ARGS='--plain flood --rate 1000 --seconds 10'` without losses; test SPI clock 37.5 MHz (`PSHB_W5500_SPI_HZ`, i.e. clk_peri / 4).
-5. Waiting time on core 0 for the SPI bus while the web interface loads or a firmware upload runs ("… waiting for the network chip" under "Latency of the input path", or `tools/fw_bench.py`): should stay below 0.1 ms.
-6. Normal firmware, key via the web interface, connect the app; check the failsafe (pull the network cable while a key is pressed → released after 250 ms).
-7. Update over the network with `ps-hid-bridge.uf2` (slot changes from A to B), then with `ps-hid-bridge-rollbacktest.uf2`: this image deliberately never confirms itself; after about 17 seconds the board must restart by itself with the previous version (check slot and firmware in the web interface).
-8. Settings survive several updates (they live outside the firmware slots).
-9. "Latency of the input path" in the web interface while moving the mouse in a game: "Packet → report ready" around 52–56 µs (median), "Packet → fetched by the PlayStation" around 0.5–0.7 ms; "Missed polls" close to 0 and the lead around 100–150 µs ("Polls the PlayStation skipped" about 1 % is the host's doing). "Decrypting one packet" should say "optimised for this CPU". Compare with `-DPSHB_MOUSE_LATE_ARM=OFF` (reports filled right after the previous fetch, median about 1 ms). Also check after the PlayStation wakes from rest mode that no old keystrokes arrive, and that logging in to the web interface works (it needs the larger core 1 stack).
-10. First installation from the app ("Firmware & updates" → "Install via USB" → "First installation") on a board that still has no firmware, and "Erase everything" followed by another first installation.
-11. Firmware update from the app: bridge off, "Update board" on the Status page (or `pshb-cli update --firmware --file out/ps-hid-bridge.uf2`). The board restarts and the app then shows the new firmware version. A wrong key must be refused ("Signature does not match").
-
-## Building
-
-Everything is built in Docker. The host only needs `docker`, `make` and `git`.
-
-```sh
-make submodules        # Pico SDK, TinyUSB, ioLibrary, Monocypher (pinned, not recursive)
-make firmware          # -> out/*.uf2
-make desktop-cli       # -> out/pshb-cli
-make desktop           # -> out/PS-HID-Bridge-x86_64.AppImage
-make test              # unit tests, test vectors, simulator, Rust tests
-make all               # everything, including the AppImage self-test (tests first)
-make -j2 -O all        # the same, two steps at a time (faster)
-```
-
-The first `make desktop` builds Qt 6.12 and Kirigami from source and therefore takes long (1–3 hours depending on the machine). After that everything is in the Docker cache. The number of parallel Qt jobs can be set with `make desktop QT_JOBS=4`; qtdeclarative needs about 2 GB of RAM per job.
-
-All versions are kept in [versions.env](versions.env); downloads are checked by SHA-256. `make check-pins` checks that the submodules are at the tags listed there (and that `desktop/rust-toolchain.toml` matches `RUST_VERSION`).
-
-For development builds without the web interface a key can be compiled in: `make firmware DEV_PSK=<64 hex digits>`. It only applies as long as no key is set in the web interface.
-
-### Continuous integration
-
-GitHub Actions builds on GitHub-hosted runners with the same Makefile:
-
-- [`release.yml`](.github/workflows/release.yml) runs on every push to `main`: `make -j2 -O all` (every test, firmware, CLI, AppImage, AppImage self-test), then it publishes the release `v<major>.<minor>.<patch>` and marks it as the latest. The app finds it through `github.com/…/releases/latest` (no GitHub API, so no limit of 60 requests per hour). Compiled Rust dependencies are cached per `Cargo.lock`. A release whose tag already exists for another commit (after a force-push) is refused.
-- The toolchain images are stored in the GitHub Container Registry (`ghcr.io/<owner>/pshb-*`), tagged with a hash of `versions.env` and `docker/` (`make print-toolchain-tag`). Only when that hash changes does [`toolchain.yml`](.github/workflows/toolchain.yml) rebuild them; with Qt this takes a few hours, a normal release run takes a few minutes.
-- `make PREBUILT=1 FW_IMAGE=… RUST_IMAGE=… DESKTOP_IMAGE=… APPTEST_IMAGE=… all` is what CI runs: the image targets only check that the pulled images exist.
-- The version is `MAJOR.MINOR` from the file [`VERSION`](VERSION) plus the number of commits since `VERSION` was last changed ([`tools/version.sh`](tools/version.sh), `make print-version`): the commit that raises `VERSION` is `X.Y.0`. Firmware, app, CLI and metainfo get it at build time; for a bigger step (e.g. `1.1`) only `VERSION` is edited. The boot ROM gets it as binary version `MAJOR*256+MINOR`.`PATCH`.
-
-## Testing without a board
-
-`make sim` starts a board simulator: input on UDP port 45045, web interface at http://localhost:8080. It uses the same core as the firmware and prints text lines instead of USB reports (`KBD …`, `MOUSE …`); its settings are kept in `.cache/sim/flash.bin`. Connect the app or `pshb-cli` with the address `127.0.0.1`.
-
-Test traffic to a board or to the simulator:
-
-```sh
-make udp-test IP=192.168.1.50 ARGS='--psk-file psk.txt ping'
-make udp-test IP=192.168.1.50 ARGS='--psk-file psk.txt pattern'   # mouse square, types "hello"
-make udp-test IP=192.168.1.50 ARGS='--psk-file psk.txt flood --rate 1000 --seconds 5'
-```
-
-Grabbing and releasing the devices is tested against virtual devices (uinput) that look like a keyboard converter and a gaming mouse with several event nodes each: the bridge service is switched on and off in many ways (Ctrl+Alt+P split over two nodes, hot-plug and service restart while on, a device held by another program), and after each step a second descriptor checks whether a node is still grabbed. It needs write access to `/dev/uinput`, and read access to the virtual devices: they use the IDs of the udev rule written by "Set up access" (default `feed:6536,0db0:1fc6`, otherwise `PSHB_GRAB_TEST_IDS=vvvv:pppp,vvvv:pppp`). Close the app first, it would pick up the virtual devices too. Runs on the host, not in Docker:
-
-```sh
-cd desktop && cargo test -p pshb-core --test grab_release -- --ignored --test-threads=1
-```
-
-The same goes for [`dropped_events.rs`](desktop/core/tests/dropped_events.rs): a virtual mouse holds the left button while far more events arrive than the kernel queues for a reader that lags behind, and the release gets lost in the overflow; it must still reach the engine at once. Reading the key state (EVIOCGKEY) also deletes the key events still queued for the reader, so the tests also check that a press read before such a query cannot stay held, and that a click while another button is held (aiming and firing) is not lost.
-
-```sh
-cd desktop && cargo test -p pshb-core --test dropped_events -- --ignored --test-threads=1
-```
-
-## Directories
-
-| Path | Content |
+| Document | Content |
 |---|---|
-| `firmware/src/core/` | portable firmware core (protocol, input, settings, web server, update), also runs on the PC |
-| `firmware/src/pico/` | RP2350 specific: USB, W5500, flash, boot ROM |
-| `firmware/src/web/` | the board's web interface (embedded) |
-| `firmware/host/` | host build: unit tests and board simulator |
-| `desktop/core/` | Rust core (evdev, triggers, crypto, UDP) and `pshb-cli` |
-| `desktop/ui/` | Kirigami user interface (QML, cxx-qt), tray, window rule |
-| `protocol/` | packet format and shared test vectors |
-| `docker/` | build environments |
-| `tools/` | test tools (UDP test, simulator integration tests, latency benchmark), version and release helpers |
-| `.github/workflows/` | CI: toolchain images and automatic releases |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | problems and where to look |
+| [docs/latency-pc.md](docs/latency-pc.md) | what the app does for a short input path on the PC and the network, how to undo it, how to measure |
+| [docs/latency.md](docs/latency.md) | the board's input path, stage by stage, with measurements |
+| [docs/development.md](docs/development.md) | test status, building, continuous integration, testing without a board, checks on real hardware, directories |
+| [protocol/SPEC.md](protocol/SPEC.md) | the packet format |

@@ -120,7 +120,7 @@ endif()
 pshb_add_firmware(ps-hid-bridge OTA)
 
 # Partition table: A/B firmware slots + settings (see partitions/pt.json).
-# Flash it once before the first firmware image (README, "Erstinstallation").
+# Flash it once before the first firmware image (README, "Quick start").
 add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/ps-hid-bridge-pt.uf2
     COMMAND picotool partition create ${CMAKE_CURRENT_LIST_DIR}/partitions/pt.json
