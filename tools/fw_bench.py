@@ -18,6 +18,11 @@ Password and key are read from files (never pass them on the command line):
   tools/fw_bench.py 10.14.0.21 --password-file PW --psk-file KEY \\
       [--install out/ps-hid-bridge-timing.uf2] [--scenarios S0,S1,S2,S3] \\
       [--seconds 30] [--label step1] [--out out/bench]
+Without --password-file the key alone is used (signed requests, firmware
+1.0.25 and newer): installing, S0 and S1 work, S2 and S3 need the login.
+
+"arrived" counts every valid packet the board got meanwhile: the app pings
+the board every second even with the bridge off.
 """
 
 from __future__ import annotations
@@ -46,10 +51,26 @@ RATE = 1000  # packets per second, like a 1000 Hz mouse through the app
 class Web:
     """The board's HTTP API (one request per connection, as the board serves it)."""
 
-    def __init__(self, host: str, password: str):
+    def __init__(self, host: str, password: str | None, key: bytes | None = None, http_port: int = 80):
         self.host = host
-        self.password = password
+        self.http_port = http_port
+        self.password = password  # None: signed requests with `key` instead of the login
+        self.key = key
         self.cookie = ""
+
+    def challenge(self) -> bytes:
+        status, r = self.req("GET", "/api/ota/challenge")
+        if status != 200:
+            raise SystemExit(f"No challenge: {status} {r}")
+        return bytes.fromhex(r["nonce"])
+
+    def signed(self, method: str, path: str, body: bytes = b"") -> tuple[int, dict | bytes]:
+        nonce = self.challenge()
+        h = {"X-PSHB-Auth": proto.request_mac(self.key, nonce, method, path, body).hex(),
+             "X-PSHB-Nonce": nonce.hex()}
+        if method == "POST":
+            h["Content-Type"] = "application/json"
+        return self.req(method, path, body if method == "POST" else None, h)
 
     def req(self, method: str, path: str, body: bytes | None = None, headers: dict | None = None,
             timeout: float = 10.0) -> tuple[int, dict | bytes]:
@@ -59,7 +80,7 @@ class Web:
         if self.cookie:
             h["Cookie"] = self.cookie
         h.update(headers or {})
-        c = http.client.HTTPConnection(self.host, 80, timeout=timeout)
+        c = http.client.HTTPConnection(self.host, self.http_port, timeout=timeout)
         try:
             c.request(method, path, body=body, headers=h)
             r = c.getresponse()
@@ -74,12 +95,19 @@ class Web:
             c.close()
 
     def login(self) -> None:
+        if self.password is None:
+            return
         status, r = self.req("POST", "/api/login", json.dumps({"password": self.password}).encode(),
                              {"Content-Type": "application/json"})
         if status != 200:
             raise SystemExit(f"Login failed: {status} {r}")
 
     def get(self, path: str) -> dict:
+        if self.password is None:
+            status, r = self.signed("GET", path)
+            if status != 200:
+                raise RuntimeError(f"GET {path}: {status} {r}")
+            return r
         status, r = self.req("GET", path)
         if status == 401:
             self.login()
@@ -90,6 +118,8 @@ class Web:
 
     def post(self, path: str, obj: dict | None = None) -> tuple[int, dict | bytes]:
         body = json.dumps(obj or {}).encode()
+        if self.password is None:
+            return self.signed("POST", path, body)
         status, r = self.req("POST", path, body, {"Content-Type": "application/json"})
         if status == 401:
             self.login()
@@ -119,9 +149,14 @@ class Web:
         before = self.get("/api/status")
         print(f"Installing {os.path.basename(path)} ({len(data) // 1024} KiB), "
               f"running {before['firmware']} in slot {before.get('partition')} ...", flush=True)
-        status, r = self.req("POST", "/api/ota", data,
-                             {"Content-Type": "application/octet-stream",
-                              "X-PSHB-CRC32": f"{zlib.crc32(data):x}"}, timeout=120)
+        h = {"Content-Type": "application/octet-stream", "X-PSHB-CRC32": f"{zlib.crc32(data):x}"}
+        if self.password is None:  # signed with the key, as the app installs firmware
+            nonce = self.challenge()
+            h.update({"X-PSHB-OTA-Hash": proto.ota_hash(data).hex(),
+                      "X-PSHB-OTA-Auth2": proto.ota_mac2(self.key, nonce, data).hex(),
+                      "X-PSHB-OTA-Auth": proto.ota_mac(self.key, nonce, data).hex(),
+                      "X-PSHB-Nonce": nonce.hex()})
+        status, r = self.req("POST", "/api/ota", data, h, timeout=120)
         if status != 200:
             raise SystemExit(f"Upload failed: {status} {r}")
         time.sleep(3)
@@ -199,9 +234,9 @@ def flood(host: str, port: int, key: bytes, seconds: float, out: mp.Queue) -> No
     out.put(res)
 
 
-def web_load(host: str, cookie: str, stop: mp.Event, out: mp.Queue) -> None:
+def web_load(host: str, http_port: int, cookie: str, stop: mp.Event, out: mp.Queue) -> None:
     """The web interface in a loop: what a browser on the status page fetches."""
-    w = Web(host, "")
+    w = Web(host, "", http_port=http_port)
     w.cookie = cookie
     n = bytes_ = errors = 0
     paths = ["/", "/app.js", "/style.css", "/api/status"]
@@ -213,14 +248,14 @@ def web_load(host: str, cookie: str, stop: mp.Event, out: mp.Queue) -> None:
                 bytes_ += len(r) if isinstance(r, bytes) else len(json.dumps(r))
                 if status != 200:
                     errors += 1
-            except OSError:
+            except Exception:  # noqa: BLE001 -- also a cut-off answer: count it, go on
                 errors += 1
     out.put({"requests": n, "bytes": bytes_, "errors": errors})
 
 
-def upload_load(host: str, cookie: str, stop: mp.Event, out: mp.Queue) -> None:
+def upload_load(host: str, http_port: int, cookie: str, stop: mp.Event, out: mp.Queue) -> None:
     """Uploads to the sink back to back: network side of a firmware upload."""
-    w = Web(host, "")
+    w = Web(host, "", http_port=http_port)
     w.cookie = cookie
     body = os.urandom(256 * 1024)
     total = errors = 0
@@ -234,7 +269,7 @@ def upload_load(host: str, cookie: str, stop: mp.Event, out: mp.Queue) -> None:
             else:
                 errors += 1
                 time.sleep(0.5)
-        except OSError:
+        except Exception:  # noqa: BLE001 -- also a cut-off answer: count it, go on
             errors += 1
     secs = time.monotonic() - start
     out.put({"bytes": total, "seconds": secs, "kib_per_s": total / 1024 / secs if secs else 0,
@@ -260,13 +295,14 @@ def run(args, w: Web, key: bytes, name: str, has_diag: bool) -> dict:
     web = name == "S2"
     upload = name == "S3"
     reset_stats(w, has_diag)
+    since_reset = time.monotonic()
     q: mp.Queue = mp.Queue()
     stop = mp.Event()
     procs = []
     if web:
-        procs.append(mp.Process(target=web_load, args=(args.host, w.cookie, stop, q)))
+        procs.append(mp.Process(target=web_load, args=(args.host, args.http_port, w.cookie, stop, q)))
     if upload:
-        procs.append(mp.Process(target=upload_load, args=(args.host, w.cookie, stop, q)))
+        procs.append(mp.Process(target=upload_load, args=(args.host, args.http_port, w.cookie, stop, q)))
     for p in procs:
         p.start()
     time.sleep(0.5 if procs else 0)
@@ -288,6 +324,7 @@ def run(args, w: Web, key: bytes, name: str, has_diag: bool) -> dict:
     res["status"] = w.get("/api/status")
     if has_diag:
         res["diag"] = w.get("/api/diag")
+    res["measured_seconds"] = time.monotonic() - since_reset  # what the counters cover
     return res
 
 
@@ -339,7 +376,8 @@ def report(results: list[dict]) -> None:
                 print(f"  {d['datagrams']} datagrams in {d['rounds']} receive rounds "
                       f"({d['datagrams'] / d['rounds']:.2f} per round)")
             print(f"  SPI transactions by core 0: {d.get('core0_spi')} "
-                  f"({d.get('core0_spi', 0) / r.get('seconds', 30):.0f}/s), SPI {d.get('spi_hz', 0) / 1e6:.1f} MHz, "
+                  f"({d.get('core0_spi', 0) / r.get('measured_seconds', r.get('seconds', 30)):.0f}/s), "
+                  f"SPI {d.get('spi_hz', 0) / 1e6:.1f} MHz, "
                   f"command register busy {d.get('cr_busy')}x")
             if d.get("crypto_avg_ns"):
                 print(f"  decrypting one INPUT packet: {d['crypto_avg_ns'] / 1000:.1f} µs on average "
@@ -363,6 +401,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("host")
     ap.add_argument("--port", type=int, default=proto.UDP_PORT_DEFAULT)
+    ap.add_argument("--http-port", type=int, default=80, help="web interface (the simulator: its --http-port)")
     ap.add_argument("--password-file")
     ap.add_argument("--psk-file")
     ap.add_argument("--install", help="UF2 to install over the network first")
@@ -376,9 +415,9 @@ def main() -> int:
         report(json.load(open(args.report)))
         return 0
 
-    password = open(args.password_file).read().strip()
+    password = open(args.password_file).read().strip() if args.password_file else None
     key = bytes.fromhex(open(args.psk_file).read().strip())
-    w = Web(args.host, password)
+    w = Web(args.host, password, key, args.http_port)
     w.login()
     if args.install:
         w.install(args.install)
@@ -388,6 +427,13 @@ def main() -> int:
     except RuntimeError:
         has_diag = False
     scenarios = [s.strip() for s in args.scenarios.split(",") if s.strip()]
+    if password is None:
+        if not has_diag:
+            raise SystemExit("This firmware knows no signed requests: give --password-file.")
+        skipped = [s for s in scenarios if s in ("S2", "S3")]
+        if skipped:
+            print(f"Without the password: {', '.join(skipped)} skipped (they need the login).")
+        scenarios = [s for s in scenarios if s not in skipped]
     if not has_diag:
         scenarios = [s for s in scenarios if s in ("S1", "S2")]  # what older firmware can show
     results = []

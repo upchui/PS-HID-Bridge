@@ -2,7 +2,7 @@
 // the input state and builds replies. Portable (used by firmware and sim);
 // time and addresses are passed in by the caller.
 //
-// Order of checks for v1 packets (protocol/SPEC.md, "Ablauf im Board"):
+// Order of checks for v1 packets (protocol/SPEC.md, "Processing on the board"):
 // structure -> sender filter -> counter > last -> tag -> update last ->
 // session (INPUT/HEARTBEAT) -> apply / reply.
 #ifndef PSHB_BRIDGE_H

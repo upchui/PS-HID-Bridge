@@ -187,7 +187,21 @@ static void be_status(void *ctx, web_status_t *out) {
 static bool be_save(void *ctx, const pshb_settings_t *s) {
     (void)ctx;
     pshb_settings_t copy = *s;
-    return settings_save(&k_flash, &copy) && (S.settings = copy, true);
+    bool override = S.have_key_override && memcmp(copy.psk, S.key_override, sizeof(copy.psk)) == 0;
+    if (override) {
+        // The --psk key is for this run only: the file keeps its own key.
+        pshb_settings_t stored;
+        settings_load(&k_flash, &stored);
+        memcpy(copy.psk, stored.psk, sizeof(copy.psk));
+        copy.psk_set = stored.psk_set;
+    }
+    if (!settings_save(&k_flash, &copy)) return false;
+    S.settings = copy;
+    if (override) {
+        memcpy(S.settings.psk, S.key_override, sizeof(S.settings.psk));
+        S.settings.psk_set = 1;
+    }
+    return true;
 }
 
 static void be_apply(void *ctx, const pshb_settings_t *s) {
@@ -228,10 +242,12 @@ static bool slot_erase(void *ctx, uint32_t off) {
     return true;
 }
 
+// Like NOR flash on the board: programming only clears bits, and the page
+// is read back (a second block for the same address fails there too).
 static bool slot_program(void *ctx, uint32_t off, const uint8_t data[UF2_PAYLOAD_SIZE]) {
     (void)ctx;
-    memcpy(s_slot + off, data, UF2_PAYLOAD_SIZE);
-    return true;
+    for (size_t i = 0; i < UF2_PAYLOAD_SIZE; i++) s_slot[off + i] &= data[i];
+    return memcmp(s_slot + off, data, UF2_PAYLOAD_SIZE) == 0;
 }
 
 static const uf2_flash_t k_slot = {NULL, slot_erase, slot_program};

@@ -57,7 +57,9 @@ void input_state_mark_dirty(input_state_t *s);
 bool input_state_kbd_pending(const input_state_t *s);
 bool input_state_mouse_pending(const input_state_t *s);
 
-// Pack the keyboard report (PSHB_KBD_REPORT_LEN bytes) and clear the flag.
+// Pack the oldest queued keyboard state (PSHB_KBD_REPORT_LEN bytes) and
+// take it from the queue (every state goes out in order; nothing queued:
+// the latest state).
 void input_state_take_kbd_report(input_state_t *s, uint8_t out[PSHB_KBD_REPORT_LEN]);
 // Latest keyboard state (for GET_REPORT requests); does not dequeue.
 void input_state_peek_kbd_report(const input_state_t *s, uint8_t out[PSHB_KBD_REPORT_LEN]);

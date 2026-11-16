@@ -86,6 +86,25 @@ TEST(prepared_blocks) {
     CHECK(!pre.valid);
 }
 
+// The board's path (blocks prepared while the packet arrives) refuses a
+// changed packet like the plain one: every byte of ciphertext and tag, and
+// the header (associated data, prepared for the original header).
+TEST(prepared_blocks_refuse_tampering) {
+    const vec_packet_t *v = &k_packets[0];
+    uint8_t out[PSHB_PONG_PAYLOAD_LEN];
+    for (size_t i = 0; i < v->packet_len; i++) {
+        uint8_t bad[PSHB_MAX_PACKET_LEN];
+        memcpy(bad, v->packet, v->packet_len);
+        bad[i] ^= 0x40;
+        pshb_aead_pre_t pre;
+        CHECK(proto_prepare(&pre, v->key, v->direction, v->packet, v->packet_len));
+        if (proto_decrypt_pre(&pre, v->key, v->direction, bad, v->packet_len, out)) {
+            printf("  byte %zu changed, still accepted\n", i);
+            CHECK(false);
+        }
+    }
+}
+
 TEST(seal_matches_vectors) {
     for (size_t i = 0; i < COUNT(k_packets); i++) {
         const vec_packet_t *v = &k_packets[i];
@@ -176,6 +195,7 @@ int main(void) {
     RUN(own_aead_matches_rfc8439);
     RUN(own_aead_matches_monocypher);
     RUN(prepared_blocks);
+    RUN(prepared_blocks_refuse_tampering);
     RUN(seal_matches_vectors);
     RUN(open_matches_vectors);
     RUN(input_fields_decode);

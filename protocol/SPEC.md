@@ -49,6 +49,7 @@ Both directions use the same key. Because the direction is part of the nonce, ap
 
 - **App:** counter = `max(last + 1, current Unix time in µs, floor stored at start)`. A new floor `counter + 60 s` is saved before the counter gets within 30 s of the stored one, so the counter stays unique across app restarts and clocks that are set back. The counter file is locked while a program uses it, so two programs on the same PC (GUI and CLI) cannot send with the same counter.
 - **Board:** the counter starts at a random value from the TRNG on every boot (limited to 62 bits) and counts up.
+- **One sending PC per key at a time:** the app's counter comes from the clock, so two PCs sending with the same key at the same time could pick the same counter, i.e. the same nonce. The board would refuse the second packet as a replay, but both would be on the network. Switch the bridge off on one PC before using it on another (the lock on the counter file only covers programs on the same PC).
 
 ## Payloads
 

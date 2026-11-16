@@ -185,6 +185,9 @@ def main():
         samples, lost = [], 0
         for _ in range(args.count):
             time.sleep(random.uniform(0.5, 1.5) * args.gap_ms / 1000)
+            # A packet that came after its timeout must not count for this event.
+            while not board.inputs.empty():
+                board.inputs.get()
             t0 = time.time_ns()
             mouse.emit((EV_REL, REL_X, 1))
             try:

@@ -84,6 +84,8 @@ def describe(p: proto.Pong) -> str:
         flags.append("USB suspended")
     if p.status & proto.STATUS_FAILSAFE:
         flags.append("failsafe active")
+    if p.status & proto.STATUS_NO_PARTITION_TABLE:
+        flags.append("no partition table")
     if p.status & proto.STATUS_PLAINTEXT:
         flags.append("UNENCRYPTED")
     return (f"Firmware {p.fw_version_str}, up {p.uptime_ms / 1000:.1f} s, "

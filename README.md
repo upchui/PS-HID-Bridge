@@ -149,13 +149,15 @@ At `http://<board IP>/`, light or dark like the browser. The tab is part of the 
 - **Security:** generate a pre-shared key (shown exactly once) or enter an existing one, sender filter (one address such as `192.168.1.20` or a subnet such as `192.168.1.0/24`), change the password.
 - **System:** firmware update, clock speed (CPU 150 or 200 MHz, SPI to the network chip standard or fast; see [docs/latency.md](docs/latency.md), "Clock speeds"), restart, factory reset.
 
-The web interface uses unencrypted HTTP in the local network. The password protects against accidental changes and against other devices in the network, not against someone who can capture the network traffic. The input itself is always encrypted.
+Open it by the board's address or its name `ps-hid-bridge-XXXXXX` (also with the router's domain, e.g. `ps-hid-bridge-a1b2c3.fritz.box`); other names are refused (421), so no web page can pass itself off as the board through its own DNS name. The web interface uses unencrypted HTTP in the local network. The password protects against accidental changes and against other devices in the network, not against someone who can capture the network traffic. The input itself is always encrypted.
 
 ### Network and LED
 
 The board gets an address via DHCP and registers as `ps-hid-bridge-XXXXXX` (last six digits of the MAC address). It receives input on UDP port 45045.
 
 LED: blinks slowly = no USB host, blinks fast = USB present but no IP yet, steady = ready (flickers briefly on input).
+
+Watchdog: if one of the board's two cores hangs (core 1 runs network and web interface, core 0 the input path), the board restarts within a few seconds; the web interface then says "restarted by the watchdog". If core 1 hangs while it holds the bus to the network chip, core 0 does not wait for it: input is let go after 250 ms as with any loss of packets.
 
 ### Firmware update over the network
 
