@@ -13,13 +13,32 @@ AppPage {
     readonly property var titles: ["Welcome", "Board", "Devices", "Trigger", "Test"]
     property string boardError: ""
 
-    onStepChanged: if (step === 2) AppController.refreshDevices()
+    onStepChanged: {
+        // A recording on the trigger step must not take the keys of the
+        // next steps (pressing the trigger on "Test" would be recorded).
+        triggers.stopRecording();
+        if (step === 2)
+            AppController.refreshDevices();
+    }
+
+    // The board step: address or key typed but not saved with "Connect".
+    function boardChanged() {
+        return address.text !== AppController.boardAddress || psk.text !== "";
+    }
 
     footer: [
         Controls.Label {
             Layout.fillWidth: true
             text: "Step " + (page.step + 1) + " of " + page.titles.length
             color: Style.muted
+        },
+        // Run again from the sidebar: the way back without going through
+        // every step.
+        AppButton {
+            text: "Close"
+            flat: true
+            visible: AppController.setupDone
+            onClicked: page.finished()
         },
         AppButton {
             text: "Back"
@@ -30,6 +49,12 @@ AppPage {
             text: page.step === page.titles.length - 1 ? "Finish" : "Next"
             highlighted: true
             onClicked: {
+                if (page.step === 1 && page.boardChanged()) {
+                    page.boardError = AppController.saveBoard(address.text, psk.text);
+                    if (page.boardError !== "")
+                        return;
+                    psk.text = "";
+                }
                 if (page.step === 3 && !triggers.save())
                     return;
                 if (page.step === page.titles.length - 1) {
@@ -97,7 +122,11 @@ AppPage {
     }
 
     StackLayout {
+        id: steps
         Layout.fillWidth: true
+        // As tall as the current step (a StackLayout takes the tallest one,
+        // which leaves empty space to scroll through on the short steps).
+        Layout.preferredHeight: steps.children[page.step] ? steps.children[page.step].implicitHeight : 0
         currentIndex: page.step
 
         // 0 -- Welcome
@@ -185,14 +214,18 @@ AppPage {
                     Controls.TextField {
                         id: psk
                         Layout.fillWidth: true
+                        Layout.maximumWidth: 360
                         echoMode: TextInput.Password
                         placeholderText: AppController.pskSet ? "stored – fill in only to change it" : "64 hex digits"
                     }
                 }
                 AppButton {
                     text: "Connect"
-                    highlighted: true
-                    onClicked: page.boardError = AppController.saveBoard(address.text, psk.text)
+                    onClicked: {
+                        page.boardError = AppController.saveBoard(address.text, psk.text);
+                        if (page.boardError === "")
+                            psk.text = "";
+                    }
                 }
                 Banner {
                     kind: "error"
@@ -200,10 +233,11 @@ AppPage {
                     text: page.boardError
                 }
                 Banner {
-                    kind: AppController.connected ? "ok" : "info"
+                    kind: AppController.connected ? "ok" : AppController.lastError !== "" ? "warn" : "info"
                     visible: page.boardError === "" && AppController.boardAddress !== ""
                     text: AppController.connected
-                          ? "Connected. " + AppController.boardUsb + ", firmware " + AppController.boardFirmware + "."
+                          ? "Board connected (firmware " + AppController.boardFirmware + "). PlayStation: "
+                            + Style.playStation(AppController.boardUsb).toLowerCase() + "."
                           : AppController.lastError !== "" ? AppController.lastError
                           : "Waiting for an answer from the board … Are address and key correct?"
                 }
@@ -251,29 +285,34 @@ AppPage {
                 subtitle: "Press the trigger: you see here what reaches the PlayStation. Press it again to switch off."
 
                 Controls.Label {
+                    Layout.fillWidth: true
                     text: AppController.statusText
                     color: AppController.active ? Style.ok : Style.text
                     font.pointSize: Style.fontSize * 1.5
                     font.weight: Font.DemiBold
+                    wrapMode: Text.WordWrap
                 }
                 GridLayout {
+                    Layout.fillWidth: true
                     columns: 2
                     columnSpacing: 16
                     rowSpacing: 6
                     Controls.Label { text: "To the PlayStation"; color: Style.muted }
                     Controls.Label {
+                        Layout.fillWidth: true
                         text: AppController.active ? (AppController.liveText !== "" ? AppController.liveText : "no key") : "–"
                         color: Style.text
                         font.weight: Font.DemiBold
+                        wrapMode: Text.WordWrap
                     }
                     Controls.Label { text: "PlayStation"; color: Style.muted }
                     Controls.Label {
-                        text: AppController.boardUsb !== "" ? AppController.boardUsb : "–"
+                        text: AppController.boardUsb !== "" ? Style.playStation(AppController.boardUsb) : "–"
                         color: Style.text
                     }
                     Controls.Label { text: "Round trip"; color: Style.muted }
                     Controls.Label {
-                        text: AppController.rttMs >= 0 ? Math.round(AppController.rttMs * 1000) + " µs" : "–"
+                        text: AppController.rttMs >= 0 ? Style.us(AppController.rttMs * 1000) : "–"
                         color: Style.text
                     }
                 }

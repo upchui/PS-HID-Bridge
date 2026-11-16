@@ -3,13 +3,15 @@ import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import PSHIDBridge
 
-// The list of triggers, saved automatically once every entry has keys.
+// The list of triggers, saved automatically: every complete one (with
+// keys); one still without keys waits in the list until it has some.
 // "Record" takes over a combination by pressing it.
+// The rows come from a ListModel changed in place: editing a field does not
+// rebuild the rows (focus stays where it is).
 ColumnLayout {
     id: editor
     spacing: 10
 
-    property var items: []
     property int recordingIndex: -1
     property string error: ""
 
@@ -21,26 +23,49 @@ ColumnLayout {
     readonly property var actionValues: ["toggle", "on", "off", "pause", "release-all"]
     readonly property var actionTexts: ["Toggle", "Switch on", "Switch off", "Pause", "Release all"]
 
+    // kind, keys, action, window_ms, and `raw`: the whole entry as read
+    // (settings a newer version wrote are kept).
+    ListModel {
+        id: triggerModel
+    }
+
     function reload() {
-        items = JSON.parse(AppController.triggersJson);
+        triggerModel.clear();
+        for (const t of JSON.parse(AppController.triggersJson))
+            triggerModel.append({ kind: t.kind, keys: t.keys, action: t.action, window_ms: t.window_ms,
+                                  raw: JSON.stringify(t) });
+    }
+
+    function entries() {
+        const all = [];
+        for (let i = 0; i < triggerModel.count; i++) {
+            const t = triggerModel.get(i);
+            all.push(Object.assign(JSON.parse(t.raw), { kind: t.kind, keys: t.keys, action: t.action,
+                                                        window_ms: t.window_ms }));
+        }
+        return all;
     }
 
     function setField(index, key, value) {
-        let copy = items.slice();
-        copy[index] = Object.assign({}, copy[index]);
-        copy[index][key] = value;
-        items = copy;
+        triggerModel.setProperty(index, key, value);
         saveSoon.restart();
     }
 
-    /// Store the triggers; false (and `error`) if one is incomplete or invalid.
+    function stopRecording() {
+        if (recordingIndex >= 0)
+            AppController.recordTrigger(false);
+        recordingIndex = -1;
+    }
+
+    /// Store every complete trigger; false (and `error`) if one has no keys
+    /// yet (it stays here, unsaved) or the list is invalid.
     function save() {
         saveSoon.stop();
-        if (items.some(t => t.keys.trim() === "")) {
-            error = "Enter or record the keys of every trigger.";
-            return false;
-        }
-        error = AppController.setTriggers(JSON.stringify(items));
+        const all = entries();
+        const complete = all.filter(t => t.keys.trim() !== "");
+        error = AppController.setTriggers(JSON.stringify(complete));
+        if (error === "" && complete.length < all.length)
+            error = "A trigger without keys is not saved yet: enter or record its keys.";
         return error === "";
     }
 
@@ -69,18 +94,20 @@ ColumnLayout {
     }
 
     Repeater {
-        model: editor.items
+        model: triggerModel
         delegate: Rectangle {
             id: row
-            required property var modelData
             required property int index
+            required property string kind
+            required property string keys
+            required property string action
             readonly property bool recording: editor.recordingIndex === index
 
             Layout.fillWidth: true
             implicitHeight: rowCol.implicitHeight + 24
             radius: Style.radius
             color: Style.surfaceAlt
-            border.color: recording ? Style.accent : modelData.keys.trim() === "" ? Style.tint(Style.warn, 0.6) : Style.border
+            border.color: recording ? Style.accent : keys.trim() === "" ? Style.tint(Style.warn, 0.6) : Style.border
 
             ColumnLayout {
                 id: rowCol
@@ -91,7 +118,7 @@ ColumnLayout {
                 RowLayout {
                     Layout.fillWidth: true
                     Segmented {
-                        value: row.modelData.kind
+                        value: row.kind
                         model: editor.kinds
                         onActivated: v => editor.setField(row.index, "kind", v)
                     }
@@ -112,9 +139,7 @@ ColumnLayout {
                             } else if (editor.recordingIndex > row.index) {
                                 editor.recordingIndex -= 1;
                             }
-                            let copy = editor.items.slice();
-                            copy.splice(row.index, 1);
-                            editor.items = copy;
+                            triggerModel.remove(row.index);
                             saveSoon.restart();
                         }
                     }
@@ -125,11 +150,19 @@ ColumnLayout {
                     spacing: 8
                     Controls.TextField {
                         Layout.fillWidth: true
-                        text: row.recording ? "" : row.modelData.keys
-                        placeholderText: row.recording ? "Press the keys or the mouse button, then release …"
-                                         : "e.g. Ctrl+Alt+P or Mouse5"
-                        enabled: !row.recording
-                        onEditingFinished: if (text !== row.modelData.keys) editor.setField(row.index, "keys", text)
+                        visible: !row.recording
+                        text: row.keys
+                        placeholderText: "e.g. Ctrl+Alt+P or Mouse5"
+                        onEditingFinished: if (text !== row.keys) editor.setField(row.index, "keys", text)
+                    }
+                    // While recording: the instruction in full (a placeholder
+                    // would be cut off in a narrow field).
+                    Controls.Label {
+                        Layout.fillWidth: true
+                        visible: row.recording
+                        text: "Press the keys or the mouse button, then release …"
+                        color: Style.accent
+                        wrapMode: Text.WordWrap
                     }
                     AppButton {
                         text: row.recording ? "Stop" : "Record"
@@ -151,18 +184,18 @@ ColumnLayout {
                 RowLayout {
                     spacing: 8
                     Controls.Label {
-                        text: row.modelData.kind === "hold" ? "The bridge is on while these keys are held." : "Action"
+                        text: row.kind === "hold" ? "The bridge is on while these keys are held." : "Action"
                         color: Style.muted
                     }
                     Controls.ComboBox {
-                        visible: row.modelData.kind !== "hold"
+                        visible: row.kind !== "hold"
                         model: editor.actionTexts
-                        currentIndex: editor.actionValues.indexOf(row.modelData.action)
+                        currentIndex: editor.actionValues.indexOf(row.action)
                         onActivated: idx => editor.setField(row.index, "action", editor.actionValues[idx])
                     }
                 }
                 Controls.Label {
-                    visible: row.modelData.kind === "hold"
+                    visible: row.kind === "hold"
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     color: Style.muted
@@ -179,7 +212,7 @@ ColumnLayout {
         text: "Add trigger"
         icon.name: "plus"
         icon.color: Style.text
-        onClicked: editor.items = editor.items.concat([{ "kind": "combo", "keys": "", "action": "toggle", "window_ms": 300 }])
+        onClicked: triggerModel.append({ kind: "combo", keys: "", action: "toggle", window_ms: 300, raw: "{}" })
     }
 
     Banner {
