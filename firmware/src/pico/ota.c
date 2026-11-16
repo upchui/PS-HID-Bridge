@@ -125,10 +125,24 @@ bool ota_trial_boot(void) {
 
 bool ota_confirm_if_trial(void) {
     if (!ota_trial_boot()) return false;
-    int r = rom_explicit_buy(s_workarea, sizeof(s_workarea));
+    // Not rom_explicit_buy(): the SDK wraps it in flash_safe_execute, which
+    // on core 1 needs core 0 as a multicore-lockout victim and otherwise
+    // fails with PICO_ERROR_NOT_PERMITTED without calling the boot ROM, so
+    // the image was never bought. The firmware runs from RAM, so (as in
+    // erase_sector) only this core's interrupts are held off.
+    int r = BOOTROM_ERROR_INVALID_STATE;
+    rom_helper_explicit_buy_params_t p = {s_workarea, sizeof(s_workarea), &r};
+    uint32_t irq = save_and_disable_interrupts();
+    rom_helper_explicit_buy(&p);
     clock_flash_divider();
-    printf("ota: new firmware confirmed (%d)\n", r);
-    return r == 0;
+    restore_interrupts(irq);
+    if (r == BOOTROM_OK) {
+        printf("ota: new firmware confirmed\n");
+    } else {
+        printf("ota: confirming the new firmware failed (%d), the next reset returns to the previous one\n",
+               r);
+    }
+    return r == BOOTROM_OK;
 }
 
 bool ota_has_partition_table(void) {

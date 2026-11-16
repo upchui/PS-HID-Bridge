@@ -22,8 +22,10 @@ void ota_activate(void);
 // This start runs new firmware on trial (after an update, until confirmed).
 bool ota_trial_boot(void);
 
-// At boot (core 0, before core 1 starts): if we were booted on trial after
-// an update, confirm the image. Returns true if an update was confirmed.
+// Core 1, a few seconds after the start (core1.c): if we were booted on
+// trial after an update, confirm the image. Works on either core, core 0
+// keeps running (the firmware runs from RAM). Returns true if an update was
+// confirmed.
 bool ota_confirm_if_trial(void);
 
 // The flash has a partition table (ps-hid-bridge-pt.uf2 was installed).
