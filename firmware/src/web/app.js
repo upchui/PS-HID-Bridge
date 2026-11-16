@@ -189,7 +189,8 @@ function renderDiag(d) {
   $("d-miss").textContent = d.mouse_fetches
     ? `${d.mouse_misses} of ${d.mouse_fetches} (${(100 * d.mouse_misses / d.mouse_fetches).toFixed(2)} %), filled ${d.mouse_lead_us} µs before the fetch`
     : "–";
-  $("d-crypto").textContent = d.crypto_avg_ns ? `${(d.crypto_avg_ns / 1000).toFixed(1)} µs on average` : "–";
+  $("d-crypto").textContent = d.crypto_avg_ns
+    ? `${(d.crypto_avg_ns / 1000).toFixed(1)} µs on average${d.crypto_fast ? " (optimised for this CPU)" : ""}` : "–";
   $("d-chip").textContent = `SPI ${(d.spi_hz / 1e6).toFixed(1)} MHz · ${d.datagrams} packets in ${d.rounds} rounds · ${d.core0_spi} transfers`;
 }
 

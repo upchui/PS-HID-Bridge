@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "aead.h"
 #include "monocypher.h"
 #include "proto.h"
 #include "pshb_config.h"
@@ -163,7 +164,7 @@ size_t bridge_handle_packet(bridge_t *b, const uint8_t *pkt, size_t len, uint32_
     // 6. INPUT / HEARTBEAT must belong to the current session
     pshb_input_t in;
     pshb_input_decode(payload, &in);
-    crypto_wipe(payload, sizeof(payload));
+    pshb_wipe(payload, sizeof(payload));
     if (in.session_id != b->session_id) {
         b->stats.rx_replay++;
         // Tell a legitimate app about the new session right away (rate limited).

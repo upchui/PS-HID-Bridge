@@ -13,6 +13,7 @@
 #include "pico/stdlib.h"
 #include "tusb.h"
 
+#include "aead.h"
 #include "bridge.h"
 #include "core1.h"
 #include "diag.h"
@@ -89,13 +90,41 @@ static void led_service(void) {
     }
 }
 
+// ---------------------------------------------------------------- crypto
+
+void pshb_chacha20_block_m33(uint32_t out[16], const uint32_t in[16]);
+
+// The assembly ChaCha20 block (chacha20_m33.S) replaces the C one only if
+// both agree on all-zero, all-one and pseudo-random states. Before core 1
+// starts: nothing else decrypts yet.
+static void crypto_select(void) {
+    uint32_t in[16], a[16], b[16];
+    uint32_t x = get_rand_32() | 1;
+    for (int t = 0; t < 64; t++) {
+        for (int i = 0; i < 16; i++) {
+            x = x * 1664525u + 1013904223u;
+            in[i] = t == 0 ? 0 : t == 1 ? 0xFFFFFFFFu : x;
+        }
+        pshb_chacha20_block_c(a, in);
+        pshb_chacha20_block_m33(b, in);
+        if (memcmp(a, b, sizeof(a)) != 0) {
+            printf("crypto: the fast ChaCha20 block differs, using the C version\n");
+            return;
+        }
+    }
+    pshb_chacha20_block = pshb_chacha20_block_m33;
+    g_diag.crypto_fast = true;
+}
+
 // ---------------------------------------------------------------- diagnostics
 
 void diag_init(void) {
     // Kept: the crypto measurement (made once at start) and the current lead.
     uint32_t cmin = g_diag.crypto_min_ns, cavg = g_diag.crypto_avg_ns, cmax = g_diag.crypto_max_ns;
     uint32_t lead = g_diag.mouse_lead_us;
+    bool fast = g_diag.crypto_fast;
     memset(&g_diag, 0, sizeof(g_diag));
+    g_diag.crypto_fast = fast;
     latency_init(&g_diag.usb, 50);
     latency_init(&g_diag.rx, 5);
     latency_init(&g_diag.ready, 4);
@@ -316,6 +345,7 @@ int main(void) {
     hid_out_init(&g_input);
     tud_init(0);
 
+    crypto_select();
     s_chip_ok = w5500_port_init();
     // Before the confirmation below: buying may erase the other slot.
     g_running_slot = ota_running_slot();

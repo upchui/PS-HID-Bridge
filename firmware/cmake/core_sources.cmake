@@ -4,6 +4,7 @@
 set(PSHB_FW_DIR ${CMAKE_CURRENT_LIST_DIR}/..)
 
 set(PSHB_CORE_SOURCES
+    ${PSHB_FW_DIR}/src/core/aead.c
     ${PSHB_FW_DIR}/src/core/bridge.c
     ${PSHB_FW_DIR}/src/core/crc32.c
     ${PSHB_FW_DIR}/src/core/hexutil.c

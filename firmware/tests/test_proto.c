@@ -1,7 +1,10 @@
+#include <string.h>
+
 // Crypto and packet format against the shared vectors (protocol/vectors/v1.json).
 #include "hexutil.h"
 #include "mini_test.h"
 #include "monocypher.h"
+#include "aead.h"
 #include "packet.h"
 #include "proto.h"
 #include "vectors_v1.h"
@@ -20,6 +23,47 @@ TEST(rfc8439_aead) {
     CHECK_EQ_I(crypto_aead_read(&ctx, pt, rfc_tag, rfc_aad, sizeof(rfc_aad), rfc_ciphertext,
                                 sizeof(rfc_ciphertext)), 0);
     CHECK_MEM(pt, rfc_plaintext, sizeof(rfc_plaintext));
+}
+
+// aead.c: the RFC 8439 example (114 bytes, several blocks, partial ones).
+TEST(own_aead_matches_rfc8439) {
+    uint8_t ct[sizeof(rfc_plaintext)], tag[16], pt[sizeof(rfc_plaintext)];
+    pshb_aead_seal(rfc_key, rfc_nonce, rfc_aad, sizeof(rfc_aad), rfc_plaintext, sizeof(rfc_plaintext), ct, tag);
+    CHECK_MEM(ct, rfc_ciphertext, sizeof(rfc_ciphertext));
+    CHECK_MEM(tag, rfc_tag, sizeof(rfc_tag));
+    CHECK(pshb_aead_open(rfc_key, rfc_nonce, rfc_aad, sizeof(rfc_aad), rfc_ciphertext, sizeof(rfc_ciphertext),
+                         rfc_tag, pt));
+    CHECK_MEM(pt, rfc_plaintext, sizeof(rfc_plaintext));
+    uint8_t bad[16];
+    memcpy(bad, rfc_tag, sizeof(bad));
+    bad[15] ^= 0x80;
+    memset(pt, 0xAA, sizeof(pt));
+    CHECK(!pshb_aead_open(rfc_key, rfc_nonce, rfc_aad, sizeof(rfc_aad), rfc_ciphertext, sizeof(rfc_ciphertext),
+                          bad, pt));
+    CHECK_EQ_U(pt[0], 0xAA);  // nothing decrypted without a valid tag
+}
+
+// aead.c against Monocypher for every length up to 4 blocks and several
+// lengths of additional data (pseudo-random keys, nonces and texts).
+TEST(own_aead_matches_monocypher) {
+    uint32_t x = 12345;
+    uint8_t key[32], nonce[12], ad[40], pt[256], ct1[256], ct2[256], tag1[16], tag2[16], back[256];
+    for (size_t len = 0; len <= sizeof(pt); len++) {
+        for (size_t ad_len = 0; ad_len <= sizeof(ad); ad_len += 10) {
+            for (size_t i = 0; i < sizeof(key); i++) key[i] = (uint8_t)(x = x * 1103515245u + 12345u) ;
+            for (size_t i = 0; i < sizeof(nonce); i++) nonce[i] = (uint8_t)(x = x * 1103515245u + 12345u);
+            for (size_t i = 0; i < ad_len; i++) ad[i] = (uint8_t)(x = x * 1103515245u + 12345u);
+            for (size_t i = 0; i < len; i++) pt[i] = (uint8_t)(x = x * 1103515245u + 12345u);
+            crypto_aead_ctx ctx;
+            crypto_aead_init_ietf(&ctx, key, nonce);
+            crypto_aead_write(&ctx, ct1, tag1, ad, ad_len, pt, len);
+            pshb_aead_seal(key, nonce, ad, ad_len, pt, len, ct2, tag2);
+            CHECK_MEM(ct2, ct1, len);
+            CHECK_MEM(tag2, tag1, sizeof(tag1));
+            CHECK(pshb_aead_open(key, nonce, ad, ad_len, ct2, len, tag2, back));
+            CHECK_MEM(back, pt, len);
+        }
+    }
 }
 
 TEST(seal_matches_vectors) {
@@ -109,6 +153,8 @@ TEST(hex_roundtrip) {
 
 int main(void) {
     RUN(rfc8439_aead);
+    RUN(own_aead_matches_rfc8439);
+    RUN(own_aead_matches_monocypher);
     RUN(seal_matches_vectors);
     RUN(open_matches_vectors);
     RUN(input_fields_decode);

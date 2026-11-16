@@ -28,6 +28,7 @@ typedef struct {
     uint32_t mouse_lead_us; // reports are armed this long before the fetch (0 = right away)
     // Decrypting one INPUT packet, measured once at start (core 1).
     uint32_t crypto_min_ns, crypto_avg_ns, crypto_max_ns;
+    bool crypto_fast;  // the assembly ChaCha20 block is in use (passed its check)
     volatile bool reset_request;  // set by core 1, done by core 0 (diag_reset)
 } pshb_diag_t;
 

@@ -793,7 +793,7 @@ class WebTests(unittest.TestCase):
                 self.assertIn(f"{stage}_{part}", d)
         for k in ("rounds", "datagrams", "core0_spi", "cr_busy", "mouse_inputs", "mouse_waits",
                   "mouse_fetches", "mouse_misses", "mouse_lead_us", "crypto_min_ns", "crypto_avg_ns",
-                  "crypto_max_ns", "spi_hz"):
+                  "crypto_max_ns", "crypto_fast", "spi_hz"):
             self.assertIn(k, d)
         self.assertEqual(d["rounds"], 0)
         # Reset reaches the backend (the simulator counts it in "rounds").

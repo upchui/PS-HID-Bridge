@@ -64,6 +64,7 @@ typedef struct {
     uint32_t cr_busy;            // command register still busy at the next command
     uint32_t mouse_inputs, mouse_waits, mouse_fetches, mouse_misses, mouse_lead_us;
     uint32_t crypto_min_ns, crypto_avg_ns, crypto_max_ns;  // decrypting one INPUT packet
+    bool crypto_fast;            // optimised ChaCha20 for this CPU in use
     uint32_t spi_hz;             // SPI clock to the W5500
 } web_diag_t;
 

@@ -244,6 +244,7 @@ static void be_diag(void *ctx, web_diag_t *out) {
     out->crypto_min_ns = g_diag.crypto_min_ns;
     out->crypto_avg_ns = g_diag.crypto_avg_ns;
     out->crypto_max_ns = g_diag.crypto_max_ns;
+    out->crypto_fast = g_diag.crypto_fast;
     out->spi_hz = w5500_spi_hz();
 }
 

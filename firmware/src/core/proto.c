@@ -1,6 +1,6 @@
 #include "proto.h"
 
-#include "monocypher.h"
+#include "aead.h"
 
 bool proto_check(const uint8_t *pkt, size_t len, pshb_header_t *h) {
     if (len < PSHB_HDR_LEN + PSHB_TAG_LEN) return false;
@@ -11,20 +11,15 @@ bool proto_check(const uint8_t *pkt, size_t len, pshb_header_t *h) {
     return len == PSHB_HDR_LEN + payload_len + PSHB_TAG_LEN;
 }
 
-// A fresh context per packet: crypto_aead_write/read ratchet the key after
-// each message, which we do not want (every packet is independent).
+// ChaCha20-Poly1305 (RFC 8439) with the header as additional data; every
+// packet independent (aead.c, the same result as Monocypher's IETF AEAD).
 bool proto_decrypt(const uint8_t key[PSHB_KEY_LEN], uint32_t direction, const uint8_t *pkt,
                    size_t len, uint8_t *payload_out) {
     size_t payload_len = len - PSHB_HDR_LEN - PSHB_TAG_LEN;
     uint8_t nonce[PSHB_NONCE_LEN];
     pshb_nonce(nonce, direction, pshb_rd64(&pkt[2]));
-
-    crypto_aead_ctx ctx;
-    crypto_aead_init_ietf(&ctx, key, nonce);
-    int r = crypto_aead_read(&ctx, payload_out, pkt + PSHB_HDR_LEN + payload_len, pkt, PSHB_HDR_LEN,
-                             pkt + PSHB_HDR_LEN, payload_len);
-    crypto_wipe(&ctx, sizeof(ctx));
-    return r == 0;
+    return pshb_aead_open(key, nonce, pkt, PSHB_HDR_LEN, pkt + PSHB_HDR_LEN, payload_len,
+                          pkt + PSHB_HDR_LEN + payload_len, payload_out);
 }
 
 size_t proto_seal(const uint8_t key[PSHB_KEY_LEN], uint32_t direction, uint8_t type,
@@ -37,10 +32,7 @@ size_t proto_seal(const uint8_t key[PSHB_KEY_LEN], uint32_t direction, uint8_t t
     uint8_t nonce[PSHB_NONCE_LEN];
     pshb_nonce(nonce, direction, counter);
 
-    crypto_aead_ctx ctx;
-    crypto_aead_init_ietf(&ctx, key, nonce);
-    crypto_aead_write(&ctx, out + PSHB_HDR_LEN, out + PSHB_HDR_LEN + payload_len, out,
-                      PSHB_HDR_LEN, payload, payload_len);
-    crypto_wipe(&ctx, sizeof(ctx));
+    pshb_aead_seal(key, nonce, out, PSHB_HDR_LEN, payload, payload_len, out + PSHB_HDR_LEN,
+                   out + PSHB_HDR_LEN + payload_len);
     return total;
 }

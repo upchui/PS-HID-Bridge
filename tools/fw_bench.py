@@ -338,7 +338,8 @@ def report(results: list[dict]) -> None:
                   f"command register busy {d.get('cr_busy')}x")
             if d.get("crypto_avg_ns"):
                 print(f"  decrypting one INPUT packet: {d['crypto_avg_ns'] / 1000:.1f} µs on average "
-                      f"(min {d['crypto_min_ns'] / 1000:.0f}, max {d['crypto_max_ns'] / 1000:.0f})")
+                      f"(min {d['crypto_min_ns'] / 1000:.0f}, max {d['crypto_max_ns'] / 1000:.0f}), "
+                      f"{'optimised' if d.get('crypto_fast') else 'C'} ChaCha20")
         else:
             print(f"  receive and decrypt (noticed -> applied): median {s.get('lat_rx_p50_us')} µs, "
                   f"max {s.get('lat_rx_max_us')} µs")
