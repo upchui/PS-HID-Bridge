@@ -74,6 +74,7 @@ typedef struct {
     uint64_t session;
     uint8_t key_override[32];
     bool have_allowed_override;
+    bool max_values;  // --max-values
     uint32_t allowed_net, allowed_mask;
     unsigned failsafe_ms;
     const char *settings_file;
@@ -183,6 +184,15 @@ static void be_status(void *ctx, web_status_t *out) {
     out->rx_filtered = S.bridge.stats.rx_filtered;
     out->rx_malformed = S.bridge.stats.rx_malformed;
     out->partition = "-";
+    if (S.max_values) {
+        // Every number at its largest, the longest texts: the answer must
+        // still fit its buffer (web.c, c->dyn).
+        memset(out, 0xFF, sizeof(*out));
+        out->uptime_ms = 10ull * 365 * 24 * 3600 * 1000;  // ten years
+        out->link_up = out->failsafe = out->watchdog_reset = true;
+        out->net_state = "Network chip not responding";
+        out->partition = "A";
+    }
 }
 
 static bool be_save(void *ctx, const pshb_settings_t *s) {
@@ -295,6 +305,10 @@ static void be_diag(void *ctx, web_diag_t *out) {
     (void)ctx;
     memset(out, 0, sizeof(*out));
     out->rounds = s_diag_resets;
+    if (S.max_values) {
+        memset(out, 0xFF, sizeof(*out));  // every count and time at its largest
+        out->crypto_fast = true;
+    }
 }
 
 static void be_diag_reset(void *ctx) {
@@ -355,7 +369,8 @@ static void usage(const char *argv0) {
             "  --failsafe-ms N   failsafe timeout (default 250)\n"
             "  --session HEX     fixed session id (default: random per boot)\n"
             "  --allow IP[/N]    only accept packets from this sender or subnet\n"
-            "  --usb-unmounted   simulate a board that is not plugged in\n",
+            "  --usb-unmounted   simulate a board that is not plugged in\n"
+            "  --max-values      status and diagnostics report their largest values\n",
             argv0, PSHB_UDP_PORT_DEFAULT);
 }
 
@@ -460,6 +475,7 @@ int main(int argc, char **argv) {
         {"session", required_argument, 0, 's'},
         {"allow", required_argument, 0, 'a'},
         {"usb-unmounted", no_argument, 0, 'u'},
+        {"max-values", no_argument, 0, 'M'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0},
     };
@@ -512,6 +528,7 @@ int main(int argc, char **argv) {
             break;
         }
         case 'u': S.usb_mounted = false; break;
+        case 'M': S.max_values = true; break;
         default: usage(argv[0]); return c == 'h' ? 0 : 2;
         }
     }

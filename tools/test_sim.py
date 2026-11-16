@@ -826,6 +826,19 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.web.req("POST", "/api/diag/reset", {})[0], 200)
         self.assertEqual(self.web.req("GET", "/api/diag")[1]["rounds"], 1)
 
+    def test_largest_answers_fit(self):
+        # Every count and time at its largest: status and diagnostics still fit their buffer.
+        self.sim.close()
+        self.sim = Sim("--http-port", "0", "--settings", self.settings, "--max-values")
+        self.web = Web(self.sim.http_port)
+        self.setup_password()
+        status, d, _ = self.web.req("GET", "/api/diag")
+        self.assertEqual(status, 200, d)
+        self.assertEqual((d["ready_p99"], d["bus_timeouts"], d["crypto_fast"]), (4294967295, 4294967295, True))
+        status, st, _ = self.web.req("GET", "/api/status")
+        self.assertEqual(status, 200, st)
+        self.assertEqual(st["mouse_lead_us"], 4294967295)
+
     def test_bench_sink_takes_uploads_only_when_logged_in(self):
         body = bytes(range(256)) * 300  # 75 KiB
         self.assertEqual(self.web.upload("/api/bench/sink", body, None)[0], 401)

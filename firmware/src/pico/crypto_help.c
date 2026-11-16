@@ -26,8 +26,9 @@
 static int s_bell = -1;
 static volatile bool s_ready;          // core 1 takes requests
 static volatile uint32_t s_req, s_done; // last request, last one answered
-static uint32_t s_in[16], s_out[16];
+static uint32_t s_in[16], s_out[16];  // key and keystream: wiped after use
 static uint32_t s_helped, s_alone;
+static bool s_late;  // core 1's last block came too late and is still in s_out
 
 static void bell_irq(void) {
     multicore_doorbell_clear_current_core((uint)s_bell);
@@ -36,6 +37,7 @@ static void bell_irq(void) {
     if (seq == s_done) return;
     uint32_t in[16], out[16];
     memcpy(in, s_in, sizeof(in));
+    pshb_wipe(s_in, sizeof(s_in));  // core 0 writes it only after the answer
     pshb_chacha20_block(out, in);
     memcpy(s_out, out, sizeof(out));
     pshb_wipe(in, sizeof(in));
@@ -54,6 +56,10 @@ static void block2_two_cores(uint32_t out0[16], const uint32_t in0[16], uint32_t
         pshb_chacha20_block(out1, in1);
         return;
     }
+    if (s_late) {
+        pshb_wipe(s_out, sizeof(s_out));  // core 1 is done with it now
+        s_late = false;
+    }
     memcpy(s_in, in1, sizeof(s_in));
     uint32_t seq = s_req + 1;
     __dmb();  // the request before its number
@@ -64,6 +70,7 @@ static void block2_two_cores(uint32_t out0[16], const uint32_t in0[16], uint32_t
     while (s_done != seq) {
         if (time_us_32() - start > HELP_WAIT_US) {
             s_alone++;
+            s_late = true;
             pshb_chacha20_block(out1, in1);
             return;
         }

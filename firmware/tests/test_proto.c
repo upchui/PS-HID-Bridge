@@ -150,6 +150,47 @@ TEST(input_fields_decode) {
     }
 }
 
+// Every field of PONG and PONG_TIMED where the vectors say (the app reads
+// them at these offsets).
+TEST(pong_fields_decode) {
+    int seen = 0;
+    for (size_t i = 0; i < COUNT(k_packets); i++) {
+        const vec_packet_t *v = &k_packets[i];
+        if (!v->has_pong) continue;
+        seen++;
+        bool timed = v->type == PSHB_TYPE_PONG_TIMED;
+        pshb_pong_t p;
+        memset(&p, 0, sizeof(p));
+        if (timed) {
+            pshb_pong_timed_decode(v->payload, &p);
+        } else {
+            pshb_pong_decode(v->payload, &p);
+        }
+        CHECK_EQ_U(p.t_app_us, v->t_app_us);
+        CHECK_EQ_U(p.seq, v->seq);
+        CHECK_EQ_U(p.session_id, v->pong_session_id);
+        CHECK_EQ_U(p.fw_version, v->fw_version);
+        CHECK_EQ_U(p.uptime_ms, v->uptime_ms);
+        CHECK_EQ_U(p.status, v->status);
+        CHECK_EQ_U(p.rx_ok, v->rx_ok);
+        CHECK_EQ_U(p.rx_auth_fail, v->rx_auth_fail);
+        CHECK_EQ_U(p.rx_replay, v->rx_replay);
+        CHECK_EQ_U(p.rx_filtered, v->rx_filtered);
+        CHECK_EQ_U(p.rx_malformed, v->rx_malformed);
+        CHECK_EQ_U(p.board_rx_us, v->board_rx_us);
+        CHECK_EQ_U(p.board_tx_us, v->board_tx_us);
+        uint8_t re[PSHB_PONG_TIMED_PAYLOAD_LEN];
+        if (timed) {
+            pshb_pong_timed_encode(re, &p);
+        } else {
+            pshb_pong_encode(re, &p);
+        }
+        CHECK_EQ_U(v->payload_len, timed ? PSHB_PONG_TIMED_PAYLOAD_LEN : PSHB_PONG_PAYLOAD_LEN);
+        CHECK_MEM(re, v->payload, v->payload_len);
+    }
+    CHECK_EQ_I(seen, 2);
+}
+
 TEST(invalid_vectors_rejected) {
     for (size_t i = 0; i < COUNT(k_invalid); i++) {
         const vec_invalid_t *v = &k_invalid[i];
@@ -199,6 +240,7 @@ int main(void) {
     RUN(seal_matches_vectors);
     RUN(open_matches_vectors);
     RUN(input_fields_decode);
+    RUN(pong_fields_decode);
     RUN(invalid_vectors_rejected);
     RUN(seal_rejects_small_buffer);
     RUN(hex_roundtrip);

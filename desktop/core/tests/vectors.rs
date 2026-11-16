@@ -88,21 +88,52 @@ fn packets() {
             }
             PacketType::Pong => {
                 let p = Pong::decode(&payload);
-                assert_eq!(p.session_id, f["session_id"].as_u64().unwrap());
-                assert_eq!(p.rx_malformed as u64, f["rx_malformed"].as_u64().unwrap());
+                check_pong(name, &p, f);
                 assert_eq!(p.encode().to_vec(), payload);
             }
             PacketType::PongTimed => {
                 let p = PongTimed::decode(&payload);
-                assert_eq!(p.pong.session_id, f["session_id"].as_u64().unwrap());
-                assert_eq!(p.pong.status as u64, f["status"].as_u64().unwrap());
-                assert_eq!(p.board_rx_us, f["board_rx_us"].as_u64().unwrap());
-                assert_eq!(p.board_tx_us, f["board_tx_us"].as_u64().unwrap());
+                check_pong(name, &p.pong, f);
+                assert_eq!(p.board_rx_us, f["board_rx_us"].as_u64().unwrap(), "{name}");
+                assert_eq!(p.board_tx_us, f["board_tx_us"].as_u64().unwrap(), "{name}");
                 assert_eq!(p.encode().to_vec(), payload);
             }
             PacketType::Ping | PacketType::PingTimed => {}
         }
     }
+}
+
+/// Every field of a PONG where the vectors say (the board writes them at these offsets).
+fn check_pong(name: &str, p: &Pong, f: &Value) {
+    let field = |k: &str| f[k].as_u64().unwrap();
+    let got = [
+        p.t_app_us,
+        p.seq as u64,
+        p.session_id,
+        p.fw_version as u64,
+        p.uptime_ms as u64,
+        p.status as u64,
+        p.rx_ok as u64,
+        p.rx_auth_fail as u64,
+        p.rx_replay as u64,
+        p.rx_filtered as u64,
+        p.rx_malformed as u64,
+    ];
+    let want = [
+        "t_app_us",
+        "seq",
+        "session_id",
+        "fw_version",
+        "uptime_ms",
+        "status",
+        "rx_ok",
+        "rx_auth_fail",
+        "rx_replay",
+        "rx_filtered",
+        "rx_malformed",
+    ]
+    .map(field);
+    assert_eq!(got, want, "{name}");
 }
 
 #[test]

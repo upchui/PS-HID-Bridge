@@ -44,6 +44,14 @@ typedef struct {
     uint8_t flags, mods, keys[6], buttons;
     int16_t dx, dy;
     int8_t wheel, pan;
+    int has_pong;  /* PONG and PONG_TIMED: their fields */
+    uint64_t t_app_us;
+    uint32_t seq;
+    uint64_t pong_session_id;
+    uint32_t fw_version, uptime_ms;
+    uint8_t status;
+    uint32_t rx_ok, rx_auth_fail, rx_replay, rx_filtered, rx_malformed;
+    uint64_t board_rx_us, board_tx_us;  /* PONG_TIMED only */
 } vec_packet_t;
 
 typedef struct {
@@ -68,6 +76,13 @@ typedef struct {
                    f"{f['dx']}, {f['dy']}, {f['wheel']}, {f['pan']}")
         else:
             inp = "0, 0, 0, 0, {0}, 0, 0, 0, 0, 0"
+        if v["type"] in (4, 6):
+            inp += (f", 1, {f['t_app_us']}ull, {f['seq']}, {f['session_id']}ull, {f['fw_version']}, "
+                    f"{f['uptime_ms']}, {f['status']}, {f['rx_ok']}, {f['rx_auth_fail']}, {f['rx_replay']}, "
+                    f"{f['rx_filtered']}, {f['rx_malformed']}, {f.get('board_rx_us', 0)}ull, "
+                    f"{f.get('board_tx_us', 0)}ull")
+        else:
+            inp += ", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0"
         rows.append(f'    {{"{v["name"]}", {v["direction"]}, {v["type"]}, {v["counter"]}ull, p{i}_key, '
                     f'p{i}_payload, sizeof(p{i}_payload), p{i}_packet, sizeof(p{i}_packet), {inp}}},\n')
     out.append("\nstatic const vec_packet_t k_packets[] = {\n" + "".join(rows) + "};\n\n")
