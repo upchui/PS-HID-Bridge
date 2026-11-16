@@ -137,6 +137,29 @@ static void make_mac(uint8_t mac[6]) {
     memcpy(&mac[1], &id.id[3], 5);
 }
 
+bool w5500_chip_setup(void) {
+    // Socket buffers in KB (16 KB each direction in total):
+    // 0 DHCP, 1 input UDP, 2-3 HTTP, 4-7 unused.
+    uint8_t tx[8] = {2, 2, 4, 4, 1, 1, 1, 1};
+    uint8_t rx[8] = {W5500_DHCP_RX_KB, 4, 4, 4, 1, 1, 0, 0};
+    if (wizchip_init(tx, rx) != 0) return false;
+    setSHAR(s_mac);
+
+    // Retransmission: 100 ms x 3 tries instead of 200 ms x 8, so a missing
+    // ARP peer costs at most ~0.4 s on core 1 (core 0 never waits on it).
+    setRTR(1000);
+    setRCR(2);
+
+    setSIMR(0);
+    return true;
+}
+
+bool w5500_chip_lost(void) {
+    uint8_t mac[6];
+    getSHAR(mac);
+    return memcmp(mac, s_mac, sizeof(mac)) != 0;
+}
+
 bool w5500_port_init(bool spi_fast) {
     recursive_mutex_init(&s_mutex);
 
@@ -189,21 +212,8 @@ bool w5500_port_init(bool spi_fast) {
         }
     }
 
-    // Socket buffers in KB (16 KB each direction in total):
-    // 0 DHCP, 1 input UDP, 2-3 HTTP, 4-7 unused.
-    uint8_t tx[8] = {2, 2, 4, 4, 1, 1, 1, 1};
-    uint8_t rx[8] = {W5500_DHCP_RX_KB, 4, 4, 4, 1, 1, 0, 0};
-    if (wizchip_init(tx, rx) != 0) return false;
-
     make_mac(s_mac);
-    setSHAR(s_mac);
-
-    // Retransmission: 100 ms x 3 tries instead of 200 ms x 8, so a missing
-    // ARP peer costs at most ~0.4 s on core 1 (core 0 never waits on it).
-    setRTR(1000);
-    setRCR(2);
-
-    setSIMR(0);
+    if (!w5500_chip_setup()) return false;
     // Only a timestamp (diagnostics): the datagram itself is read in the
     // main loop. Registered on core 0, which calls this function.
     gpio_set_irq_enabled_with_callback(W5500_PIN_INT, GPIO_IRQ_EDGE_FALL, true, int_edge);
@@ -569,6 +579,13 @@ void w5500_udp_commit(uint8_t sn) {
 }
 
 #endif
+
+void w5500_udp_reset(uint8_t sn) {
+    s_tx_busy[sn] = false;
+#if PSHB_W5500_FAST_RX
+    s_rx_pending[sn] = false;
+#endif
+}
 
 void w5500_udp_tx_poll(uint8_t sn) {
     if (!s_tx_busy[sn]) return;

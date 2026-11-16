@@ -28,6 +28,8 @@
 
 #define LINK_POLL_MS        100
 #define DHCP_RETRY_MS       5000
+#define UDP_REOPEN_MS       1000
+#define CHIP_CHECK_MS       3000
 // Core 1 shares the SPI bus with core 0's input path: poll the chip only as
 // often as needed (DHCP works in seconds; a new HTTP connection may wait
 // 1 ms, an open one is served without pause).
@@ -46,11 +48,17 @@ typedef enum { C1_NO_LINK, C1_DHCP, C1_DHCP_WAIT, C1_READY } c1_state_t;
 // in one piece, as large as it arrived (up to the socket's receive buffer),
 // not only the 548 bytes of a DHCP message. Any larger datagram -- also a
 // broadcast answer meant for another device -- would overwrite what follows.
-static uint8_t s_dhcp_buf[W5500_DHCP_RX_KB * 1024];
+static uint8_t s_dhcp_buf[W5500_DHCP_RX_KB * 1024] __attribute__((aligned(4)));  // cast to RIP_MSG *
 static volatile bool s_dhcp_assigned;
 static volatile bool s_dhcp_conflict;
 static bool s_udp_open;
 static c1_state_t s_state = C1_NO_LINK;
+// The DHCP lease in use. Its address stays until the lease ends, also while
+// the server does not answer a renewal or the cable was out for a moment:
+// ioLibrary's client forgets a lease after a failed renewal, and starting
+// it over (DHCP_init) clears the address at once.
+static bool s_lease;
+static absolute_time_t s_lease_end;
 // The address mode this start runs with: a mode saved in the web interface
 // applies after the restart that follows (until then the DHCP client of a
 // static start was never set up).
@@ -89,6 +97,28 @@ void pshb_dhcp_decline_wait(void) {
 
 static void on_dhcp_conflict(void) {
     s_dhcp_conflict = true;
+}
+
+// Added to ioLibrary's dhcp.c (cmake/iolibrary.cmake).
+uint8_t pshb_dhcp_bound(void);
+void pshb_dhcp_renew_now(void);
+
+static bool lease_valid(void) {
+    return s_lease && !time_reached(s_lease_end);
+}
+
+// Call after every DHCP_run: each ACK (first one or renewal) starts the
+// lease anew.
+static void lease_track(void) {
+    static bool bound;
+    bool now = pshb_dhcp_bound();
+    if (now && !bound) {
+        uint32_t secs = getDHCPLeasetime();
+        s_lease = true;
+        s_lease_end = secs == 0xFFFFFFFFu ? at_the_end_of_time
+                                          : delayed_by_us(get_absolute_time(), (uint64_t)secs * 1000000u);
+    }
+    bound = now;
 }
 
 static void set_state(c1_state_t st) {
@@ -139,25 +169,66 @@ static void start_addressing(void) {
         set_state(C1_READY);
     } else {
         printf("net: starting DHCP\n");
+        s_lease = false;
         DHCP_init(W5500_SOCK_DHCP, s_dhcp_buf);
         set_state(C1_DHCP);
     }
 }
 
+// The W5500 reset by itself (brown-out, ESD): its sockets are closed and its
+// addresses gone, and input would stop without a word. Set it up again and
+// start the network over (the link poll below).
+static void chip_check(void) {
+    static absolute_time_t next;
+    if (!time_reached(next)) return;
+    next = make_timeout_time_ms(CHIP_CHECK_MS);
+    if (!w5500_chip_lost() || !w5500_chip_lost()) return;  // twice: not a garbled read
+    printf("net: the network chip lost its setup, setting it up again\n");
+    // Core 0 lets go of the input socket first (net_service).
+    atomic_store(&g_net.udp_enable, false);
+    absolute_time_t until = make_timeout_time_ms(100);
+    while (atomic_load(&g_net.udp_active) && !time_reached(until)) tight_loop_contents();
+    if (!w5500_chip_setup()) return;  // tried again at the next check
+    s_udp_open = false;
+    s_lease = false;  // the address is gone with the reset
+    atomic_store(&g_net.ip, 0);
+    set_state(C1_NO_LINK);
+}
+
 static void network_service(void) {
-    static absolute_time_t next_link, dhcp_retry_at;
+    static absolute_time_t next_link, dhcp_retry_at, next_open;
+    chip_check();
+    bool dhcp = s_ip_mode == PSHB_IP_DHCP;
     if (time_reached(next_link)) {
         next_link = make_timeout_time_ms(LINK_POLL_MS);
         bool link = wizphy_getphylink() == PHY_LINK_ON;
         if (!link && s_state != C1_NO_LINK) {
             printf("net: link down\n");
-            if (s_state != C1_READY || s_ip_mode == PSHB_IP_DHCP) DHCP_stop();
+            // A valid lease is kept (its client paused): the cable may be
+            // back in a moment, or the switch only renegotiated.
+            if (dhcp && !lease_valid()) DHCP_stop();
             atomic_store(&g_net.ip, 0);
             set_state(C1_NO_LINK);
         } else if (link && s_state == C1_NO_LINK) {
             printf("net: link up\n");
-            start_addressing();
+            if (dhcp && lease_valid()) {
+                // Ask the server right away whether the address still holds
+                // (on another network its server answers NAK and the client
+                // starts over).
+                pshb_dhcp_renew_now();
+                publish_ip("DHCP lease kept");
+                set_state(C1_READY);
+            } else {
+                start_addressing();
+            }
         }
+    }
+
+    // The input socket did not open (the chip refused it): try again, the
+    // app cannot reach the board without it.
+    if (s_state == C1_READY && !s_udp_open && time_reached(next_open)) {
+        next_open = make_timeout_time_ms(UDP_REOPEN_MS);
+        udp_open(g_settings.udp_port);
     }
 
     if (s_state == C1_DHCP_WAIT && time_reached(dhcp_retry_at)) {
@@ -166,23 +237,33 @@ static void network_service(void) {
     }
 
     static absolute_time_t next_dhcp;
-    if ((s_state == C1_DHCP || s_state == C1_READY) && s_ip_mode == PSHB_IP_DHCP &&
-        time_reached(next_dhcp)) {
+    if ((s_state == C1_DHCP || s_state == C1_READY) && dhcp && time_reached(next_dhcp)) {
         next_dhcp = make_timeout_time_us(DHCP_POLL_US);
         uint8_t r = DHCP_run();
+        lease_track();
         if (s_dhcp_assigned) {
             s_dhcp_assigned = false;
             publish_ip("DHCP lease");
             if (!s_udp_open) udp_open(g_settings.udp_port);
             set_state(C1_READY);
         }
-        if (s_dhcp_conflict || r == DHCP_FAILED) {
+        if (s_dhcp_conflict || (r == DHCP_FAILED && !lease_valid())) {
             printf("net: DHCP %s, retrying\n", s_dhcp_conflict ? "conflict" : "failed");
             s_dhcp_conflict = false;
+            s_lease = false;
             DHCP_stop();
             atomic_store(&g_net.ip, 0);
             dhcp_retry_at = make_timeout_time_ms(DHCP_RETRY_MS);
             set_state(C1_DHCP_WAIT);
+        } else if (r == DHCP_FAILED) {
+            // The client asks again on its own (DISCOVER).
+            printf("net: no DHCP answer, the address stays until its lease ends\n");
+        } else if (s_lease && !lease_valid()) {
+            printf("net: DHCP lease ended\n");
+            s_lease = false;
+            atomic_store(&g_net.ip, 0);
+            DHCP_init(W5500_SOCK_DHCP, s_dhcp_buf);  // clears the address
+            set_state(C1_DHCP);
         }
     }
 }

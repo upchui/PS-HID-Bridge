@@ -203,6 +203,7 @@ static void net_service(void) {
     bool enable = atomic_load(&g_net.udp_enable);
     if (enable != active) {
         active = enable;
+        if (active) w5500_udp_reset(W5500_SOCK_UDP);  // e.g. after the chip was set up again
         atomic_store(&g_net.udp_active, active);
         // The socket was (re)opened: look once, whatever INTn says.
         s_rx_more = active;

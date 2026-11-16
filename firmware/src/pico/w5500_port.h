@@ -41,6 +41,17 @@
 // does not answer (VERSIONR != 0x04).
 bool w5500_port_init(bool spi_fast);
 
+// The chip lost its setup: it reset by itself (brown-out, ESD) and its MAC
+// address register no longer holds ours. Core 1 checks every few seconds.
+bool w5500_chip_lost(void);
+// Set the chip up (again): buffers, MAC, retry timing, no interrupts. The
+// sockets and addresses are core 1's to restore.
+bool w5500_chip_setup(void);
+
+// Socket `sn` was (re)opened: forget a send or receive still pending from
+// its last life (core 0 for socket 1, before using it again).
+void w5500_udp_reset(uint8_t sn);
+
 void w5500_get_mac(uint8_t mac[6]);
 
 // INTn is active low; asserted while socket 1 has unacknowledged RECV.
