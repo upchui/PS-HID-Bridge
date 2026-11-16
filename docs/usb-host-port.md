@@ -2,7 +2,7 @@
 
 The board's own USB port is a USB device: it is the keyboard and mouse the PlayStation sees. A second USB port, where the board is the **host** (for a controller, a keyboard or any other USB device), can be added on two GPIO pins and driven in software by [Pico-PIO-USB](https://github.com/sekigon-gonnoc/Pico-PIO-USB).
 
-The firmware does not use such a port. In November 2026 one was built and tested for a "controller mode": the board presents a DualSense to a PS5, and a real DualSense on the second port answers the console's authentication. That was stopped after the passthrough worked in the PS5's menus. This page keeps everything learned, so it can be picked up again. The code is kept under the git tag `controller-mode-experiment` (see [The code](#the-code)).
+The firmware does not use such a port. In November 2026 one was built and tested for a "controller mode": the board presents a DualSense to a PS5, and a real DualSense on the second port answers the console's authentication. That was stopped after the passthrough worked in the PS5's menus. This page keeps everything learned, so it can be picked up again. The code is kept under the git tag [`controller-mode-experiment`](https://github.com/upchui/PS-HID-Bridge/releases/tag/controller-mode-experiment) (see [The code](#the-code)).
 
 - [Hardware](#hardware)
 - [The DualSense on this port](#the-dualsense-on-this-port)
@@ -319,7 +319,7 @@ Without a UART adapter, the test images logged over the network:
 
 ## The code
 
-Everything is in the git tag **`controller-mode-experiment`** (10 commits on top of main as of November 2026; the branch itself was deleted):
+Everything is in the git tag **[`controller-mode-experiment`](https://github.com/upchui/PS-HID-Bridge/releases/tag/controller-mode-experiment)** (10 commits on top of main as of November 2026; the branch itself was deleted):
 
 ```sh
 git show controller-mode-experiment --stat          # what is in it
@@ -336,4 +336,4 @@ The files:
 | `firmware/src/core/logbuf.c`, `ds_desc.c` | portable parts, with tests in `firmware/tests/` |
 | `docs/controller-mode.md` | the test plan and checklists |
 
-The tag exists only locally until it is pushed (`git push origin controller-mode-experiment`).
+On GitHub: <https://github.com/upchui/PS-HID-Bridge/releases/tag/controller-mode-experiment>
