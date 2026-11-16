@@ -4,6 +4,9 @@
 // Threading rules (see also core1.c):
 //  * Every SPI transaction is serialised by a recursive mutex registered as
 //    ioLibrary critical section (never a spinlock: it would mask USB IRQs).
+//  * Core 1's long transfers are split into pieces (cmake/iolibrary.cmake),
+//    and while core 0 waits for the bus core 1 starts no new piece: core 0
+//    waits at most for one piece (PSHB_W5500_PIECE bytes).
 //  * Core 1 performs all socket()/close() calls (socket.c has globals).
 //  * Core 0 touches socket 1 only through w5500_udp_recv()/w5500_udp_send_nb(),
 //    which use raw register/buffer access and no socket.c state.
@@ -50,8 +53,8 @@ void w5500_core0_spi_reset(void);
 uint32_t w5500_spi_hz(void);
 
 // Hold the SPI bus across several calls (recursive; the ioLibrary calls
-// inside still work). Core 0 takes it once per receive round, so it waits
-// for core 1 at most once instead of before every register access.
+// inside still work). Core 0 only: it takes it once per receive round, with
+// priority over core 1's next piece.
 void w5500_lock(void);
 void w5500_unlock(void);
 

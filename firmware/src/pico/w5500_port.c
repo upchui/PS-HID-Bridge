@@ -37,8 +37,32 @@ static uint32_t s_cr_busy;  // Sn_CR still busy before a command (timing image)
 
 // ---------------------------------------------------------------- ioLibrary callbacks
 
-static void cris_enter(void) { recursive_mutex_enter_blocking(&s_mutex); }
-static void cris_exit(void) { recursive_mutex_exit(&s_mutex); }
+// Bus priority for core 0 (the input path). Core 1 moves long transfers in
+// pieces (cmake/iolibrary.cmake) and, before each one, gives way while core
+// 0 waits for the bus: core 0 then waits at most for the piece in progress.
+// Only before its outermost access: core 1 must not wait while it already
+// holds the bus (core 0 would wait for it in turn).
+static volatile bool s_core0_wants;
+static int s_core1_depth;
+
+static void cris_enter(void) {
+    if (get_core_num() != 0) {
+        if (s_core1_depth == 0) {
+            while (s_core0_wants) {
+                tight_loop_contents();
+            }
+        }
+        recursive_mutex_enter_blocking(&s_mutex);
+        s_core1_depth++;
+        return;
+    }
+    recursive_mutex_enter_blocking(&s_mutex);
+}
+
+static void cris_exit(void) {
+    if (get_core_num() != 0) s_core1_depth--;
+    recursive_mutex_exit(&s_mutex);
+}
 static void cs_select(void) {
     if (get_core_num() == 0) s_core0_spi++;
     gpio_put(W5500_PIN_CS, 0);
@@ -139,7 +163,9 @@ void w5500_get_mac(uint8_t mac[6]) {
 }
 
 void w5500_lock(void) {
+    s_core0_wants = true;  // core 1 starts no new piece meanwhile
     recursive_mutex_enter_blocking(&s_mutex);
+    s_core0_wants = false;
 }
 
 void w5500_unlock(void) {
