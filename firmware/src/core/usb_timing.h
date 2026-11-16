@@ -14,7 +14,9 @@
 //    for the fetch after it (the main loop was busy) -- makes it longer;
 //  * a long run of fetches without one makes it shorter, but never below
 //    the floor: the longest time the main loop was away from USB lately
-//    (receiving and decrypting a datagram) plus a margin.
+//    plus a margin. Receiving and decrypting a datagram does not count
+//    there: before it starts, a report due meanwhile is armed early
+//    (usb_timing_due_within).
 // A report the host fetches a frame later than planned although it was
 // armed in time means the host skipped a poll; that is counted, but the
 // lead stays (a longer lead could not help, it only adds latency: on
@@ -26,8 +28,8 @@
 #include <stdint.h>
 
 #define USB_TIMING_PERIOD_US 1000
-#define USB_TIMING_LEAD_START_US 150
-#define USB_TIMING_LEAD_MIN_US 60   // lowest floor
+#define USB_TIMING_LEAD_START_US 80
+#define USB_TIMING_LEAD_MIN_US 40   // lowest floor
 #define USB_TIMING_LEAD_MAX_US 500
 #define USB_TIMING_LEAD_UP_US 50
 #define USB_TIMING_LEAD_DOWN_US 10
@@ -52,6 +54,9 @@ void usb_timing_reset(usb_timing_t *t);
 uint64_t usb_timing_next_fetch(const usb_timing_t *t, uint64_t now);
 // True if a report should be armed now (always true while the phase is unknown).
 bool usb_timing_should_arm(const usb_timing_t *t, uint64_t now);
+// True if a report falls due within `within_us` from now: work that takes
+// that long (a datagram) would make it late, so it is armed before.
+bool usb_timing_due_within(const usb_timing_t *t, uint64_t now, uint32_t within_us);
 // A report was armed at `now`.
 void usb_timing_armed(usb_timing_t *t, uint64_t now);
 // The host fetched the armed report at `now`. Returns true if that was a

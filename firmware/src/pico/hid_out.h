@@ -12,6 +12,12 @@ void hid_out_init(input_state_t *state);
 
 // Send pending reports if the endpoints are free. Call after tud_task().
 void hid_out_service(void);
+// The same before work that keeps the main loop away for up to `ahead_us`
+// (receiving and decrypting a datagram): a mouse report that falls due
+// meanwhile is armed now. Afterwards hid_out_gap_restart(): that work is no
+// gap the lead has to cover.
+void hid_out_service_ahead(uint32_t ahead_us);
+void hid_out_gap_restart(void);
 
 // Input that arrived at `arrival_us` was applied to the input state (for
 // the latency diagnostics: arrival -> report fetched by the host).

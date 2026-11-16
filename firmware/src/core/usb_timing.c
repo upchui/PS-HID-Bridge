@@ -19,8 +19,12 @@ uint64_t usb_timing_next_fetch(const usb_timing_t *t, uint64_t now) {
 }
 
 bool usb_timing_should_arm(const usb_timing_t *t, uint64_t now) {
+    return usb_timing_due_within(t, now, 0);
+}
+
+bool usb_timing_due_within(const usb_timing_t *t, uint64_t now, uint32_t within_us) {
     uint64_t next = usb_timing_next_fetch(t, now);
-    return !next || now + t->lead_us >= next;
+    return !next || now + within_us + t->lead_us >= next;
 }
 
 void usb_timing_armed(usb_timing_t *t, uint64_t now) {

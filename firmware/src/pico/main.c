@@ -177,6 +177,11 @@ static void rx_early(void *ctx, const uint8_t *payload, uint16_t len) {
 // reports): a burst of datagrams (WLAN delivers them in bunches) must not
 // keep it away for long.
 #define RX_PER_ROUND 4
+// About the longest receiving and decrypting a datagram takes (bus wait,
+// SPI, tag check): a mouse report due within that time is armed before
+// (hid_out_service_ahead), so the lead before the host's fetch need not
+// cover it.
+#define RX_BUDGET_US 100
 
 // Datagrams known to be waiting that raise no interrupt any more (it was
 // acknowledged at the start of their round), and since when they wait.
@@ -213,6 +218,7 @@ static void net_service(void) {
         edge = noticed;
     }
     timing_pin(PSHB_TIMING_PIN_RX, true);
+    hid_out_service_ahead(RX_BUDGET_US);
 
     // One lock for the whole round: core 1 cannot slip in between the
     // register accesses of a datagram. The interrupt is acknowledged before
@@ -233,8 +239,8 @@ static void net_service(void) {
     s_rx_more = false;
     for (int i = 0; i < RX_PER_ROUND; i++) {
         // A mouse report that fell due while the previous datagram was
-        // processed goes out first.
-        if (i > 0) hid_out_service();
+        // processed goes out first, and one due during the next.
+        if (i > 0) hid_out_service_ahead(RX_BUDGET_US);
         uint8_t pkt[PSHB_MAX_PACKET_LEN];
         uint8_t ip[4];
         uint16_t port;
@@ -272,6 +278,7 @@ static void net_service(void) {
             }
             s_activity_until = make_timeout_time_ms(20);
         }
+        hid_out_gap_restart();  // guarded above: no gap for the lead's floor
         if (left < 8) break;  // nothing more known; a new datagram raises INTn again
         if (i == RX_PER_ROUND - 1) {
             // More is waiting: next loop, right after serving USB.

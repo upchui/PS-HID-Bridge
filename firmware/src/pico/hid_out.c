@@ -29,8 +29,9 @@ static usb_timing_t s_mouse_timing;
 static uint64_t s_mouse_armed_at, s_mouse_last_fetch;
 
 // Floor for the lead: the longest the main loop stayed away from here in the
-// last second (that is mostly receiving and decrypting a datagram), plus a
-// margin: a report due meanwhile is armed that much late.
+// last second, plus a margin: a report due meanwhile is armed that much late.
+// Receiving and decrypting a datagram is not counted (hid_out_service_ahead
+// before it, hid_out_gap_restart after it).
 #define FLOOR_MARGIN_US 20
 #define FLOOR_WINDOW_US 1000000
 static uint64_t s_last_service, s_window_start;
@@ -48,6 +49,10 @@ static void track_loop_gap(uint64_t now) {
         s_window_start = now;
         s_window_max_gap = 0;
     }
+}
+
+void hid_out_gap_restart(void) {
+    if (s_last_service) s_last_service = time_us_64();
 }
 
 void hid_out_init(input_state_t *state) {
@@ -75,7 +80,17 @@ static void armed(uint8_t itf, bool still_pending) {
     if (!still_pending) s_pending_since[itf] = 0;
 }
 
+static void service(uint32_t ahead_us);
+
 void hid_out_service(void) {
+    service(0);
+}
+
+void hid_out_service_ahead(uint32_t ahead_us) {
+    service(ahead_us);
+}
+
+static void service(uint32_t ahead_us) {
     if (!s_mounted || tud_suspended()) {
         // Nobody is listening: no motion piling up, and only the current
         // state goes out once the host is back (no replay of old states).
@@ -110,7 +125,7 @@ void hid_out_service(void) {
     uint64_t now = time_us_64();
     track_loop_gap(now);
     if (input_state_mouse_pending(s_state) && tud_hid_n_ready(ITF_MOUSE) &&
-        (!PSHB_MOUSE_LATE_ARM || usb_timing_should_arm(&s_mouse_timing, now))) {
+        (!PSHB_MOUSE_LATE_ARM || usb_timing_due_within(&s_mouse_timing, now, ahead_us))) {
         uint8_t report[PSHB_MOUSE_REPORT_LEN];
         size_t len = input_state_take_mouse_report(s_state, report, s_mouse_boot);
         if (PSHB_MOUSE_LATE_ARM &&

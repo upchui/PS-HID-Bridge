@@ -85,6 +85,19 @@ TEST(late_means_waiting_since_before_the_previous_window) {
     CHECK(!usb_timing_was_late(&t, arm, 0, T0));
 }
 
+TEST(due_within_looks_ahead) {
+    usb_timing_t t;
+    usb_timing_init(&t);
+    CHECK(usb_timing_due_within(&t, T0, 100));  // phase unknown: always
+    usb_timing_fetched(&t, T0);
+    uint64_t arm = T0 + P - t.lead_us;  // when it should be armed
+    CHECK(!usb_timing_due_within(&t, arm - 101, 100));
+    CHECK(usb_timing_due_within(&t, arm - 100, 100));
+    CHECK(usb_timing_due_within(&t, arm - 1, 100));
+    CHECK(!usb_timing_should_arm(&t, arm - 1));  // not yet by itself
+    CHECK(usb_timing_should_arm(&t, arm));
+}
+
 TEST(floor_limits_the_lead) {
     usb_timing_t t;
     usb_timing_init(&t);
@@ -164,6 +177,7 @@ int main(void) {
     RUN(host_skipping_a_poll_keeps_the_lead);
     RUN(late_arming_makes_the_lead_longer);
     RUN(late_means_waiting_since_before_the_previous_window);
+    RUN(due_within_looks_ahead);
     RUN(floor_limits_the_lead);
     RUN(long_run_of_hits_makes_the_lead_shorter);
     RUN(follows_clock_drift);
