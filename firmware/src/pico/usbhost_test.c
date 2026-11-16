@@ -10,8 +10,11 @@
 // a problem (see the log), e.g. D+/D- look swapped.
 //
 // Commands (tools/boardlog.py IP -c CMD): "status", "swap" (start again with
-// D+ and D- swapped, for a socket wired the other way round), "restart"
-// (start this test image again), "back" (restart into the normal firmware).
+// D+ and D- swapped, for a socket wired the other way round), "watch" (start
+// again without the USB host and log every change of D+ and D-: does a
+// plugged-in device pull a line up at all?), "host" (back from "watch"),
+// "restart" (start this test image again), "back" (restart into the normal
+// firmware).
 //
 // Installed over the network (pshb-cli update --firmware --file ...), it
 // runs on trial and never confirms itself: any reset or power cut returns
@@ -42,12 +45,14 @@
 
 #define ORIENT_SCRATCH 1
 #define ORIENT_SWAPPED 0x50415753u  // "SWAP"
+#define MODE_SCRATCH   2
+#define MODE_WATCH     0x48435457u  // "WTCH"
 #define VSYS_ADC_PIN   29
 #define VSYS_ADC_INPUT 3
 #define VBUS_SENSE_PIN 24
 
 static pio_usb_configuration_t s_host_cfg = PIO_USB_DEFAULT_CONFIG;
-static bool s_swapped;
+static bool s_swapped, s_watch;
 static uint s_pin_dp, s_pin_dm;
 
 // Shared between the cores (core 1 writes, core 0 reads for LED/status).
@@ -255,6 +260,10 @@ static void on_command(const char *cmd) {
         watchdog_hw->scratch[ORIENT_SCRATCH] = s_swapped ? 0 : ORIENT_SWAPPED;
         printf("starting again with D+ on GP%u and D- on GP%u\n", s_pin_dm, s_pin_dp);
         restart_test_image();
+    } else if (strcmp(cmd, "watch") == 0 || strcmp(cmd, "host") == 0) {
+        watchdog_hw->scratch[MODE_SCRATCH] = cmd[0] == 'w' ? MODE_WATCH : 0;
+        printf("starting again %s\n", cmd[0] == 'w' ? "without the USB host, watching D+ and D-" : "with the USB host");
+        restart_test_image();
     } else if (strcmp(cmd, "restart") == 0) {
         restart_test_image();
     } else if (strcmp(cmd, "back") == 0) {
@@ -263,7 +272,7 @@ static void on_command(const char *cmd) {
         printf("status: device %u, %lu reports, D+ GP%u, D- GP%u%s\n", s_dev_addr, (unsigned long)s_reports,
                s_pin_dp, s_pin_dm, s_swapped ? " (swapped)" : "");
     } else {
-        printf("unknown command (status, swap, restart, back)\n");
+        printf("unknown command (status, swap, watch, host, restart, back)\n");
     }
 }
 
@@ -317,6 +326,31 @@ static void pin_check(uint dp, uint dm) {
         printf("pins: D- pulled up: a low-speed device -- or D+/D- swapped\n");
     else if (!drained_p && !drained_m)
         printf("pins: both low: nothing attached\n");
+}
+
+// "watch": no USB host; every change of the lines (pull-downs on, E9
+// drained), stable for 3 samples 2 ms apart.
+static void watch_service(void) {
+    static uint64_t next;
+    static int last = -1, candidate = -1, same;
+    uint64_t now = time_us_64();
+    if (now < next) return;
+    next = now + 2000;
+    int state = read_drained(s_pin_dp) | (read_drained(s_pin_dm) << 1);
+    if (state != candidate) {
+        candidate = state;
+        same = 0;
+        return;
+    }
+    if (++same < 3 || state == last) return;
+    last = state;
+    static const char *const meaning[] = {
+        "idle: nothing attached (or no power on the socket)",
+        "D+ high: a full-speed device attached",
+        "D- high: a low-speed device attached (or D+/D- swapped)",
+        "both high: wiring fault",
+    };
+    printf("watch: D+ (GP%u) %d, D- (GP%u) %d -- %s\n", s_pin_dp, state & 1, s_pin_dm, state >> 1, meaning[state]);
 }
 
 // Line level while the host owns the pins: Pico-PIO-USB inverts their inputs
@@ -416,6 +450,7 @@ int main(void) {
     bool by_watchdog = watchdog_caused_reboot();
     netlog_init();
     s_swapped = watchdog_hw->scratch[ORIENT_SCRATCH] == ORIENT_SWAPPED;
+    s_watch = watchdog_hw->scratch[MODE_SCRATCH] == MODE_WATCH;
     s_pin_dp = s_swapped ? PSHB_USBHOST_PIN_DP + 1 : PSHB_USBHOST_PIN_DP;
     s_pin_dm = s_swapped ? PSHB_USBHOST_PIN_DP : PSHB_USBHOST_PIN_DP + 1;
 
@@ -442,6 +477,20 @@ int main(void) {
     netlog_on_command(on_command);
 
     pin_check(s_pin_dp, s_pin_dm);
+    if (s_watch) {
+        printf("mode: watch -- no USB host; every change of D+ and D- is logged. Plug devices in and out; "
+               "\"host\" switches back.\n");
+        gpio_pull_down(s_pin_dp);
+        gpio_pull_down(s_pin_dm);
+        watchdog_enable(4000, true);
+        while (true) {
+            watchdog_update();
+            netlog_service();
+            watch_service();
+            power_service();
+            gpio_put(PICO_DEFAULT_LED_PIN, (time_us_64() / 100000) % 10 == 0);  // short flash every second
+        }
+    }
 
     // PIO-USB claims its DMA channel by number: one the W5500 left free.
     int ch = dma_claim_unused_channel(true);
