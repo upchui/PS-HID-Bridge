@@ -20,6 +20,10 @@ fn main() {
             "qml/InputPage.qml",
             "qml/TriggersPage.qml",
             "qml/BoardPage.qml",
+            "qml/LatencyPage.qml",
+            "qml/StageBar.qml",
+            "qml/RangeChart.qml",
+            "qml/LeadMeter.qml",
             "qml/FirmwarePage.qml",
             "qml/WizardPage.qml",
             // building blocks

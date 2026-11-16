@@ -25,6 +25,21 @@ QtObject {
     readonly property color warn: dark ? "#e0a83a" : "#9a6200"
     readonly property color bad: dark ? "#ff7b72" : "#b3261e"
 
+    // Chart series, in this order (checked with the dataviz palette
+    // validator against `surface` in both modes: CVD separation, lightness,
+    // contrast).
+    readonly property var series: dark ? ["#3987e5", "#d95926", "#199e70", "#c98500"]
+                                       : ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]
+    function onSeries(i) {
+        // White or near-black, whichever stands out more from the fill.
+        const c = Qt.lighter(series[i % series.length], 1.0);
+        const lin = v => v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        const l = 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+        return 1.05 / (l + 0.05) >= (l + 0.05) / 0.0535 ? "#ffffff" : "#0b0b0b";
+    }
+    /// Gridlines and axis rules: one step off the surface.
+    readonly property color grid: dark ? "#2a313d" : "#e8ecf2"
+
     readonly property int radius: 8
     readonly property int gap: 12
     readonly property int pad: 16
@@ -33,7 +48,8 @@ QtObject {
     readonly property real fontSize: Qt.application.font.pointSize > 0 ? Qt.application.font.pointSize : 10
 
     function tint(c, alpha) {
-        return Qt.rgba(c.r, c.g, c.b, alpha === undefined ? 0.15 : alpha);
+        const k = Qt.lighter(c, 1.0);  // also takes a colour given as text ("#2a78d6")
+        return Qt.rgba(k.r, k.g, k.b, alpha === undefined ? 0.15 : alpha);
     }
 
     /// Colour for a state: "ok", "warn", "bad", "accent" or anything else (muted).

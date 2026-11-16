@@ -21,7 +21,8 @@ W5500 INTn falls ──► noticed by core 0 ──► SPI bus acquired ──�
 
 Every stage is a histogram on the board (`time_us_64()`, 1 µs; min, median,
 P99, max; percentiles are bucket upper edges), shown under "Latency of the
-input path" in the web interface and in `GET /api/diag`.
+input path" in the web interface, on the app's Latency page and in
+`GET /api/diag`.
 
 ## Method
 
@@ -98,7 +99,7 @@ packet → ready median 52 µs, first datagram of a round median 50 µs, P99
 ### Clock speeds
 
 Both clocks are settings (web interface → System → Clock speed, the app's
-Board page, `pshb-cli board --cpu 150|200 --spi standard|fast`); the board
+Latency page, `pshb-cli board --cpu 150|200 --spi standard|fast`); the board
 restarts to apply them. 200 MHz is beyond the RP2350's rating: a start at
 200 MHz is on trial for 10 s under the hardware watchdog, and if it hangs,
 the next start runs at 150 MHz and stores that. At 200 MHz the peripheral

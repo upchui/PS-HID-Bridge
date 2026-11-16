@@ -88,6 +88,14 @@ pub mod qobject {
         #[qproperty(bool, app_updated)]
         #[qproperty(bool, update_busy)]
         #[qproperty(QString, update_status)]
+        /// The board's status, latency diagnostics and clock speeds as JSON
+        /// {"status": …, "diag": …, "clock": …} (signed requests, see
+        /// refresh_board_info); "" until the first answer.
+        #[qproperty(QString, board_info_json)]
+        #[qproperty(QString, board_info_error)]
+        #[qproperty(bool, board_info_busy)]
+        #[qproperty(bool, clock_busy)]
+        #[qproperty(QString, clock_message)]
         #[qproperty(bool, usb_board_found)]
         #[qproperty(bool, usb_busy)]
         #[qproperty(QString, usb_status)]
@@ -168,6 +176,17 @@ pub mod qobject {
         /// Install the newest firmware on the board (the bridge must be off).
         #[qinvokable]
         fn update_board(self: Pin<&mut AppController>);
+
+        /// Fetch the board's status, diagnostics and clock speeds (in the
+        /// background; ignored while a fetch is running).
+        #[qinvokable]
+        fn refresh_board_info(self: Pin<&mut AppController>);
+        /// Start the board's latency statistics over.
+        #[qinvokable]
+        fn reset_board_diag(self: Pin<&mut AppController>);
+        /// Set the board's clock speeds (CPU 150 or 200 MHz); it restarts.
+        #[qinvokable]
+        fn set_board_clock(self: Pin<&mut AppController>, cpu_mhz: i32, spi_fast: bool);
 
         /// Look for the board's USB boot drive (BOOTSEL) every second while on.
         #[qinvokable]
@@ -251,6 +270,11 @@ pub struct AppControllerRust {
     app_updated: bool,
     update_busy: bool,
     update_status: QString,
+    board_info_json: QString,
+    board_info_error: QString,
+    board_info_busy: bool,
+    clock_busy: bool,
+    clock_message: QString,
     /// Newest release found by the last check.
     latest: Option<Release>,
     /// Version a notification was shown for (once per version).
@@ -353,6 +377,11 @@ impl Default for AppControllerRust {
             app_updated: false,
             update_busy: false,
             update_status: QString::default(),
+            board_info_json: QString::default(),
+            board_info_error: QString::default(),
+            board_info_busy: false,
+            clock_busy: false,
+            clock_message: QString::default(),
             latest: None,
             notified: None,
             board_expected: None,
@@ -1089,6 +1118,94 @@ impl qobject::AppController {
                 self.as_mut().restart_service();
             }
         }
+    }
+
+    /// Board address and key for the board's web API.
+    fn board_api(&self) -> Result<update::BoardApi, String> {
+        let key = config::load_psk(&config::psk_path())?;
+        let addr = resolve(&self.config_ref().board)?;
+        Ok(update::BoardApi::new(
+            &addr.ip().to_string(),
+            BOARD_HTTP_PORT,
+            &key,
+        ))
+    }
+
+    pub fn refresh_board_info(mut self: Pin<&mut Self>) {
+        if *self.board_info_busy() {
+            return;
+        }
+        let board = self.config_ref().board.clone();
+        if board.is_empty() {
+            return;
+        }
+        self.as_mut().set_board_info_busy(true);
+        let done = self.qt_thread();
+        let api = self.board_api();
+        let _ = thread::Builder::new()
+            .name("pshb-board-info".into())
+            .spawn(move || {
+                let result = api.and_then(|api| {
+                    let clock = api.clock()?;
+                    let diag = api.diag()?;
+                    let status = api.status()?;
+                    Ok(serde_json::json!({ "status": status, "diag": diag, "clock": clock }).to_string())
+                });
+                let _ = done.queue(move |mut obj| {
+                    obj.as_mut().set_board_info_busy(false);
+                    match result {
+                        Ok(json) => {
+                            obj.as_mut().set_board_info_json(QString::from(&json));
+                            obj.as_mut().set_board_info_error(QString::default());
+                        }
+                        Err(e) => obj.as_mut().set_board_info_error(QString::from(&e)),
+                    }
+                });
+            });
+    }
+
+    pub fn reset_board_diag(mut self: Pin<&mut Self>) {
+        let done = self.qt_thread();
+        let api = self.board_api();
+        let _ = thread::Builder::new()
+            .name("pshb-board-reset".into())
+            .spawn(move || {
+                let result = api.and_then(|api| api.diag_reset());
+                let _ = done.queue(move |mut obj| {
+                    if let Err(e) = result {
+                        obj.as_mut().set_board_info_error(QString::from(&e));
+                    }
+                    obj.as_mut().refresh_board_info();
+                });
+            });
+    }
+
+    pub fn set_board_clock(mut self: Pin<&mut Self>, cpu_mhz: i32, spi_fast: bool) {
+        if *self.clock_busy() {
+            return;
+        }
+        if cpu_mhz != 150 && cpu_mhz != 200 {
+            return;
+        }
+        self.as_mut().set_clock_busy(true);
+        self.as_mut()
+            .set_clock_message(QString::from("Storing the clock speeds …"));
+        let done = self.qt_thread();
+        let api = self.board_api();
+        let _ = thread::Builder::new()
+            .name("pshb-board-clock".into())
+            .spawn(move || {
+                let result = api.and_then(|api| api.set_clock(cpu_mhz as u32, spi_fast));
+                let _ = done.queue(move |mut obj| {
+                    obj.as_mut().set_clock_busy(false);
+                    let text = match result {
+                        Ok(true) => "Stored. The board restarts and reconnects in a few seconds.".to_string(),
+                        Ok(false) => "Nothing changed.".to_string(),
+                        Err(e) => e,
+                    };
+                    obj.as_mut().set_clock_message(QString::from(&text));
+                });
+            });
     }
 
     pub fn update_board(mut self: Pin<&mut Self>) {

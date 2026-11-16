@@ -9,7 +9,12 @@ Controls.ApplicationWindow {
 
     title: "PS HID Bridge"
     width: Kirigami.Units.gridUnit * 56
-    height: Kirigami.Units.gridUnit * 40
+    // --screenshot-height N: taller window, so a screenshot shows a whole page.
+    height: {
+        const args = Qt.application.arguments;
+        const i = args.indexOf("--screenshot-height");
+        return i >= 0 && i + 1 < args.length ? Number(args[i + 1]) : Kirigami.Units.gridUnit * 40;
+    }
     minimumWidth: Kirigami.Units.gridUnit * 34
     minimumHeight: Kirigami.Units.gridUnit * 26
     visible: true
@@ -49,6 +54,7 @@ Controls.ApplicationWindow {
         { name: "input", text: "Input", icon: "input" },
         { name: "triggers", text: "Triggers", icon: "bolt" },
         { name: "board", text: "Board", icon: "board" },
+        { name: "latency", text: "Latency", icon: "latency" },
         { name: "firmware", text: "Firmware & updates", icon: "update" }
     ]
     readonly property var pageNames: pages.map(p => p.name)
@@ -57,6 +63,7 @@ Controls.ApplicationWindow {
         "input": inputPage,
         "triggers": triggersPage,
         "board": boardPage,
+        "latency": latencyPage,
         "firmware": firmwarePage,
         "wizard": wizardPage
     })
@@ -76,6 +83,7 @@ Controls.ApplicationWindow {
     Component { id: inputPage; InputPage {} }
     Component { id: triggersPage; TriggersPage {} }
     Component { id: boardPage; BoardPage {} }
+    Component { id: latencyPage; LatencyPage {} }
     Component { id: firmwarePage; FirmwarePage {} }
     Component { id: wizardPage; WizardPage { onFinished: root.show("status") } }
 
