@@ -290,9 +290,13 @@ AppPage {
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                color: AppController.adapterDelayIface !== "" ? Style.stateColor("warn") : Style.muted
-                text: AppController.adapterDelayIface !== ""
-                      ? `${AppController.adapterDelayIface} holds every packet back up to about ${AppController.adapterDelayMs.toFixed(1)} ms (USB adapter, cdc_ncm)`
+                color: AppController.adapterMode === "delaying" ? Style.stateColor("warn") : Style.muted
+                text: AppController.adapterMode === "delaying"
+                      ? `${AppController.adapterIface} holds every packet back up to about ${AppController.adapterDelayMs.toFixed(1)} ms (USB adapter, cdc_ncm)`
+                      : AppController.adapterMode === "managed"
+                      ? (AppController.adapterAtOnceNow ? `${AppController.adapterIface} sends at once now (the bridge is on)`
+                         : `${AppController.adapterIface} sends at once while the bridge is on; bundles packets otherwise (up to ${AppController.adapterDelayMs.toFixed(1)} ms)`)
+                      : AppController.adapterMode === "fixed" ? `${AppController.adapterIface} sends at once (set outside the app)`
                       : AppController.connected ? "sends packets at once" : "–"
             }
             Controls.Label { text: "Processor sleep"; color: Style.text }
@@ -324,7 +328,7 @@ AppPage {
         }
         RowLayout {
             id: setupRow
-            readonly property bool needed: AppController.adapterDelayIface !== "" || AppController.cpuWakeState === "not_permitted"
+            readonly property bool needed: AppController.adapterMode === "delaying" || AppController.cpuWakeState === "not_permitted"
             visible: needed || AppController.latencyRuleInstalled || AppController.latencySetupMessage !== ""
             spacing: 12
             AppButton {
@@ -346,8 +350,8 @@ AppPage {
                 wrapMode: Text.WordWrap
                 color: Style.muted
                 text: AppController.latencySetupMessage !== "" ? AppController.latencySetupMessage
-                      : setupRow.needed ? "Asks for the administrator password once and installs a udev rule: USB network adapters send every packet at once, and this user may keep the processor awake."
-                      : "Set up through /etc/udev/rules.d/70-ps-hid-bridge-latency.rules. “Undo” removes it: network adapters bundle packets again, and the permission for the processor goes away (administrator password)."
+                      : setupRow.needed ? "Asks for the administrator password once and installs a udev rule: this user may then switch the bundling of USB network adapters (the app does so only while the bridge is on, without a password) and, where needed, keep the processor awake."
+                      : "Set up through /etc/udev/rules.d/70-ps-hid-bridge-latency.rules. “Undo” removes it: the network adapter bundles packets again and the app no longer switches it (administrator password)."
             }
         }
     }

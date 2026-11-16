@@ -312,6 +312,12 @@ pub fn counter_path() -> PathBuf {
     state_dir().join("counter")
 }
 
+/// Notes a network adapter the app switched to "send at once", so that it
+/// is put back after a crash (see crate::lowlat::AdapterTimer).
+pub fn adapter_state_path() -> PathBuf {
+    state_dir().join("adapter-timer")
+}
+
 /// The board's UDP address from the setting: "192.168.1.50", a host name,
 /// either with ":port", an IPv6 address bare or as "[fe80::1]:45045". Host
 /// names are looked up (that may take a while).

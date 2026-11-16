@@ -103,10 +103,15 @@ pub mod qobject {
         #[qproperty(bool, usb_board_found)]
         #[qproperty(bool, usb_busy)]
         #[qproperty(QString, usb_status)]
-        /// Network adapter towards the board that holds packets back ("" =
-        /// none) and how long at most (ms).
-        #[qproperty(QString, adapter_delay_iface)]
+        /// USB network adapter towards the board that can bundle packets
+        /// ("" = none), how long it holds a packet back at most when it does
+        /// (ms), and who decides: "managed" (the app, only while the bridge
+        /// is on), "delaying" (bundles, the app may not switch it) or
+        /// "fixed" (sends at once, set outside the app).
+        #[qproperty(QString, adapter_iface)]
         #[qproperty(f64, adapter_delay_ms)]
+        #[qproperty(QString, adapter_mode)]
+        #[qproperty(bool, adapter_at_once_now)]
         /// "disabled", "held", "ready", "not_permitted" or "unavailable"
         /// (see pshb_core::lowlat::CpuWakeState).
         #[qproperty(QString, cpu_wake_state)]
@@ -330,8 +335,10 @@ pub struct AppControllerRust {
     usb_watching: Arc<AtomicBool>,
     usb_cancel: Arc<AtomicBool>,
 
-    adapter_delay_iface: QString,
+    adapter_iface: QString,
     adapter_delay_ms: f64,
+    adapter_mode: QString,
+    adapter_at_once_now: bool,
     cpu_wake_state: QString,
     keep_cpu_awake: bool,
     latency_setup_busy: bool,
@@ -443,8 +450,10 @@ impl Default for AppControllerRust {
             usb_status: QString::default(),
             usb_watching: Arc::default(),
             usb_cancel: Arc::default(),
-            adapter_delay_iface: QString::default(),
+            adapter_iface: QString::default(),
             adapter_delay_ms: 0.0,
+            adapter_mode: QString::default(),
+            adapter_at_once_now: false,
             cpu_wake_state: QString::from("disabled"),
             keep_cpu_awake: true,
             latency_setup_busy: false,
@@ -602,6 +611,7 @@ impl qobject::AppController {
                         key,
                         board,
                         counter_store: Some(config::counter_path()),
+                        adapter_state: Some(config::adapter_state_path()),
                     };
                     Service::start(sc, sink)
                 });
@@ -754,12 +764,21 @@ impl qobject::AppController {
             .set_input_resyncs(st.input_resyncs.min(i32::MAX as u64) as i32);
         self.as_mut()
             .set_cpu_wake_state(QString::from(st.cpu_wake.as_str()));
-        let (iface, delay_ms) = st.adapter_delay.as_ref().map_or((String::new(), 0.0), |d| {
-            // A lone packet waits up to three rounds of the driver's timer.
-            (d.iface.clone(), 3.0 * f64::from(d.timer_us) / 1000.0)
-        });
-        self.as_mut().set_adapter_delay_iface(QString::from(&iface));
-        self.as_mut().set_adapter_delay_ms(delay_ms);
+        let a = st.adapter.as_ref();
+        let mode = match a {
+            None => "",
+            Some(a) if a.managed => "managed",
+            Some(a) if a.at_once_now => "fixed",
+            Some(_) => "delaying",
+        };
+        self.as_mut()
+            .set_adapter_iface(QString::from(a.map_or("", |a| a.iface.as_str())));
+        // A lone packet waits up to three rounds of the driver's timer.
+        self.as_mut()
+            .set_adapter_delay_ms(a.map_or(0.0, |a| 3.0 * f64::from(a.timer_us) / 1000.0));
+        self.as_mut().set_adapter_mode(QString::from(mode));
+        self.as_mut()
+            .set_adapter_at_once_now(a.is_some_and(|a| a.at_once_now));
         if let Some(p) = &st.board {
             self.as_mut()
                 .set_board_firmware(QString::from(&p.fw_version_string()));
@@ -1026,10 +1045,12 @@ impl qobject::AppController {
                 // The service looks at the adapter and the permissions again.
                 self.command(ServiceCmd::CheckLowLatency);
                 if on {
-                    "Set up: packets go out at once, and the CPU may be kept awake.".to_string()
+                    "Set up: from now on the app switches the network adapter to “send at once” \
+                     while the bridge is on, without asking for a password."
+                        .to_string()
                 } else {
-                    "Undone: the rule is gone, USB network adapters bundle packets again (400 µs), \
-                     and this user may no longer keep the CPU awake (unless the system allows it anyway)."
+                    "Undone: the rule is gone, the network adapter bundles packets again (400 µs), \
+                     and the app no longer switches it."
                         .to_string()
                 }
             }

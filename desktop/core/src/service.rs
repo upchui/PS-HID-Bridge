@@ -19,7 +19,7 @@ use crate::engine::{Engine, Event, Notice};
 use crate::idle::IdleInhibitor;
 use crate::input::{self, DeviceInfo, GrabGuard, InputMsg, InputSet, Waker};
 use crate::keymap;
-use crate::lowlat::{self, AdapterDelay, CpuWake, CpuWakeState};
+use crate::lowlat::{self, AdapterInfo, AdapterStatus, AdapterTimer, CpuWake, CpuWakeState};
 use crate::mouse::MouseCurve;
 use crate::protocol::{KEY_LEN, Pong};
 use crate::rt;
@@ -60,7 +60,7 @@ pub enum ServiceCmd {
     Devices(Result<input::DeviceList, String>),
     /// Result of a network adapter check (internal, own thread as well).
     #[doc(hidden)]
-    Network(Option<AdapterDelay>),
+    Network(Option<AdapterInfo>),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -89,8 +89,8 @@ pub struct ServiceStatus {
     pub input_resyncs: u64,
     /// The CPU is kept out of deep sleep states (see [`CpuWake`]).
     pub cpu_wake: CpuWakeState,
-    /// The network adapter towards the board holds packets back.
-    pub adapter_delay: Option<AdapterDelay>,
+    /// The network adapter towards the board, if it can bundle packets.
+    pub adapter: Option<AdapterStatus>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -115,6 +115,9 @@ pub struct ServiceConfig {
     pub key: [u8; KEY_LEN],
     pub board: SocketAddr,
     pub counter_store: Option<PathBuf>,
+    /// File noting a network adapter the service switched (see
+    /// [`AdapterTimer`]); None = not noted.
+    pub adapter_state: Option<PathBuf>,
 }
 
 pub type Sink = Box<dyn Fn(ServiceEvent) + Send>;
@@ -136,6 +139,8 @@ impl Service {
         let (tx, rx) = mpsc::channel();
         let devices = cfg.config.devices.clone();
         let cpu = CpuWake::new(cfg.config.keep_cpu_awake);
+        // Puts back what a crashed run left switched.
+        let adapter = AdapterTimer::new(cfg.adapter_state);
         let board = cfg.board;
         let w = waker.clone();
         let cmds = tx.clone();
@@ -144,6 +149,7 @@ impl Service {
             .spawn(move || {
                 let mut r = Runner::new(Engine::new(engine_cfg), link, devices, sink, w, cmds);
                 r.cpu = cpu;
+                r.adapter = adapter;
                 r.board = Some(board);
                 r.run(rx)
             })
@@ -249,7 +255,9 @@ struct Runner {
     cpu: CpuWake,
     /// Where the board is (for the network adapter check).
     board: Option<SocketAddr>,
-    adapter: Option<AdapterDelay>,
+    /// Switches the bundling of the adapter towards the board off while
+    /// the devices are grabbed (if the user may).
+    adapter: AdapterTimer,
     net_check_running: bool,
     /// A check was asked for while one was running (its result may be old).
     net_check_again: bool,
@@ -293,7 +301,7 @@ impl Runner {
             idle: IdleInhibitor::new(),
             cpu: CpuWake::new(false),
             board: None,
-            adapter: None,
+            adapter: AdapterTimer::new(None),
             net_check_running: false,
             net_check_again: false,
             next_net_check: Instant::now(),
@@ -329,6 +337,7 @@ impl Runner {
         let grabbed = self.guard.is_grabbed();
         self.idle.set(grabbed);
         self.cpu.set_active(grabbed);
+        self.adapter.set_active(grabbed);
     }
 
     /// Devices that could not be grabbed or released: one message for the
@@ -383,7 +392,7 @@ impl Runner {
         let spawned = thread::Builder::new()
             .name("pshb-netcheck".into())
             .spawn(move || {
-                let _ = cmds.send(ServiceCmd::Network(lowlat::adapter_delay(board)));
+                let _ = cmds.send(ServiceCmd::Network(lowlat::adapter_info(board)));
                 waker.wake();
             });
         self.net_check_running = spawned.is_ok();
@@ -495,7 +504,7 @@ impl Runner {
             devices_blocked: self.blocked,
             input_resyncs: self.inputs.resyncs(),
             cpu_wake: self.cpu.state(),
-            adapter_delay: self.adapter.clone(),
+            adapter: self.adapter.status(),
         };
         if status != self.last_status {
             self.last_status = status.clone();
@@ -618,7 +627,7 @@ impl Runner {
                     Ok(ServiceCmd::Devices(list)) => self.devices_listed(list),
                     Ok(ServiceCmd::Network(found)) => {
                         self.net_check_running = false;
-                        self.adapter = found;
+                        self.adapter.set_adapter(found);
                         if std::mem::take(&mut self.net_check_again) {
                             self.check_network();
                         }
@@ -763,6 +772,7 @@ mod tests {
                 key,
                 board,
                 counter_store: None,
+                adapter_state: None,
             },
             sink,
         )

@@ -57,29 +57,57 @@ pub fn install_rule(rule: &str) -> Result<(), String> {
 /// which is rewritten whenever the device selection changes).
 pub const LATENCY_RULE_PATH: &str = "/etc/udev/rules.d/70-ps-hid-bridge-latency.rules";
 
-/// Low latency outside the app (see [`crate::lowlat`]): USB network
-/// adapters with the cdc_ncm driver send every packet at once, and the
-/// logged-in user may keep the CPU out of deep sleep states.
-pub fn latency_rule() -> String {
-    "# PS HID Bridge: low latency (written by the app; remove this file to revoke)\n\
-     # USB network adapters (cdc_ncm): send every packet at once instead of holding it back up to ~1 ms to bundle packets\n\
-     ACTION==\"add\", SUBSYSTEM==\"net\", TEST==\"cdc_ncm/tx_timer_usecs\", ATTR{cdc_ncm/tx_timer_usecs}=\"0\"\n\
-     # The logged-in user may keep the CPU out of deep sleep states while the bridge is on\n\
-     SUBSYSTEM==\"misc\", KERNEL==\"cpu_dma_latency\", TAG+=\"uaccess\"\n"
-        .to_string()
+/// Low latency outside the app (see [`crate::lowlat`]), set up once:
+/// user `uid` may switch the packet bundling of USB network adapters with
+/// the cdc_ncm driver (the app does so only while the bridge is on, without
+/// root), and with `cpu_access` the logged-in user may keep the CPU out of
+/// deep sleep states (only needed where the system does not allow it).
+pub fn latency_rule(uid: u32, cpu_access: bool) -> String {
+    let mut out = format!(
+        "# PS HID Bridge: low latency (written by the app; remove this file to revoke)\n\
+         # USB network adapters (cdc_ncm): user {uid} may switch packet bundling off; the app does so only while the bridge is on\n\
+         ACTION==\"add\", SUBSYSTEM==\"net\", TEST==\"{NCM_TIMER}\", RUN+=\"/bin/chown {uid} %S%p/{NCM_TIMER}\"\n"
+    );
+    if cpu_access {
+        out += "# The logged-in user may keep the CPU out of deep sleep states while the bridge is on\n\
+                SUBSYSTEM==\"misc\", KERNEL==\"cpu_dma_latency\", TAG+=\"uaccess\"\n";
+    }
+    out
 }
 
-/// Install [`latency_rule`] as root and apply it right away: adapters that
-/// are plugged in now get the setting directly (no synthetic "add" event
-/// for network devices), /dev/cpu_dma_latency its new permissions.
+const NCM_TIMER: &str = "cdc_ncm/tx_timer_usecs";
+
+/// Install [`latency_rule`] as root and apply it right away (no synthetic
+/// "add" event for network devices): adapters plugged in now go back to
+/// the driver's default if something set them to 0 for good (the app
+/// switches them from now on) and belong to the user; /dev/cpu_dma_latency
+/// gets its permissions (an ACL from an earlier rule that is no longer
+/// needed is taken back).
+///
+/// For the user running the app; the CPU line only if that user may not use
+/// /dev/cpu_dma_latency yet.
 pub fn install_latency_rule() -> Result<(), String> {
-    let script = format!(
-        "set -e; cat > {LATENCY_RULE_PATH}.tmp && mv {LATENCY_RULE_PATH}.tmp {LATENCY_RULE_PATH} && \
-         for f in /sys/class/net/*/cdc_ncm/tx_timer_usecs; do if [ -e \"$f\" ]; then echo 0 > \"$f\"; fi; done && \
+    // SAFETY: getuid has no preconditions.
+    let uid = unsafe { libc::getuid() };
+    // An earlier rule's line stays: the access may come from it.
+    let cpu_access = crate::lowlat::cpu_wake_needs_access()
+        || std::fs::read_to_string(LATENCY_RULE_PATH).is_ok_and(|r| r.contains("cpu_dma_latency"));
+    run_as_root(
+        &install_latency_script(uid),
+        &latency_rule(uid, cpu_access),
+        "Setting up low latency",
+    )
+}
+
+fn install_latency_script(uid: u32) -> String {
+    format!(
+        "set -e; {REVOKE_FN}; cat > {LATENCY_RULE_PATH}.tmp && mv {LATENCY_RULE_PATH}.tmp {LATENCY_RULE_PATH} && \
          udevadm control --reload && \
-         udevadm trigger --action=change --subsystem-match=misc --sysname-match=cpu_dma_latency"
-    );
-    run_as_root(&script, &latency_rule(), "Setting up low latency")
+         for f in /sys/class/net/*/{NCM_TIMER}; do if [ -e \"$f\" ]; then \
+         if [ \"$(cat \"$f\")\" = 0 ]; then echo {NCM_DEFAULT_TIMER_US} > \"$f\"; fi; chown {uid} \"$f\"; fi; done && \
+         udevadm trigger --action=change --subsystem-match=misc --sysname-match=cpu_dma_latency && udevadm settle && \
+         revoke /dev/cpu_dma_latency"
+    )
 }
 
 /// The device access rule is installed.
@@ -107,26 +135,32 @@ const REVOKE_FN: &str = "revoke() { for d in \"$@\"; do [ -e \"$d\" ] || continu
 /// the input devices (the app cannot read keyboard and mouse afterwards,
 /// unless the user may read them anyway, e.g. as a member of "input").
 pub fn remove_rule() -> Result<(), String> {
-    let script = format!(
+    run_as_root(&remove_rule_script(), "", "Removing access")
+}
+
+fn remove_rule_script() -> String {
+    format!(
         "set -e; {REVOKE_FN}; rm -f {RULE_PATH} {OLD_RULE_PATH} && udevadm control --reload && \
          udevadm trigger --subsystem-match=input --action=change && udevadm settle && \
          revoke /dev/input/event*"
-    );
-    run_as_root(&script, "", "Removing access")
+    )
 }
 
-/// Undo [`install_latency_rule`]: remove the rule, put USB network adapters
-/// that send at once (0) back to the driver's default (400 µs) and take back
-/// the user's access to /dev/cpu_dma_latency.
+/// Undo [`install_latency_rule`]: remove the rule, give USB network
+/// adapters back to root (at the driver's default if they send at once)
+/// and take back the user's access to /dev/cpu_dma_latency.
 pub fn remove_latency_rule() -> Result<(), String> {
-    let script = format!(
+    run_as_root(&remove_latency_script(), "", "Undoing low latency")
+}
+
+fn remove_latency_script() -> String {
+    format!(
         "set -e; {REVOKE_FN}; rm -f {LATENCY_RULE_PATH} && udevadm control --reload && \
-         for f in /sys/class/net/*/cdc_ncm/tx_timer_usecs; do \
-         if [ -e \"$f\" ] && [ \"$(cat \"$f\")\" = 0 ]; then echo {NCM_DEFAULT_TIMER_US} > \"$f\"; fi; done && \
+         for f in /sys/class/net/*/{NCM_TIMER}; do if [ -e \"$f\" ]; then chown 0 \"$f\"; \
+         if [ \"$(cat \"$f\")\" = 0 ]; then echo {NCM_DEFAULT_TIMER_US} > \"$f\"; fi; fi; done && \
          udevadm trigger --action=change --subsystem-match=misc --sysname-match=cpu_dma_latency && udevadm settle && \
          revoke /dev/cpu_dma_latency"
-    );
-    run_as_root(&script, "", "Undoing low latency")
+    )
 }
 
 /// The cdc_ncm driver's own collection timer (CDC_NCM_TIMER_INTERVAL_USEC).
@@ -197,24 +231,28 @@ mod tests {
 
     #[test]
     fn latency_rule_lines() {
-        let rule = latency_rule();
-        let lines: Vec<&str> = rule.lines().filter(|l| !l.starts_with('#')).collect();
-        assert_eq!(
-            lines,
-            [
-                "ACTION==\"add\", SUBSYSTEM==\"net\", TEST==\"cdc_ncm/tx_timer_usecs\", ATTR{cdc_ncm/tx_timer_usecs}=\"0\"",
-                "SUBSYSTEM==\"misc\", KERNEL==\"cpu_dma_latency\", TAG+=\"uaccess\"",
-            ]
-        );
-        assert!(rule.ends_with('\n'));
+        let rules = |rule: String| -> Vec<String> {
+            rule.lines()
+                .filter(|l| !l.starts_with('#'))
+                .map(String::from)
+                .collect()
+        };
+        let adapter = "ACTION==\"add\", SUBSYSTEM==\"net\", TEST==\"cdc_ncm/tx_timer_usecs\", \
+                       RUN+=\"/bin/chown 1000 %S%p/cdc_ncm/tx_timer_usecs\"";
+        let cpu = "SUBSYSTEM==\"misc\", KERNEL==\"cpu_dma_latency\", TAG+=\"uaccess\"";
+        assert_eq!(rules(latency_rule(1000, false)), [adapter]);
+        assert_eq!(rules(latency_rule(1000, true)), [adapter, cpu]);
+        assert!(latency_rule(1000, true).ends_with('\n'));
+        assert!(!latency_rule(1000, false).contains("ATTR{"));
     }
 
-    /// The undo scripts are valid shell (checked with `sh -n`, nothing runs).
+    /// The root scripts are valid shell (checked with `sh -n`, nothing runs).
     #[test]
-    fn undo_scripts_parse() {
+    fn root_scripts_parse() {
         for script in [
-            format!("{REVOKE_FN}; revoke /dev/null"),
-            format!("set -e; {REVOKE_FN}; rm -f {LATENCY_RULE_PATH}"),
+            install_latency_script(1000),
+            remove_latency_script(),
+            remove_rule_script(),
         ] {
             let out = Command::new("sh").args(["-n", "-c", &script]).output().unwrap();
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));

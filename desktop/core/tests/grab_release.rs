@@ -256,6 +256,7 @@ impl Svc {
                 // Nobody listens: the bridge works the same without a board.
                 board: "127.0.0.1:9".parse().unwrap(),
                 counter_store: None,
+                adapter_state: None,
             },
             Box::new(move |e| {
                 let _ = tx.send(e);
