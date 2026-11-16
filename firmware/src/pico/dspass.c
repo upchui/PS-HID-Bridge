@@ -753,6 +753,7 @@ static void back_to_firmware(void) {
     uint64_t until = time_us_64() + 300000;
     while (time_us_64() < until) netlog_service();
     watchdog_reboot(0, 0, 10);
+    for (;;) tight_loop_contents();  // the main loop would keep feeding the watchdog
 }
 
 static void on_command(const char *cmd) {

@@ -23,6 +23,7 @@
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
 #include "hardware/gpio.h"
+#include "hardware/structs/pads_bank0.h"
 #include "hardware/watchdog.h"
 #include "pico/multicore.h"
 #include "pico/platform.h"
@@ -246,6 +247,7 @@ static void back_to_firmware(void) {
     uint64_t until = time_us_64() + 300000;
     while (time_us_64() < until) netlog_service();
     watchdog_reboot(0, 0, 10);
+    for (;;) tight_loop_contents();  // the main loop would keep feeding the watchdog
 }
 
 static void on_command(const char *cmd) {
@@ -265,6 +267,64 @@ static void on_command(const char *cmd) {
     }
 }
 
+// RP2350-E9 (A2 and A3 chips): an input pad with its pull-down enabled and
+// nothing driving it leaks and floats up to ~2.2 V, i.e. reads high.
+// Switching its input off for a moment drains it; read right afterwards.
+static int read_drained(uint pin) {
+    hw_clear_bits(&pads_bank0_hw->io[pin], PADS_BANK0_GPIO0_IE_BITS);
+    busy_wait_us(20);
+    hw_set_bits(&pads_bank0_hw->io[pin], PADS_BANK0_GPIO0_IE_BITS);
+    __asm volatile("nop; nop; nop; nop; nop; nop; nop; nop;");
+    return gpio_get(pin) ? 1 : 0;
+}
+
+// Before the host takes the pins: what the lines do by themselves. Tells a
+// device's pull-up (full speed: D+), E9 leakage and a connection between D+
+// and D- (a solder bridge between pins 4 and 5) apart.
+static void pin_check(uint dp, uint dm) {
+    gpio_init(dp);
+    gpio_init(dm);
+    gpio_pull_down(dp);
+    gpio_pull_down(dm);
+    sleep_ms(20);
+    int plain_p = gpio_get(dp), plain_m = gpio_get(dm);
+    int drained_p = read_drained(dp), drained_m = read_drained(dm);
+    // Drive one line and see whether the other follows.
+    int follows_m = 0, follows_p = 0;
+    for (int level = 0; level <= 1; level++) {
+        gpio_put(dp, level);
+        gpio_set_dir(dp, GPIO_OUT);
+        busy_wait_us(200);
+        follows_m += read_drained(dm) == level;
+        gpio_set_dir(dp, GPIO_IN);
+        gpio_put(dm, level);
+        gpio_set_dir(dm, GPIO_OUT);
+        busy_wait_us(200);
+        follows_p += read_drained(dp) == level;
+        gpio_set_dir(dm, GPIO_IN);
+    }
+    sleep_ms(5);
+    printf("pins: with pull-downs D+ %d D- %d, drained (E9) D+ %d D- %d; D- follows D+ %s, D+ follows D- %s\n",
+           plain_p, plain_m, drained_p, drained_m, follows_m == 2 ? "yes" : "no", follows_p == 2 ? "yes" : "no");
+    if (follows_m == 2 && follows_p == 2)
+        printf("pins: D+ and D- are connected to each other -- a solder bridge between pin 4 and 5?\n");
+    else if ((plain_p || plain_m) && !drained_m && (!drained_p || plain_m))
+        printf("pins: lines read high only through leakage: RP2350-E9 -- external pull-downs (8.2..15 kOhm "
+               "from D+ and D- to GND) fix it\n");
+    else if (drained_p && !drained_m)
+        printf("pins: D+ pulled up: a full-speed device is attached\n");
+    else if (!drained_p && drained_m)
+        printf("pins: D- pulled up: a low-speed device -- or D+/D- swapped\n");
+    else if (!drained_p && !drained_m)
+        printf("pins: both low: nothing attached\n");
+}
+
+// Line level while the host owns the pins: Pico-PIO-USB inverts their inputs
+// (gpio_set_inover), so gpio_get() reads the opposite of the line.
+static bool line_high(uint pin) {
+    return !gpio_get(pin);
+}
+
 // Before anything is enumerated: which line is pulled up (full speed: D+,
 // low speed: D-). Logged when it stays the same for 3 samples.
 static void line_service(void) {
@@ -273,7 +333,8 @@ static void line_service(void) {
     uint64_t now = time_us_64();
     if (now < next || s_dev_addr) return;
     next = now + 50000;
-    int state = (gpio_get(s_pin_dp) ? 1 : 0) | (gpio_get(s_pin_dm) ? 2 : 0);
+    // Plain reads: draining (E9) here would disturb the host's receiver.
+    int state = (line_high(s_pin_dp) ? 1 : 0) | (line_high(s_pin_dm) ? 2 : 0);
     if (state != candidate) {
         candidate = state;
         same = 0;
@@ -341,7 +402,7 @@ static void led_service(void) {
         on = p < 600 && (p % 200) < 100;  // three flashes
     } else if (s_dev_addr && time_us_64() - s_last_report_us < 500000) {
         on = true;
-    } else if (s_dev_addr || gpio_get(s_pin_dp) || gpio_get(s_pin_dm)) {
+    } else if (s_dev_addr || line_high(s_pin_dp) || line_high(s_pin_dm)) {
         on = (t % 200) < 100;
     } else {
         on = (t % 1000) < 500;
@@ -379,6 +440,8 @@ int main(void) {
     if (!stored) printf("settings: none stored, network by DHCP\n");
     netlog_start_network(&settings, chip_ok);
     netlog_on_command(on_command);
+
+    pin_check(s_pin_dp, s_pin_dm);
 
     // PIO-USB claims its DMA channel by number: one the W5500 left free.
     int ch = dma_claim_unused_channel(true);

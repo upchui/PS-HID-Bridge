@@ -7,8 +7,21 @@ set(PSHB_LIB ${CMAKE_CURRENT_LIST_DIR}/lib)
 set(PICO_SDK_PATH ${PSHB_LIB}/pico-sdk)
 set(PICO_TINYUSB_PATH ${PSHB_LIB}/tinyusb)
 # USB host on GPIO pins (controller-mode test images); TinyUSB's rp2040
-# family support builds the target tinyusb_pico_pio_usb from it.
-set(PICO_PIO_USB_PATH ${PSHB_LIB}/pico-pio-usb)
+# family support builds the target tinyusb_pico_pio_usb from it. We build a
+# patched copy: Pico-PIO-USB reads the line state around RP2350-E9 (an
+# undriven input with pull-down floats up to ~2.2 V) only on chips with
+# revision 2 (A2). A3 chips have the erratum as well and report revision 3,
+# like A4, which does not need it but loses nothing by it.
+set(PSHB_PIO_USB_GEN ${CMAKE_BINARY_DIR}/gen/pico-pio-usb)
+file(COPY ${PSHB_LIB}/pico-pio-usb/src DESTINATION ${PSHB_PIO_USB_GEN})
+file(READ ${PSHB_PIO_USB_GEN}/src/pio_usb_ll.h PSHB_PIO_USB_LL)
+string(FIND "${PSHB_PIO_USB_LL}" "if (chip_version <= 2) {" PSHB_POS)
+if(PSHB_POS EQUAL -1)
+    message(FATAL_ERROR "Pico-PIO-USB pio_usb_ll.h changed: the E9 chip check is gone")
+endif()
+string(REPLACE "if (chip_version <= 2) {" "if (chip_version <= 3) {" PSHB_PIO_USB_LL "${PSHB_PIO_USB_LL}")
+file(WRITE ${PSHB_PIO_USB_GEN}/src/pio_usb_ll.h "${PSHB_PIO_USB_LL}")
+set(PICO_PIO_USB_PATH ${PSHB_PIO_USB_GEN})
 list(APPEND PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/boards)
 set(PICO_BOARD wiznet_w5500_evb_pico2)
 set(PICO_PLATFORM rp2350-arm-s)
