@@ -14,6 +14,7 @@ Test status, building, continuous integration, testing without a board, screensh
 | Firmware update over the network (A/B with fallback) | ✅ real hardware, simulator |
 | Command line tool `pshb-cli` | ✅ |
 | Desktop app (Kirigami, setup wizard, triggers, tray) | ✅ real hardware, offscreen self-test |
+| Controller mode (DualSense passthrough) | 🧪 test images only, see [controller-mode.md](controller-mode.md) |
 
 ## Building
 
@@ -79,6 +80,8 @@ The pictures in [images/](images/) come from the app itself and from the board's
 ## Checks on real hardware
 
 For a new board or a bigger firmware change. The order is chosen so that each step builds on the previous one. The images are listed under [Other images](../README.md#other-images).
+
+The controller mode's test images have their own checklists: [controller-mode.md](controller-mode.md#checklists).
 
 1. `picotool info -a` (BOOTSEL mode): RP2350A, 2 MB flash.
 2. `ps-hid-bridge-hidtest.uf2` on the PC: `lsusb -v` (1209:0001, two HID interfaces), `evtest` (the mouse moves in a square), polling rate 1000 Hz (`usbhid-dump` / usbmon).

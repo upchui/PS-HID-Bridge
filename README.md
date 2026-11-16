@@ -234,8 +234,14 @@ The app and `pshb-cli flash` can put the firmware, the HID test images and the e
 | `ps-hid-bridge-rollbacktest.uf2` | **testing only:** never confirms itself after an update, the board must return to the previous version |
 | `ps-hid-bridge-timing.uf2` | **measuring only:** normal firmware plus measuring pins GP6/GP7, a latency summary on the UART every 10 s and an upload sink for load tests (`tools/fw_bench.py`, see [docs/latency.md](docs/latency.md)) |
 | `ps-hid-bridge-nuke.uf2` | erases the whole flash |
+| `ps-hid-bridge-usbhosttest.uf2` | **controller mode, testing only:** checks the USB host port for a DualSense, logs over the network (see [docs/controller-mode.md](docs/controller-mode.md)) |
+| `ps-hid-bridge-dspassthrough.uf2` | **controller mode, testing only:** a DualSense on the host port passed through to the PlayStation, its authentication included (see [docs/controller-mode.md](docs/controller-mode.md)) |
 
 Console: UART0 (GP0/GP1, 115200 baud). The USB ID `1209:0001` is the pid.codes test PID and meant for private use only.
+
+## Controller mode (in development)
+
+For games without mouse and keyboard support, the board is to present itself as a DualSense: a real DualSense on a second USB port of the board answers the PlayStation's controller check, and the app turns mouse and keyboard into controller input. So far there are only test images that find out whether a PS5 accepts this at all; nobody has shown that it works. Wiring, test images and the risks (no audio passthrough; system updates can break it; online games can detect adapters): [docs/controller-mode.md](docs/controller-mode.md).
 
 ## Latency
 
@@ -277,5 +283,6 @@ The board's side, stage by stage with measurements and clock speeds: [docs/laten
 | [docs/troubleshooting.md](docs/troubleshooting.md) | problems and where to look |
 | [docs/latency-pc.md](docs/latency-pc.md) | what the app does for a short input path on the PC and the network, how to undo it, how to measure |
 | [docs/latency.md](docs/latency.md) | the board's input path, stage by stage, with measurements |
+| [docs/controller-mode.md](docs/controller-mode.md) | the controller mode in development: wiring, test images, checklists |
 | [docs/development.md](docs/development.md) | test status, building, continuous integration, testing without a board, screenshots, checks on real hardware, directories |
 | [protocol/SPEC.md](protocol/SPEC.md) | the packet format |
