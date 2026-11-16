@@ -153,9 +153,11 @@ struct Shared {
     session: AtomicU64,
     session_known: AtomicBool,
     stop: AtomicBool,
-    epoch: Instant,
-    /// Random start of our ping clock, so pings of an earlier run (and
-    /// recorded answers to them) never match ours.
+    /// Our ping clock: CLOCK_MONOTONIC_RAW (not slewed by NTP, see
+    /// clock::raw_us; the one-way time compares it with the board's clock)
+    /// from `epoch_raw_us` on, plus a random start, so pings of an earlier
+    /// run (and recorded answers to them) never match ours.
+    epoch_raw_us: u64,
     epoch_offset_us: u64,
     packets_sent: AtomicU64,
     send_failures: AtomicU64,
@@ -181,7 +183,7 @@ impl Shared {
     }
 
     fn micros(&self) -> u64 {
-        self.epoch_offset_us + self.epoch.elapsed().as_micros() as u64
+        self.epoch_offset_us + clock::raw_us().saturating_sub(self.epoch_raw_us)
     }
 
     fn record_latency(&self, event_us: u64) {
@@ -284,7 +286,7 @@ impl Link {
             session: AtomicU64::new(0),
             session_known: AtomicBool::new(false),
             stop: AtomicBool::new(false),
-            epoch: now,
+            epoch_raw_us: clock::raw_us(),
             // Below 2^62: room for centuries of microseconds on top.
             epoch_offset_us: (random_u64() >> 2).max(1 << 40),
             packets_sent: AtomicU64::new(0),

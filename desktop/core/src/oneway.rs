@@ -11,18 +11,28 @@
 //! it took equally long in both directions; a line through those points
 //! gives the offset at any time. The way out of every sample is then
 //! `t2 - t1 - offset`: delays on the way out (a busy uplink, a network
-//! adapter that bundles packets) show where they happen.
+//! adapter that bundles packets) show where they happen. It can never be
+//! less than 0 or more than the sample's whole time on the network.
+//!
+//! The line needs clocks whose rates stay put: the app stamps pings with
+//! CLOCK_MONOTONIC_RAW (clock::raw_us), not with the NTP-slewed
+//! CLOCK_MONOTONIC, whose rate changes bent the offset into an arch.
 
 use std::collections::VecDeque;
 
-/// Samples kept (2 minutes at one ping per second).
+/// Samples kept: 2 minutes at one ping per second, 24 s while the status
+/// page pings five times a second.
 pub const WINDOW: usize = 120;
 /// Of every block of this many samples, the fastest one sets the offset.
 const BLOCK: usize = 8;
 /// Fit a drift only over at least this long (µs); shorter: offset only.
 const DRIFT_SPAN_US: f64 = 5_000_000.0;
-/// The offset moved by more than this: the clocks started over.
+/// The offset left the range a sample allows by more than this: the clocks
+/// started over.
 const JUMP_US: f64 = 50_000.0;
+/// A block's fastest sample counts for the offset only if its time on the
+/// network is at most this much above the fastest block's.
+const ANCHOR_SLACK_US: f64 = 1_000.0;
 
 #[derive(Clone, Copy, Debug)]
 struct Sample {
@@ -88,8 +98,10 @@ impl OneWay {
             a: (a_raw - self.a_base) as f64,
             net,
         };
+        // A sample allows any offset in [a - net, a] (way out 0..net), so a
+        // long delay on one way alone is no reason to start over.
         if let Some(line) = self.line()
-            && (s.a - net / 2.0 - line.at(s.t)).abs() > JUMP_US
+            && (line.at(s.t) > s.a + JUMP_US || line.at(s.t) < s.a - net - JUMP_US)
         {
             // The board's clock (or ours) started over.
             self.samples.clear();
@@ -102,19 +114,23 @@ impl OneWay {
         self.samples.push_back(s);
     }
 
-    /// The offset line through the fastest sample of every block.
+    /// The offset line through the fastest sample of every block. A block
+    /// whose fastest sample still waited on the network (a block of one
+    /// late answer) is no anchor: only blocks within ANCHOR_SLACK_US of the
+    /// fastest one count.
     fn line(&self) -> Option<Line> {
-        let points: Vec<(f64, f64)> = self
+        let fastest: Vec<&Sample> = self
             .samples
             .iter()
             .collect::<Vec<_>>()
             .chunks(BLOCK)
-            .filter_map(|block| {
-                block
-                    .iter()
-                    .min_by(|x, y| x.net.total_cmp(&y.net))
-                    .map(|s| (s.t, s.a - s.net / 2.0))
-            })
+            .filter_map(|block| block.iter().copied().min_by(|x, y| x.net.total_cmp(&y.net)))
+            .collect();
+        let best = fastest.iter().map(|s| s.net).fold(f64::INFINITY, f64::min);
+        let points: Vec<(f64, f64)> = fastest
+            .iter()
+            .filter(|s| s.net <= best + ANCHOR_SLACK_US)
+            .map(|s| (s.t, s.a - s.net / 2.0))
             .collect();
         let (first, last) = (points.first()?, points.last()?);
         if points.len() < 3 || last.0 - first.0 < DRIFT_SPAN_US {
@@ -150,7 +166,7 @@ impl OneWay {
         let ways: Vec<f64> = self
             .samples
             .iter()
-            .map(|s| (s.a - line.at(s.t)).max(0.0))
+            .map(|s| (s.a - line.at(s.t)).clamp(0.0, s.net))
             .collect();
         let mut sorted = ways.clone();
         sorted.sort_by(f64::total_cmp);
@@ -258,5 +274,44 @@ mod tests {
         w.add(2_000, 50, 60, 1_000); // came back before it was sent
         w.add(3_000, 50, 5_000, 3_100); // board took longer than the round trip
         assert!(w.stats().is_none());
+    }
+    #[test]
+    fn way_out_never_exceeds_the_network_time() {
+        // The app's clock changes its rate in the middle of the window, as
+        // CLOCK_MONOTONIC does while NTP slews it: a line cannot follow
+        // that, but no way out may be below 0 or above the network time.
+        const T0: u64 = 3_000_000_000_000_000_000;
+        let app = |t: f64| if t < 12e6 { t } else { t + (t - 12e6) * 300e-6 };
+        let mut w = OneWay::default();
+        let mut max_net = 0.0f64;
+        for k in 0..120u64 {
+            let real = k as f64 * 200_000.0;
+            let t1 = T0 + app(real) as u64;
+            let t2 = 1_000_000 + (real + 100.0) as u64;
+            let t3 = t2 + 60;
+            let t4 = T0 + app(real + 260.0) as u64;
+            w.add(t1, t2, t3, t4);
+            max_net = max_net.max(((t4 - t1) - (t3 - t2)) as f64);
+        }
+        let st = w.stats().unwrap();
+        assert_eq!(st.history_ms.len(), 120);
+        for h in &st.history_ms {
+            assert!(*h >= 0.0 && *h * 1000.0 <= max_net + 1e-6, "{h} ms");
+        }
+        assert!(st.p95_us <= max_net, "{}", st.p95_us);
+    }
+
+    #[test]
+    fn a_long_delay_one_way_does_not_start_over() {
+        let (mut w, _) = simulate(40, 0.0, |_| 100.0, |_| 100.0);
+        // One more answer whose way out was 150 ms late (a stalled uplink).
+        const T0: u64 = 3_000_000_000_000_000_000;
+        const B0: u64 = 1_234_567_890;
+        let send = 40.0 * 200_000.0;
+        let t2 = B0 + (send + 150_000.0) as u64;
+        w.add(T0 + send as u64, t2, t2 + 60, T0 + (send + 150_160.0) as u64);
+        let st = w.stats().unwrap();
+        assert_eq!(st.history_ms.len(), 41);
+        assert!((st.last_us - 150_000.0).abs() < 50.0, "{}", st.last_us);
     }
 }
