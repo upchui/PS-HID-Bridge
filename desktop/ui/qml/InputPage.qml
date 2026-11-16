@@ -77,8 +77,9 @@ AppPage {
             Controls.Slider {
                 id: sens
                 Layout.fillWidth: true
-                from: 0.25
-                to: 4
+                // The range the app accepts (also set with pshb-cli).
+                from: 0.1
+                to: 8
                 stepSize: 0.05
                 value: AppController.sensitivity
                 onMoved: applyMouse.restart()
@@ -97,7 +98,7 @@ AppPage {
                 id: accel
                 Layout.fillWidth: true
                 from: 0
-                to: 0.5
+                to: 1
                 stepSize: 0.01
                 value: AppController.accel
                 onMoved: applyMouse.restart()

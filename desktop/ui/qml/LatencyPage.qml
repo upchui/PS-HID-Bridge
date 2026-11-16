@@ -48,13 +48,15 @@ AppPage {
         return days ? `${days} d ${h} h` : h ? `${h} h ${m} min` : `${m} min ${s} s`;
     }
 
-    // Only while the window is shown: during play (minimised) the board's
+    // Only while someone looks: not while the window is minimised, and with
+    // the bridge on not while it is behind the game either -- the board's
     // web server would only add work next to the input path.
     Timer {
         interval: 2000
         repeat: true
         running: page.Window.window !== null && page.Window.window.visibility !== Window.Minimized
                  && page.Window.window.visibility !== Window.Hidden
+                 && (page.Window.active || !AppController.active)
         triggeredOnStart: true
         onTriggered: AppController.refreshBoardInfo()
     }

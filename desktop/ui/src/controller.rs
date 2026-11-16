@@ -1076,7 +1076,7 @@ impl qobject::AppController {
                      and bundles again when it is closed, without asking for a password."
                         .to_string()
                 } else {
-                    "Undone: the rule is gone, the network adapter bundles packets again (400 µs), \
+                    "Undone: the rule is gone, the network adapter bundles packets again (up to 3 × 400 µs), \
                      and the app no longer switches it."
                         .to_string()
                 }
@@ -1149,6 +1149,10 @@ impl qobject::AppController {
 
     pub fn set_identify(mut self: Pin<&mut Self>, on: bool) {
         self.as_mut().rust_mut().identify_on = on;
+        if !on {
+            // The last device found stays marked otherwise.
+            self.as_mut().set_identified_path(QString::default());
+        }
         self.command(ServiceCmd::Identify(on));
     }
 
@@ -1457,6 +1461,9 @@ impl qobject::AppController {
                 });
                 let _ = done.queue(move |mut obj| {
                     obj.as_mut().set_board_info_busy(false);
+                    if obj.config_ref().board != board {
+                        return; // asked the board before the address changed
+                    }
                     match result {
                         Ok(json) => {
                             obj.as_mut().set_board_info_json(QString::from(&json));
@@ -1703,8 +1710,10 @@ impl cxx_qt::Initialize for qobject::AppController {
 
         let self_test = std::env::args().any(|a| a == "--self-test" || a == "--screenshot");
         // Screenshots with live values: the service runs (no tray, no window
-        // rule, no update check).
-        let live = std::env::args().any(|a| a == "--screenshot-live");
+        // rule, no update check). Only with --screenshot, as in main.rs,
+        // which takes the instance lock for exactly this case.
+        let live = std::env::args().any(|a| a == "--screenshot")
+            && std::env::args().any(|a| a == "--screenshot-live");
         if self_test && live && self.config_ref().setup_done {
             self.as_mut().restart_service();
         }

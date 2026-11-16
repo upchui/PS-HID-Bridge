@@ -68,7 +68,7 @@ Every commit on `main` is built and tested automatically and published as a rele
 - **Board:** address and key, connection state, "Open web interface".
 - **Latency:** what the board measures on its input path (see [docs/latency.md](docs/latency.md)): packet → report ready (median, 99 %, slowest), the PlayStation's fetch, the wait for the SPI bus, missed polls and the decryption time; where the time of a typical packet goes, the spread of every stage, how long before each poll the mouse report is filled, the board's details, and its clock speed (the board restarts to apply it; not while the bridge is on). The app asks with the key (signed requests), not with the web password, and only while its window is shown; "Start over" resets the statistics.
 - **Firmware & updates:** installed and newest version of app and board firmware, "Check now", the automatic check (at start and every six hours), and "Install via USB" (see [Flashing over USB from the PC](#flashing-over-usb-from-the-pc)).
-- **Tray icon:** grey = board not reachable, blue = ready, green = bridge on. A click toggles; its menu has "Show window", "Release all keys" and "Quit". A Plasma notification appears when the bridge switches.
+- **Tray icon:** grey = board not reachable, blue = ready, green = bridge on. A click toggles; its menu has "Bridge on/off", "Show window", "Release all keys" and "Quit". A Plasma notification appears when the bridge switches.
 - **Screen stays on:** while the bridge is on, the desktop sees no input from the grabbed mouse and keyboard and would dim the screen, turn it off and lock it. The app asks it not to (D-Bus: `org.freedesktop.ScreenSaver`, else the desktop portal's idle inhibition, e.g. on GNOME) until the bridge switches off, pauses or the app quits; Plasma lists PS HID Bridge in the power applet meanwhile. `pshb-cli run` does the same.
 - **Updates:** when a new release is out, the Status page shows a banner with "Update app" (the AppImage replaces itself, then "Restart now") and "Update board" (firmware over the network, signed with the key; the bridge must be off). See "Updates from the app and the command line".
 - **Emergency stop:** `Ctrl+Alt+Shift+Esc` always releases mouse and keyboard at once and lets go of everything on the PlayStation. This combination cannot be switched off.
@@ -195,7 +195,7 @@ The System page shows when a newer firmware is available (your browser asks GitH
 
 ### Updates from the app and the command line
 
-The desktop app and `pshb-cli update` install the newest release themselves (see [Command line tool](#command-line-tool); for the app: section "Updates" on the board page):
+The desktop app and `pshb-cli update` install the newest release themselves (see [Command line tool](#command-line-tool); in the app: the banner on the Status page and the page "Firmware & updates"):
 
 - **Where from:** the releases of [upchui/PS-HID-Bridge](https://github.com/upchui/PS-HID-Bridge/releases), found through `github.com/upchui/PS-HID-Bridge/releases/latest` over HTTPS (not the GitHub API, whose limit of 60 requests per hour is shared by everything behind the same internet address). Every download is checked against the release's `SHA256SUMS` before it is used.
 - **App and CLI** replace their own file (written next to it, then renamed over it).

@@ -11,11 +11,14 @@ AppPage {
     }
     title: "Status"
 
-    // Fast pings for the round-trip view only while it can be seen (not
-    // while the window is minimised during play).
+    // Fast pings and the board's statistics only while someone looks: not
+    // while the window is minimised, and with the bridge on not while it is
+    // behind the game either (on the board they would add work next to the
+    // input path: the web server and the SPI bus).
     readonly property bool shown: page.Window.window !== null
                                   && page.Window.window.visibility !== Window.Minimized
                                   && page.Window.window.visibility !== Window.Hidden
+                                  && (page.Window.active || !AppController.active)
     onShownChanged: AppController.setLatencyView(shown)
     Component.onCompleted: AppController.setLatencyView(shown)
     Component.onDestruction: AppController.setLatencyView(false)
@@ -194,7 +197,9 @@ AppPage {
                 }
                 AppSwitch {
                     id: bridgeSwitch
-                    enabled: AppController.connected
+                    // Switching off always works: the devices may be
+                    // grabbed while the board is gone.
+                    enabled: AppController.connected || AppController.active || AppController.pending
                     checked: AppController.active || AppController.pending
                     onToggled: {
                         AppController.setOn(checked);
@@ -414,7 +419,7 @@ AppPage {
                 ].filter(p => p.value >= 0)
             }
             HelpHint {
-                text: "Medians of each part, added up. This PC: input event to packet sent (last 1000 packets). Network: PC → board, measured with the board's time stamps (last 2 minutes). Board: packet arrived to report ready. Waiting: until the PlayStation fetches the report; it polls once per millisecond. The board's parts count since it started or since \"Start over\" on the Latency page. Not included: the time until this PC fetches the report from the mouse or keyboard (their own USB polling)."
+                text: "Medians of each part, added up. This PC: input event to packet sent (last 1000 packets). Network: PC → board, measured with the board's time stamps (last 120 answers: about 24 s while this page is open, it pings five times a second). Board: packet arrived to report ready. Waiting: until the PlayStation fetches the report; it polls once per millisecond. The board's parts count since it started or since \"Start over\" on the Latency page. Not included: the time until this PC fetches the report from the mouse or keyboard (their own USB polling)."
             }
         }
     }
@@ -431,14 +436,14 @@ AppPage {
                 text: "Release all keys"
                 icon.name: "release"
                 icon.color: enabled ? Style.text : Style.disabled
-                enabled: AppController.connected
+                enabled: AppController.connected || AppController.active
                 onClicked: AppController.releaseAll()
             }
             AppButton {
                 text: AppController.paused ? "Resume" : "Pause"
                 icon.name: (AppController.paused ? "play" : "pause")
                 icon.color: enabled ? Style.text : Style.disabled
-                enabled: AppController.connected
+                enabled: AppController.connected || AppController.active
                 onClicked: AppController.pause()
             }
             AppButton {

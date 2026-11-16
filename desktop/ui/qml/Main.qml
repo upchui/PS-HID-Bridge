@@ -80,7 +80,8 @@ Controls.ApplicationWindow {
     property string currentPage: ""
     property var currentItem: null
 
-    function show(name) {
+    // Not "show": that would hide the window's own show() (tray "Show window").
+    function showPage(name) {
         if (currentPage === name)
             return;
         currentPage = name;
@@ -95,7 +96,7 @@ Controls.ApplicationWindow {
     Component { id: boardPage; BoardPage {} }
     Component { id: latencyPage; LatencyPage {} }
     Component { id: firmwarePage; FirmwarePage {} }
-    Component { id: wizardPage; WizardPage { onFinished: root.show("status") } }
+    Component { id: wizardPage; WizardPage { onFinished: root.showPage("status") } }
 
     RowLayout {
         id: shell
@@ -162,7 +163,7 @@ Controls.ApplicationWindow {
                         text: modelData.text
                         iconName: modelData.icon
                         current: root.currentPage === modelData.name
-                        onClicked: root.show(modelData.name)
+                        onClicked: root.showPage(modelData.name)
                     }
                 }
 
@@ -171,7 +172,7 @@ Controls.ApplicationWindow {
                 NavItem {
                     text: "Run setup again"
                     iconName: "setup"
-                    onClicked: root.show("wizard")
+                    onClicked: root.showPage("wizard")
                 }
                 Segmented {
                     Layout.alignment: Qt.AlignHCenter
@@ -242,7 +243,7 @@ Controls.ApplicationWindow {
             Qt.quit();
             return;
         }
-        show(autoPages.shift());
+        showPage(autoPages.shift());
         autoTimer.start();
     }
 
@@ -254,7 +255,7 @@ Controls.ApplicationWindow {
             if (shot >= 0 && args.indexOf("--screenshot-live") >= 0) {
                 autoPages = pageNames.slice();
                 autoTimer.interval = 3000; // the page fetches from the board
-                show("status");
+                showPage("status");
                 liveOn.start();
                 liveWarmup.start();
                 return;
@@ -263,6 +264,6 @@ Controls.ApplicationWindow {
             Qt.callLater(nextAutoPage);
             return;
         }
-        Qt.callLater(show, AppController.setupDone ? "status" : "wizard");
+        Qt.callLater(showPage, AppController.setupDone ? "status" : "wizard");
     }
 }

@@ -12,9 +12,18 @@ AppPage {
     property string error: ""
     property bool saved: false
 
+    // The address without a port, ready for a URL: "host:port" -> "host",
+    // "[fe80::1]:45045" -> "[fe80::1]", a bare IPv6 address gets brackets.
     function host() {
         const a = AppController.boardAddress;
-        return a.indexOf(":") >= 0 ? a.substring(0, a.lastIndexOf(":")) : a;
+        if (a.startsWith("[")) {
+            const end = a.indexOf("]");
+            return end > 0 ? a.substring(0, end + 1) : a;
+        }
+        const colons = a.split(":").length - 1;
+        if (colons > 1)
+            return "[" + a + "]";
+        return colons === 1 ? a.substring(0, a.indexOf(":")) : a;
     }
 
     Banner {
