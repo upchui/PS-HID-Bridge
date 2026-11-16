@@ -241,6 +241,31 @@ fn random_u64() -> u64 {
 }
 
 /// Mark our packets as low-latency traffic (failures are harmless).
+/// Connect the socket again: an AF_UNSPEC connect dissolves the association
+/// and forgets the source address (the socket is bound to the wildcard
+/// address), so connecting again picks the one the route to the board uses
+/// now. A connected UDP socket keeps the source address it got first, which
+/// is gone after the PC's address changed or it moved to another network.
+fn reconnect(sock: &UdpSocket, board: SocketAddr) {
+    let unspec = libc::sockaddr {
+        sa_family: libc::AF_UNSPEC as libc::sa_family_t,
+        sa_data: [0; 14],
+    };
+    // SAFETY: valid socket and sockaddr of the given size.
+    unsafe {
+        libc::connect(
+            sock.as_raw_fd(),
+            &unspec,
+            std::mem::size_of::<libc::sockaddr>() as libc::socklen_t,
+        )
+    };
+    let _ = sock.connect(board);
+}
+
+/// Sending failed for another reason than a full buffer: connect again, but
+/// not more often than this.
+const RECONNECT_EVERY: Duration = Duration::from_secs(2);
+
 fn mark_low_latency(sock: &UdpSocket, ipv4: bool) {
     let _ = if ipv4 {
         set_int_opt(sock, libc::IPPROTO_IP, libc::IP_TOS, TOS_EF)
@@ -266,6 +291,8 @@ impl Link {
         let now = Instant::now();
         let tx = Tx {
             sock: sock.clone(),
+            board: cfg.board,
+            last_reconnect: now,
             key: PacketKey::new(&cfg.key),
             counter: TxCounter::new(cfg.counter_store.clone())?,
             heartbeat: cfg.heartbeat,
@@ -599,6 +626,8 @@ impl Motion {
 /// the board.
 struct Tx {
     sock: Arc<UdpSocket>,
+    board: SocketAddr,
+    last_reconnect: Instant,
     key: PacketKey,
     counter: TxCounter,
     heartbeat: Duration,
@@ -667,8 +696,17 @@ impl Tx {
         };
         if r == pkt.len() as isize {
             shared.packets_sent.fetch_add(1, Ordering::Relaxed);
-        } else if r < 0 && io::Error::last_os_error().kind() == io::ErrorKind::WouldBlock {
+        } else if r < 0 {
             shared.send_failures.fetch_add(1, Ordering::Relaxed);
+            let kind = io::Error::last_os_error().kind();
+            // Not a full buffer, not an ICMP answer from the board's host:
+            // the source address may be gone (EINVAL, EADDRNOTAVAIL, ...).
+            if !matches!(kind, io::ErrorKind::WouldBlock | io::ErrorKind::ConnectionRefused)
+                && now.duration_since(self.last_reconnect) >= RECONNECT_EVERY
+            {
+                self.last_reconnect = now;
+                reconnect(&self.sock, self.board);
+            }
         }
         if !matches!(ptype, PacketType::Ping | PacketType::PingTimed) {
             self.last_send = now;
@@ -949,6 +987,18 @@ mod tests {
         // Over loopback: well below the round trip, below a few ms.
         assert!(ow.p50_us < 5_000.0, "{ow:?}");
         assert!(ow.p50_us <= st.rtt.unwrap().as_micros() as f64 + 1.0);
+    }
+
+    #[test]
+    fn reconnecting_keeps_the_socket_working() {
+        let mut board = FakeBoard::new();
+        let link = Link::start(LinkConfig::new(board.addr(), KEY)).unwrap();
+        board.run_for(Duration::from_millis(100));
+        assert!(link.wait_connected(Duration::from_millis(500)));
+        reconnect(&link.shared.tx.lock().unwrap().sock, board.addr());
+        board.run_for(Duration::from_millis(1500));
+        let st = link.status();
+        assert!(st.last_pong.unwrap().elapsed() < Duration::from_millis(1200));
     }
 
     #[test]
