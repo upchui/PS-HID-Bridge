@@ -265,22 +265,23 @@ AppPage {
         }
         StatTile {
             id: wayTile
-            // PC -> board alone (what input takes) once the board sends time
-            // stamps; the round trip (there and back) underneath.
+            // The way out (what input takes): measured with the board's time
+            // stamps, else estimated as half the round trip (older firmware).
             readonly property bool oneWay: AppController.upP50 >= 0
+            readonly property bool roundTrip: AppController.rttP50 >= 0
             function fmt(ms) {
                 return ms < 1 ? (ms * 1000).toFixed(0) + " µs" : ms.toFixed(2) + " ms";
             }
             icon: "latency"
-            label: oneWay ? "PC → board" : "Round trip to the board"
+            label: "Network latency to the board"
             value: oneWay ? fmt(AppController.upP50)
-                   : AppController.rttMs >= 0 ? AppController.rttP50.toFixed(2) + " ms" : "–"
+                   : roundTrip ? "≈ " + fmt(AppController.rttP50 / 2) : "–"
             detail: oneWay
-                    ? "median · 95 % below " + fmt(AppController.upP95)
-                      + (AppController.rttMs >= 0 ? " · round trip " + AppController.rttP50.toFixed(2) + " ms" : "")
-                    : AppController.rttMs >= 0
-                    ? "there and back, median · 95 % below " + AppController.rttP95.toFixed(2) + " ms"
-                      + (AppController.boardTimedPing ? "" : " · PC → board alone needs newer board firmware")
+                    ? "PC → board, median · 95 % below " + fmt(AppController.upP95)
+                      + (roundTrip ? " · round trip " + fmt(AppController.rttP50) : "")
+                    : roundTrip
+                    ? "half the round trip (exact with newer board firmware) · round trip " + fmt(AppController.rttP50)
+                      + ", 95 % below " + fmt(AppController.rttP95)
                     : "measured while connected"
 
             Canvas {
@@ -289,9 +290,11 @@ AppPage {
                 Layout.topMargin: 4
                 implicitHeight: 36
                 visible: AppController.connected
-                readonly property var values: JSON.parse(wayTile.oneWay ? AppController.upHistoryJson : AppController.rttHistoryJson)
+                // The way out; without time stamps half of each round trip.
+                readonly property var values: wayTile.oneWay ? JSON.parse(AppController.upHistoryJson)
+                                              : JSON.parse(AppController.rttHistoryJson).map(v => v / 2)
                 // Lowest top of the scale (ms): one-way times are often below 0.1 ms.
-                readonly property real floor: wayTile.oneWay ? 0.1 : 1
+                readonly property real floor: 0.1
                 readonly property color line: Style.accent
                 onValuesChanged: requestPaint()
                 onWidthChanged: requestPaint()

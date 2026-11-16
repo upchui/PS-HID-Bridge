@@ -166,6 +166,10 @@ struct Shared {
     timer_realtime: AtomicBool,
     /// The board answers PING_TIMED: ping with it (learned from its PONGs).
     timed_ping: AtomicBool,
+    /// When the current session was learned (ping clock): answers to pings
+    /// sent before waited for the network to be set up (address
+    /// resolution) and stay out of the statistics.
+    session_since_us: AtomicU64,
     oneway: Mutex<OneWay>,
 }
 
@@ -290,6 +294,7 @@ impl Link {
             latency_cache: Mutex::new(None),
             timer_realtime: AtomicBool::new(false),
             timed_ping: AtomicBool::new(false),
+            session_since_us: AtomicU64::new(0),
             oneway: Mutex::new(OneWay::default()),
         });
 
@@ -501,12 +506,16 @@ fn receiver(sock: Arc<UdpSocket>, key: PacketKey, shared: Arc<Shared>) {
         shared
             .timed_ping
             .store(pong.status & STATUS_TIMED_PING != 0, Ordering::Relaxed);
+        if changed {
+            shared.session_since_us.store(now_us, Ordering::Relaxed);
+        }
+        let measured = pong.t_app_us >= shared.session_since_us.load(Ordering::Relaxed);
         {
             let mut oneway = shared.oneway.lock().unwrap();
             if changed {
                 oneway.clear(); // another session: the board's clock started over
             }
-            if let Some((board_rx, board_tx)) = stamps {
+            if let Some((board_rx, board_tx)) = stamps.filter(|_| measured) {
                 oneway.add(pong.t_app_us, board_rx, board_tx, now_us);
             }
         }
@@ -516,10 +525,12 @@ fn receiver(sock: Arc<UdpSocket>, key: PacketKey, shared: Arc<Shared>) {
             st.last_pong = Some(Instant::now());
             let rtt = Duration::from_micros(now_us - pong.t_app_us);
             st.rtt = Some(rtt);
-            if st.rtt_history.len() == RTT_HISTORY {
-                st.rtt_history.pop_front();
+            if measured {
+                if st.rtt_history.len() == RTT_HISTORY {
+                    st.rtt_history.pop_front();
+                }
+                st.rtt_history.push_back(rtt.as_secs_f64() * 1000.0);
             }
-            st.rtt_history.push_back(rtt.as_secs_f64() * 1000.0);
             st.board = Some(pong);
         }
         if changed {
