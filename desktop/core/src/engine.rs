@@ -103,6 +103,10 @@ pub struct Engine {
     /// Held on watched keyboards (only for triggers, never forwarded).
     watched: Vec<u16>,
     suppressed: BTreeSet<u16>,
+    /// Forgotten by "release all" while still held: no longer forwarded,
+    /// but the triggers and the emergency stop still see them until their
+    /// real release (the device layer passes that edge on).
+    forgotten: BTreeSet<u16>,
     latched: Vec<bool>, // per trigger: fired, waiting for its keys to be released
     taps: Vec<DoubleTapState>,
     manual: bool,
@@ -128,6 +132,7 @@ impl Engine {
             pressed: Vec::new(),
             watched: Vec::new(),
             suppressed: BTreeSet::new(),
+            forgotten: BTreeSet::new(),
             latched: vec![false; n],
             taps: (0..n).map(|_| DoubleTapState::default()).collect(),
             manual: false,
@@ -203,14 +208,22 @@ impl Engine {
         fx
     }
 
-    /// Everything held, forwarded or only watched: what the triggers see.
+    /// Everything held, forwarded, only watched or forgotten by "release
+    /// all": what the triggers see.
     fn all_pressed(&self) -> Vec<u16> {
         let mut all = self.pressed.clone();
-        all.extend(self.watched.iter().filter(|c| !self.pressed.contains(c)));
+        for &c in self.watched.iter().chain(self.forgotten.iter()) {
+            if !all.contains(&c) {
+                all.push(c);
+            }
+        }
         all
     }
 
     fn key_down(&mut self, code: u16, watched: bool, fx: &mut Vec<Effect>) {
+        if !watched {
+            self.forgotten.remove(&code); // a real edge: no longer forgotten
+        }
         let list = if watched {
             &mut self.watched
         } else {
@@ -272,12 +285,17 @@ impl Engine {
         } else {
             &mut self.pressed
         };
-        let Some(pos) = list.iter().position(|c| *c == code) else {
-            return;
-        };
-        list.remove(pos);
-        if !watched {
-            self.suppressed.remove(&code);
+        let forgotten = !watched && self.forgotten.remove(&code);
+        match list.iter().position(|c| *c == code) {
+            Some(pos) => {
+                list.remove(pos);
+                if !watched {
+                    self.suppressed.remove(&code);
+                }
+            }
+            // A forgotten key let go: it may end a trigger's latch.
+            None if forgotten => {}
+            None => return,
         }
         let all = self.all_pressed();
 
@@ -378,6 +396,7 @@ impl Engine {
                     .filter(|c| !self.suppressed.contains(c))
                     .collect();
                 self.pressed.retain(|c| self.suppressed.contains(c));
+                self.forgotten.extend(forgotten.iter().copied());
                 fx.push(Effect::ReleaseAll);
                 if !forgotten.is_empty() {
                     fx.push(Effect::Forget(forgotten));
@@ -843,6 +862,37 @@ mod tests {
         t.down(KEY_LEFTCTRL);
         t.down(KEY_LEFTALT);
         assert!(t.down(R).iter().any(|e| matches!(e, Effect::Forget(_))));
+    }
+
+    #[test]
+    fn emergency_stop_still_sees_keys_forgotten_by_release_all() {
+        // "Release all" by Ctrl+Alt+R forgets Ctrl and Alt (they went to the
+        // PlayStation); held on and joined by Shift+Esc they are still the
+        // emergency combination.
+        let mut t = T::new(
+            vec![
+                Trigger::combo("Ctrl+Alt+P", Action::Toggle).unwrap(),
+                Trigger::combo("Ctrl+Alt+R", Action::ReleaseAll).unwrap(),
+            ],
+            false,
+        );
+        t.press_combo(&[KEY_LEFTCTRL, KEY_LEFTALT, P]);
+        assert!(t.e.is_active());
+        t.down(KEY_LEFTCTRL);
+        t.down(KEY_LEFTALT);
+        let fx = t.down(R);
+        assert!(fx.iter().any(|e| matches!(e, Effect::Forget(_))));
+        t.down(KEY_LEFTSHIFT);
+        let fx = t.down(ESC);
+        assert!(fx.contains(&Effect::ReleaseAll), "{fx:?}");
+        assert!(!t.e.is_active());
+        // Released for real, the forgotten keys end the triggers' latches:
+        // the toggle works again.
+        for k in [ESC, KEY_LEFTSHIFT, R, KEY_LEFTALT, KEY_LEFTCTRL] {
+            t.up(k);
+        }
+        t.press_combo(&[KEY_LEFTCTRL, KEY_LEFTALT, P]);
+        assert!(t.e.is_active());
     }
 
     #[test]

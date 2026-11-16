@@ -601,11 +601,12 @@ impl InputSet {
         Ok(())
     }
 
-    /// A device was closed: key-up events for what it still held (unless
-    /// another open device of the same kind, forwarded or watched, holds
-    /// the same key).
+    /// A device was closed: key-up events for what it still held, also
+    /// keys "release all" forgot (the engine still counts them for its
+    /// triggers), unless another open device of the same kind, forwarded or
+    /// watched, holds the same key.
     fn release_keys(&self, closed: Open, out: &mut Vec<InputMsg>) {
-        for code in closed.pressed {
+        for code in closed.pressed.into_iter().chain(closed.stale) {
             let held_elsewhere = self
                 .devices
                 .iter()
