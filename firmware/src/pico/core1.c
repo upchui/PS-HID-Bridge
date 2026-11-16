@@ -47,6 +47,10 @@ static volatile bool s_dhcp_assigned;
 static volatile bool s_dhcp_conflict;
 static bool s_udp_open;
 static c1_state_t s_state = C1_NO_LINK;
+// The address mode this start runs with: a mode saved in the web interface
+// applies after the restart that follows (until then the DHCP client of a
+// static start was never set up).
+static uint8_t s_ip_mode;
 static bool s_reboot;
 
 // ---------------------------------------------------------------- network
@@ -110,7 +114,7 @@ static void publish_ip(const char *what) {
 }
 
 static void start_addressing(void) {
-    if (g_settings.ip_mode == PSHB_IP_STATIC) {
+    if (s_ip_mode == PSHB_IP_STATIC) {
         wiz_NetInfo ni;
         wizchip_getnetinfo(&ni);
         memcpy(ni.ip, g_settings.ip, 4);
@@ -136,7 +140,7 @@ static void network_service(void) {
         bool link = wizphy_getphylink() == PHY_LINK_ON;
         if (!link && s_state != C1_NO_LINK) {
             printf("net: link down\n");
-            if (s_state != C1_READY || g_settings.ip_mode == PSHB_IP_DHCP) DHCP_stop();
+            if (s_state != C1_READY || s_ip_mode == PSHB_IP_DHCP) DHCP_stop();
             atomic_store(&g_net.ip, 0);
             set_state(C1_NO_LINK);
         } else if (link && s_state == C1_NO_LINK) {
@@ -151,7 +155,7 @@ static void network_service(void) {
     }
 
     static absolute_time_t next_dhcp;
-    if ((s_state == C1_DHCP || s_state == C1_READY) && g_settings.ip_mode == PSHB_IP_DHCP &&
+    if ((s_state == C1_DHCP || s_state == C1_READY) && s_ip_mode == PSHB_IP_DHCP &&
         time_reached(next_dhcp)) {
         next_dhcp = make_timeout_time_us(DHCP_POLL_US);
         uint8_t r = DHCP_run();
@@ -437,6 +441,7 @@ void core1_main(void) {
         printf("clock: back to 150 MHz for good\n");
     }
     reg_dhcp_cbfunc(on_dhcp_assign, on_dhcp_assign, on_dhcp_conflict);
+    s_ip_mode = g_settings.ip_mode;
     set_state(C1_NO_LINK);
     web_server_init(&k_backend, &g_settings);
 

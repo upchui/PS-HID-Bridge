@@ -82,6 +82,11 @@ void hid_out_service(void) {
         input_state_collapse(s_state);
         for (int i = 0; i < ITF_COUNT; i++) s_pending_since[i] = s_armed_since[i] = 0;
         usb_timing_reset(&s_mouse_timing);
+        // The pause is no gap of the main loop: measure afresh afterwards
+        // (it would set the lead's floor to the maximum for a long time).
+        s_last_service = 0;
+        s_window_max_gap = 0;
+        s_window_start = time_us_64();
         return;
     }
 

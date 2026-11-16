@@ -1,4 +1,5 @@
 #include "ota.h"
+#include "clock.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 #include "hardware/regs/qmi.h"
 #include "hardware/structs/qmi.h"
 #include "hardware/sync.h"
+#include "hardware/watchdog.h"
 #include "pico/bootrom.h"
 
 #include "uf2_writer.h"
@@ -25,6 +27,7 @@ static bool erase_sector(void *ctx, uint32_t off) {
     (void)ctx;
     uint32_t irq = save_and_disable_interrupts();
     flash_range_erase(s_slot_start + off, UF2_SECTOR_SIZE);
+    clock_flash_divider();
     restore_interrupts(irq);
     return true;
 }
@@ -33,6 +36,7 @@ static bool program_page(void *ctx, uint32_t off, const uint8_t data[UF2_PAYLOAD
     (void)ctx;
     uint32_t irq = save_and_disable_interrupts();
     flash_range_program(s_slot_start + off, data, UF2_PAYLOAD_SIZE);
+    clock_flash_divider();
     restore_interrupts(irq);
     // Read back through the uncached alias.
     return memcmp((const void *)(XIP_NOCACHE_NOALLOC_NOTRANSLATE_BASE + s_slot_start + off), data,
@@ -103,7 +107,13 @@ void ota_abort(void) {
 void ota_activate(void) {
     if (!s_ready) return;
     printf("ota: rebooting into the new firmware\n");
-    rom_reboot(REBOOT2_FLAG_REBOOT_TYPE_FLASH_UPDATE, 1000, XIP_BASE + s_slot_start, 0);
+    int r = rom_reboot(REBOOT2_FLAG_REBOOT_TYPE_FLASH_UPDATE, 1000, XIP_BASE + s_slot_start, 0);
+    if (r != BOOTROM_OK) {
+        // Restart normally instead of waiting for good: the boot ROM picks
+        // the newer of the two slots, which is the new firmware.
+        printf("ota: boot ROM refused the restart (%d), restarting normally\n", r);
+        watchdog_reboot(0, 0, 0);
+    }
     for (;;) {
         __wfi();
     }
@@ -112,6 +122,7 @@ void ota_activate(void) {
 bool ota_confirm_if_trial(void) {
     if (rom_get_last_boot_type() != BOOT_TYPE_FLASH_UPDATE) return false;
     int r = rom_explicit_buy(s_workarea, sizeof(s_workarea));
+    clock_flash_divider();
     printf("ota: new firmware confirmed (%d)\n", r);
     return r == 0;
 }

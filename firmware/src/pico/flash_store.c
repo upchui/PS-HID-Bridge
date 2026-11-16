@@ -1,4 +1,5 @@
 #include "flash_store.h"
+#include "clock.h"
 
 #include <string.h>
 
@@ -18,6 +19,7 @@ static bool fs_erase(void *ctx, uint32_t off) {
     (void)ctx;
     uint32_t irq = save_and_disable_interrupts();
     flash_range_erase(PSHB_SETTINGS_FLASH_OFFSET + off, PSHB_SETTINGS_SECTOR);
+    clock_flash_divider();
     restore_interrupts(irq);
     return true;
 }
@@ -27,6 +29,7 @@ static bool fs_program(void *ctx, uint32_t off, const void *data, size_t len) {
     if (len % FLASH_PAGE_SIZE != 0) return false;
     uint32_t irq = save_and_disable_interrupts();
     flash_range_program(PSHB_SETTINGS_FLASH_OFFSET + off, data, len);
+    clock_flash_divider();
     restore_interrupts(irq);
     return true;
 }

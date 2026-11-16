@@ -299,13 +299,14 @@ static inline void raw_write(uint32_t addr, const uint8_t *buf, uint16_t len) {
     raw_xfer(addr, true, buf, NULL, len);
 }
 
-static uint16_t raw_read16(uint32_t addr) {
+// (__unused: the build without PSHB_W5500_FAST_RX does not need these.)
+__unused static uint16_t raw_read16(uint32_t addr) {
     uint8_t b[2];
     raw_read(addr, b, 2);
     return (uint16_t)((b[0] << 8) | b[1]);
 }
 
-static void raw_write16(uint32_t addr, uint16_t v) {
+__unused static void raw_write16(uint32_t addr, uint16_t v) {
     uint8_t b[2] = {(uint8_t)(v >> 8), (uint8_t)v};
     raw_write(addr, b, 2);
 }
@@ -334,7 +335,7 @@ static void dma_init(void) {
     dma_channel_configure((uint)s_dma_rx, &c, s_dma_rxbuf, &spi_get_hw(W5500_SPI)->dr, 0, false);
 }
 
-static void dma_read_start(uint32_t addr, uint16_t len) {
+__unused static void dma_read_start(uint32_t addr, uint16_t len) {
     spi_hdr(s_dma_txbuf, addr, false);
     s_core0_spi++;
     gpio_put(W5500_PIN_CS, 0);
@@ -346,7 +347,7 @@ static void dma_read_start(uint32_t addr, uint16_t len) {
 }
 
 // Wait until `n` data bytes (after the SPI header) have arrived.
-static void dma_read_wait(uint16_t total_len, uint16_t n) {
+__unused static void dma_read_wait(uint16_t total_len, uint16_t n) {
     uint32_t want_left = (uint32_t)total_len - n;  // transfers still to come at that point
     while ((dma_channel_hw_addr((uint)s_dma_rx)->transfer_count & 0x0FFFFFFFu) > want_left) {
         tight_loop_contents();
@@ -354,7 +355,7 @@ static void dma_read_wait(uint16_t total_len, uint16_t n) {
     __compiler_memory_barrier();  // the buffer was written behind the compiler's back
 }
 
-static void dma_read_finish(void) {
+__unused static void dma_read_finish(void) {
     while (dma_channel_is_busy((uint)s_dma_rx)) {
         tight_loop_contents();
     }
@@ -386,9 +387,13 @@ static uint8_t raw_cr(uint8_t sn) {
 }
 
 // Wait until the last command to `sn` is carried out, if it is recent.
+// That takes well under a microsecond; the bound keeps core 0 going if the
+// chip ever stops answering (Sn_CR would then read as busy for good).
+#define CMD_SETTLE_MAX_US 100
 static void command_settle(uint8_t sn) {
-    if (time_us_32() - s_cmd_us[sn] < CMD_SETTLE_US) {
-        while (raw_cr(sn)) {
+    uint32_t t = time_us_32();
+    if (t - s_cmd_us[sn] < CMD_SETTLE_US) {
+        while (raw_cr(sn) && time_us_32() - t < CMD_SETTLE_MAX_US) {
         }
     }
 }
@@ -528,6 +533,7 @@ int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16
     (void)early;  // no early look at the data on this path
     (void)early_len;
     (void)ctx;
+    command_settle(sn);  // a RECV just issued must be carried out first
     uint16_t avail = getSn_RX_RSR(sn);
     *left = 0;
     if (avail < 8) return W5500_RX_EMPTY;

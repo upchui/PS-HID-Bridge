@@ -27,6 +27,12 @@ void clock_service(void);
 // Before a restart on purpose: that is not a failed trial.
 void clock_before_reboot(void);
 
+// At 200 MHz the flash gets a clock divider of at least 3 (67 MHz). Every
+// flash write or erase ends in the boot ROM's XIP set-up, which restores the
+// divider found at boot: call this right after each one, before reading the
+// flash again.
+void clock_flash_divider(void);
+
 uint32_t clock_cpu_hz(void);
 // The settings ask for 200 MHz, but the previous start at 200 MHz did not
 // get through its trial: running at 150 MHz.

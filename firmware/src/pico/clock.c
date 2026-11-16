@@ -14,6 +14,15 @@ static uint32_t s_cpu_hz;
 static bool s_fell_back;
 static bool s_trial;
 static absolute_time_t s_trial_end;
+static bool s_slow_flash;
+
+void clock_flash_divider(void) {
+    if (!s_slow_flash) return;
+    uint32_t t = qmi_hw->m[0].timing;
+    if ((t & QMI_M0_TIMING_CLKDIV_BITS) < 3) {
+        qmi_hw->m[0].timing = (t & ~QMI_M0_TIMING_CLKDIV_BITS) | (3u << QMI_M0_TIMING_CLKDIV_LSB);
+    }
+}
 
 void clock_init(const pshb_settings_t *s) {
     bool failed = watchdog_hw->scratch[0] == TRIAL_MARK;
@@ -25,10 +34,8 @@ void clock_init(const pshb_settings_t *s) {
         // from RAM) gets a slower clock divider first, so it stays at most
         // 200 / 3 = 67 MHz. Then, as the SDK does for 200 MHz on the RP2040,
         // a little more core voltage before the faster clock.
-        uint32_t t = qmi_hw->m[0].timing;
-        if ((t & QMI_M0_TIMING_CLKDIV_BITS) < 3) {
-            qmi_hw->m[0].timing = (t & ~QMI_M0_TIMING_CLKDIV_BITS) | (3u << QMI_M0_TIMING_CLKDIV_LSB);
-        }
+        s_slow_flash = true;
+        clock_flash_divider();
         vreg_set_voltage(VREG_VOLTAGE_1_15);
         busy_wait_us(1000);
         if (set_sys_clock_khz(200000, false)) {
