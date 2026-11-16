@@ -36,6 +36,8 @@ Recommended:
 
 The socket's 5 V comes straight from the board's USB port, which the PlayStation supplies; there is no fuse in between. A charging DualSense draws up to about 1 A. The test images log the supply voltage (VSYS) so a drop shows up.
 
+The DualSense is picky about that voltage: with the board on a PC port behind a dock (VSYS 4.34 V, so about 4.6 V at the socket) it neither charged nor connected, while a phone did; with VSYS at 4.8 V it connected at once. USB 3 is not needed, it is a USB 2.0 device and runs at full speed.
+
 GP2/GP3 are used for nothing else. The timing image's measuring pins moved to GP6/GP7 for this.
 
 ## Test images
@@ -86,7 +88,7 @@ tools/boardlog.py 192.168.1.50 -c status      # send a command
 2. Start `tools/boardlog.py`, then install `ps-hid-bridge-usbhosttest.uf2`. The board needs power (USB, on the PC or the PlayStation) and the network cable.
 3. Plug in the DualSense. Expected:
    - `line: D+ (GP2) high: a full-speed device is attached`, then `054c:0ce6, full speed (DualSense)`.
-   - A configuration descriptor of 227 bytes with 4 interfaces, and an HID report descriptor of 273 bytes.
+   - A configuration descriptor of 227 bytes with 4 interfaces, and an HID report descriptor of about 280 bytes (273 or 289 depending on the controller's firmware).
    - The feature reports 0x05, 0x09 and 0x20.
    - `ds:` lines that change when you move the sticks and press buttons. The LED is steady.
    - `D- (GP3) high` means D+ and D− are swapped: fix the wiring, or send `swap`.
@@ -95,11 +97,12 @@ tools/boardlog.py 192.168.1.50 -c status      # send a command
 
 ### 2. Passthrough test (on the PlayStation)
 
-1. Install `ps-hid-bridge-dspassthrough.uf2`. Board on the PlayStation (its USB port, as usual), DualSense in the socket, network cable plugged in. Start `tools/boardlog.py`.
-2. Switch the PlayStation on, press the PS button, move through the menus.
-3. Play a native PS5 game for more than 15 minutes; the PlayStation checks controllers again after about 8 minutes.
-4. Rest mode and waking up; restarting the PlayStation. If the board loses power on the way, it runs the normal firmware afterwards: install the test image again.
-5. `pattern on` in the game: the left stick must circle.
-6. If variant a fails (not recognised, or dropped after a while), try `variant b`.
+1. On the PlayStation: Settings → Accessories → Controllers → Communication method: **Use USB cable**. With "Bluetooth", a DualSense plugged in by USB is only paired and then talks over Bluetooth, past the board.
+2. Board on the PlayStation (its USB port, as usual), DualSense in the socket, network cable plugged in. Start `tools/boardlog.py`, install `ps-hid-bridge-dspassthrough.uf2`.
+3. Switch the PlayStation on, press the PS button, move through the menus.
+4. Play a native PS5 game for more than 15 minutes; the PlayStation checks controllers again after about 8 minutes.
+5. Rest mode and waking up; restarting the PlayStation. If the board loses power on the way, it runs the normal firmware afterwards: install the test image again.
+6. `pattern on` in the game: the left stick must circle.
+7. If variant a fails (not recognised, or dropped after a while), try `variant b`.
 
 **Success:** a native PS5 game for more than 15 minutes without the controller dropping, also after rest mode and a restart. If it fails, the next step stops here; the log (`ctl` lines: every request the PlayStation sent and how the DualSense answered) shows where.
