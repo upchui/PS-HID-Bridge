@@ -98,9 +98,10 @@ void diag_init(void) {
     memset(&g_diag, 0, sizeof(g_diag));
     latency_init(&g_diag.usb, 50);
     latency_init(&g_diag.rx, 5);
-    latency_init(&g_diag.ready, 2);
-    latency_init(&g_diag.detect, 1);
-    latency_init(&g_diag.bus, 2);
+    latency_init(&g_diag.ready, 4);
+    latency_init(&g_diag.ready1, 2);
+    latency_init(&g_diag.detect, 2);
+    latency_init(&g_diag.bus, 4);
     latency_init(&g_diag.spi, 1);
     latency_init(&g_diag.handle, 1);
     g_diag.crypto_min_ns = cmin;
@@ -179,6 +180,11 @@ static void net_service(void) {
         uint64_t t0 = time_us_64();
         int n = w5500_udp_recv(W5500_SOCK_UDP, pkt, sizeof(pkt), ip, &port, &left);
         if (n == W5500_RX_EMPTY) break;
+        if (n == W5500_RX_AGAIN) {
+            s_rx_more = true;  // look again in a new round, right away
+            s_rx_more_since = edge;
+            break;
+        }
         uint64_t t1 = time_us_64();
         latency_add(&g_diag.spi, (uint32_t)(t1 - t0));
         got++;
@@ -195,6 +201,8 @@ static void net_service(void) {
             if (g_bridge.input_applied) {
                 latency_add(&g_diag.rx, (uint32_t)(t2 - noticed));
                 latency_add(&g_diag.ready, (uint32_t)(t2 - edge));
+                // Not queued behind another datagram: the path itself.
+                if (got == 1 && had_edge) latency_add(&g_diag.ready1, (uint32_t)(t2 - edge));
                 hid_out_note_input(edge);
             }
             s_activity_until = make_timeout_time_ms(20);
@@ -206,6 +214,9 @@ static void net_service(void) {
             s_rx_more_since = edge;
         }
     }
+    // The space of the datagrams goes back to the chip only now, after their
+    // input is applied: one pointer write and one RECV for the whole round.
+    w5500_udp_commit(W5500_SOCK_UDP);
     w5500_unlock();
     timing_pin(PSHB_TIMING_PIN_RX, false);
     if (got) {

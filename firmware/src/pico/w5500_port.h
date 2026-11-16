@@ -30,6 +30,7 @@
 
 #define W5500_RX_EMPTY    (-1)
 #define W5500_RX_OVERSIZE (-2)
+#define W5500_RX_AGAIN    (-3)  // ask the chip again in a new round
 
 // Reset and initialise the chip (buffers, MAC, retry timing).
 // Call once on core 0 before core 1 is launched. Returns false if the chip
@@ -55,12 +56,21 @@ void w5500_lock(void);
 void w5500_unlock(void);
 
 // Read one datagram from a UDP socket without blocking.
-// Returns its length, W5500_RX_EMPTY or W5500_RX_OVERSIZE (dropped).
+// Returns its length, W5500_RX_EMPTY, W5500_RX_OVERSIZE (dropped) or
+// W5500_RX_AGAIN (the size known from the start of the round did not fit:
+// start a new round).
 // `*left`: bytes known to be waiting in the socket (0 = ask the chip);
 // updated to what is left afterwards, so a round of reads does not ask the
 // chip again (0 afterwards = nothing known to be left; new datagrams raise
 // INTn again).
+// The space of the datagrams read is given back to the chip only by
+// w5500_udp_commit(): once per round, after the input has been applied.
 int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16_t *port, uint16_t *left);
+void w5500_udp_commit(uint8_t sn);
+
+// Diagnostics: how often Sn_CR was still busy before a command (timing
+// image only, every 16th command is checked).
+uint32_t w5500_cr_busy(void);
 
 // Queue one datagram without waiting for completion. Returns false if the
 // previous send is still in flight or the TX buffer is full (datagram dropped).

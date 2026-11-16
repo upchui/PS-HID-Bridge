@@ -185,7 +185,7 @@ function updateStaticFields() {
 function renderDiag(d) {
   const stage = (k) => d[k + "_n"]
     ? `${d[k + "_p50"]} · ${d[k + "_p99"]} · ${d[k + "_max"]} (${d[k + "_n"]}×)` : "–";
-  for (const k of ["ready", "detect", "bus", "spi", "handle", "usb"]) $("d-" + k).textContent = stage(k);
+  for (const k of ["ready", "ready1", "detect", "bus", "spi", "handle", "usb"]) $("d-" + k).textContent = stage(k);
   $("d-miss").textContent = d.mouse_fetches
     ? `${d.mouse_misses} of ${d.mouse_fetches} (${(100 * d.mouse_misses / d.mouse_fetches).toFixed(2)} %), filled ${d.mouse_lead_us} µs before the fetch`
     : "–";

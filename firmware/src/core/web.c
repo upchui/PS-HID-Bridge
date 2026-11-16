@@ -408,6 +408,7 @@ static void h_diag(web_app_t *app, web_conn_t *c) {
     json_writer_t w;
     jw_begin(&w, c->dyn, sizeof(c->dyn));
     jw_lat(&w, "ready", &d.ready);
+    jw_lat(&w, "ready1", &d.ready1);
     jw_lat(&w, "detect", &d.detect);
     jw_lat(&w, "bus", &d.bus);
     jw_lat(&w, "spi", &d.spi);

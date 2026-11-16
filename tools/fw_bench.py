@@ -295,6 +295,7 @@ def run(args, w: Web, key: bytes, name: str, has_diag: bool) -> dict:
 
 STAGES = [
     ("ready", "packet -> report ready (INTn -> applied)"),
+    ("ready1", "  ... first datagram of a round (not queued)"),
     ("detect", "  INTn -> noticed by core 0"),
     ("bus", "  core 0 waits for the bus"),
     ("spi", "  SPI: read the datagram"),

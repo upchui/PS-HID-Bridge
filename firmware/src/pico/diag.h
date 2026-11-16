@@ -14,13 +14,13 @@ typedef struct {
     latency_hist_t usb;     // INTn -> report fetched by the host
     latency_hist_t rx;      // packet noticed -> applied (SPI + decryption)
     latency_hist_t ready;   // INTn -> input applied: "packet -> report ready"
+    latency_hist_t ready1;  // the same, first datagram of a round only (not queued behind others)
     latency_hist_t detect;  // INTn -> noticed by the main loop
     latency_hist_t bus;     // core 0 waits for the SPI bus (per receive round)
     latency_hist_t spi;     // reading one datagram over SPI
     latency_hist_t handle;  // checks + decryption + apply of one datagram
     uint32_t rounds;        // receive rounds
     uint32_t datagrams;     // datagrams read
-    uint32_t cr_busy;       // W5500 command register still busy at the next command
     uint32_t mouse_inputs;  // packets with mouse input
     uint32_t mouse_waits;   // ... of them arrived while a report was already armed
     uint32_t mouse_fetches; // mouse reports fetched by the host

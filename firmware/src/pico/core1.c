@@ -226,6 +226,7 @@ static void lat(web_lat_t *out, const latency_hist_t *h) {
 static void be_diag(void *ctx, web_diag_t *out) {
     (void)ctx;
     lat(&out->ready, &g_diag.ready);
+    lat(&out->ready1, &g_diag.ready1);
     lat(&out->detect, &g_diag.detect);
     lat(&out->bus, &g_diag.bus);
     lat(&out->spi, &g_diag.spi);
@@ -234,7 +235,7 @@ static void be_diag(void *ctx, web_diag_t *out) {
     out->rounds = g_diag.rounds;
     out->datagrams = g_diag.datagrams;
     out->core0_spi = w5500_core0_spi();
-    out->cr_busy = g_diag.cr_busy;
+    out->cr_busy = w5500_cr_busy();
     out->mouse_inputs = g_diag.mouse_inputs;
     out->mouse_waits = g_diag.mouse_waits;
     out->mouse_fetches = g_diag.mouse_fetches;

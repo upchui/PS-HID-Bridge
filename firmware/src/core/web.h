@@ -53,6 +53,7 @@ typedef struct {
 // Detailed latency diagnostics (GET /api/diag, see docs/latency.md).
 typedef struct {
     web_lat_t ready;   // INTn -> input applied ("packet -> report ready")
+    web_lat_t ready1;  // the same, first datagram of a receive round only
     web_lat_t detect;  // INTn -> noticed by the main loop
     web_lat_t bus;     // core 0 waits for the SPI bus (per receive round)
     web_lat_t spi;     // reading one datagram over SPI

@@ -33,6 +33,7 @@ static uint32_t s_spi_hz;
 // (0 = not since it was taken).
 static volatile uint32_t s_core0_spi;
 static volatile uint64_t s_int_us;
+static uint32_t s_cr_busy;  // Sn_CR still busy before a command (timing image)
 
 // ---------------------------------------------------------------- ioLibrary callbacks
 
@@ -163,6 +164,7 @@ uint32_t w5500_core0_spi(void) {
 
 void w5500_core0_spi_reset(void) {
     s_core0_spi = 0;
+    s_cr_busy = 0;
 }
 
 uint32_t w5500_spi_hz(void) {
@@ -171,11 +173,33 @@ uint32_t w5500_spi_hz(void) {
 
 // ---------------------------------------------------------------- UDP fast path
 
-static void exec_cmd(uint8_t sn, uint8_t cmd) {
-    setSn_CR(sn, cmd);
-    while (getSn_CR(sn)) {
-        // The W5500 clears the command register within a few cycles.
+// Commands to a socket. The W5500 takes a command within a few of its own
+// clock cycles and then clears Sn_CR; datasheet code waits for that after
+// every command (one or more SPI transactions). Here the wait happens only
+// if the previous command to this socket is very recent; the next command
+// of the input path comes several SPI transactions (> 5 µs) later anyway.
+// The timing image checks every 16th command and counts how often Sn_CR
+// was still busy (expected: never).
+#define CMD_SETTLE_US 5
+static uint32_t s_cmd_us[_WIZCHIP_SOCK_NUM_];
+#if PSHB_TIMING_GPIO
+static uint32_t s_cr_checks;
+#endif
+
+static void command(uint8_t sn, uint8_t cmd) {
+#if PSHB_TIMING_GPIO
+    if ((++s_cr_checks & 15) == 0 && getSn_CR(sn)) s_cr_busy++;
+#endif
+    if (time_us_32() - s_cmd_us[sn] < CMD_SETTLE_US) {
+        while (getSn_CR(sn)) {
+        }
     }
+    setSn_CR(sn, cmd);
+    s_cmd_us[sn] = time_us_32();
+}
+
+uint32_t w5500_cr_busy(void) {
+    return s_cr_busy;
 }
 
 #if PSHB_W5500_FAST_RX
@@ -191,46 +215,61 @@ static void write16(uint32_t addr, uint16_t v) {
     WIZCHIP_WRITE_BUF(addr, b, 2);
 }
 
-// Received size and read pointer: the registers are neighbours
-// (Sn_RX_RSR 0x26-0x27, Sn_RX_RD 0x28-0x29), so one burst reads both. The
-// chip may update the size while we read it: read until two reads agree
-// (as the datasheet asks).
-static void rx_state(uint8_t sn, uint16_t *size, uint16_t *rd) {
-    uint8_t b[4];
-    WIZCHIP_READ_BUF(Sn_RX_RSR(sn), b, 4);
-    uint16_t a = (uint16_t)((b[0] << 8) | b[1]);
-    *rd = (uint16_t)((b[2] << 8) | b[3]);
+// Sn_RX_RSR read until two reads agree, as the datasheet asks: the chip may
+// update it between its two bytes. Only needed when a single read does not
+// fit the datagrams (see w5500_udp_recv).
+static uint16_t rx_size_consistent(uint8_t sn) {
+    uint16_t a = read16(Sn_RX_RSR(sn));
     for (;;) {
         uint16_t again = read16(Sn_RX_RSR(sn));
-        if (again == a) break;
+        if (again == a) return a;
         a = again;
     }
-    *size = a;
 }
 
-// Read pointer after the previous datagram of the same round (valid while
-// the caller passes a non-zero `left`, i.e. under the same lock).
+// Per socket: read pointer after the datagrams read so far, and whether it
+// still has to be written back (w5500_udp_commit).
 static uint16_t s_rx_rd[_WIZCHIP_SOCK_NUM_];
+static bool s_rx_pending[_WIZCHIP_SOCK_NUM_];
 
 static void rx_read(uint8_t sn, uint16_t ptr, uint8_t *buf, uint16_t len) {
     // The chip wraps reads at the end of the socket's buffer by itself.
     WIZCHIP_READ_BUF(((uint32_t)ptr << 8) + (WIZCHIP_RXBUF_BLOCK(sn) << 3), buf, len);
 }
 
+void w5500_udp_commit(uint8_t sn) {
+    if (!s_rx_pending[sn]) return;
+    write16(Sn_RX_RD(sn), s_rx_rd[sn]);
+    command(sn, Sn_CR_RECV);
+    s_rx_pending[sn] = false;
+}
+
 int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16_t *port, uint16_t *left) {
     uint16_t avail, ptr;
-    if (*left) {
+    bool fresh = *left == 0;
+    if (!fresh) {
         avail = *left;
         ptr = s_rx_rd[sn];
     } else {
-        rx_state(sn, &avail, &ptr);
+        // Asking the chip anew: what was read before must be released first
+        // (Sn_RX_RSR still counts it until then).
+        w5500_udp_commit(sn);
+        // Size and read pointer are neighbours (Sn_RX_RSR 0x26-0x27,
+        // Sn_RX_RD 0x28-0x29): one burst. The size is read once: its high
+        // byte comes first, so a value torn by an update in between is never
+        // larger than the real one, and every byte it counts is there. If a
+        // datagram does not fit, look again (below).
+        uint8_t b[4];
+        WIZCHIP_READ_BUF(Sn_RX_RSR(sn), b, 4);
+        avail = (uint16_t)((b[0] << 8) | b[1]);
+        ptr = (uint16_t)((b[2] << 8) | b[3]);
     }
     *left = 0;
     if (avail < 8) return W5500_RX_EMPTY;
 
     // In UDP mode every datagram is preceded by an 8-byte header:
     // source IP (4), source port (2), payload length (2).
-    // Read header and a typical payload in one go.
+    // Header and a typical payload in one go.
     uint8_t first[FAST_RX_FIRST];
     uint16_t n_first = avail < sizeof(first) ? avail : (uint16_t)sizeof(first);
     rx_read(sn, ptr, first, n_first);
@@ -239,10 +278,26 @@ int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16
     uint16_t len = (uint16_t)((first[6] << 8) | first[7]);
     uint32_t total = 8u + len;
     if (total > avail) {
-        // Inconsistent with what the chip reported: drop everything.
-        write16(Sn_RX_RD(sn), (uint16_t)(ptr + avail));
-        exec_cmd(sn, Sn_CR_RECV);
-        return W5500_RX_OVERSIZE;
+        if (!fresh) {
+            // The size read at the start of the round may have been torn:
+            // ask the chip again in a new round (nothing is lost meanwhile).
+            return W5500_RX_AGAIN;
+        }
+        uint16_t again = rx_size_consistent(sn);
+        if (total > again) {
+            // Inconsistent with what the chip reports: drop everything.
+            s_rx_rd[sn] = (uint16_t)(ptr + again);
+            s_rx_pending[sn] = true;
+            w5500_udp_commit(sn);
+            return W5500_RX_OVERSIZE;
+        }
+        avail = again;
+        if (n_first < sizeof(first) && n_first < total) {
+            // The first read was cut short by the smaller size: read the rest.
+            uint16_t more = (uint16_t)((total < sizeof(first) ? total : sizeof(first)) - n_first);
+            rx_read(sn, (uint16_t)(ptr + n_first), first + n_first, more);
+            n_first = (uint16_t)(n_first + more);
+        }
     }
     int result = W5500_RX_OVERSIZE;
     if (len <= cap) {
@@ -251,9 +306,9 @@ int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16
         if (have < len) rx_read(sn, (uint16_t)(ptr + 8 + have), buf + have, (uint16_t)(len - have));
         result = len;
     }
+    // Released later, once per round (w5500_udp_commit).
     s_rx_rd[sn] = (uint16_t)(ptr + total);
-    write16(Sn_RX_RD(sn), s_rx_rd[sn]);
-    exec_cmd(sn, Sn_CR_RECV);
+    s_rx_pending[sn] = true;
     *left = (uint16_t)(avail - total);
     return result;
 }
@@ -276,9 +331,13 @@ int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16
     uint16_t n = len <= cap ? len : 0;
     if (n) wiz_recv_data(sn, buf, n);
     if (len > n) wiz_recv_ignore(sn, (uint16_t)(len - n));
-    exec_cmd(sn, Sn_CR_RECV);
+    command(sn, Sn_CR_RECV);
     *left = avail > 8u + len ? (uint16_t)(avail - 8u - len) : 0;
     return len <= cap ? (int)len : W5500_RX_OVERSIZE;
+}
+
+void w5500_udp_commit(uint8_t sn) {
+    (void)sn;  // every datagram was released right away
 }
 
 #endif
@@ -299,7 +358,7 @@ bool w5500_udp_send_nb(uint8_t sn, const uint8_t *buf, uint16_t len, const uint8
     setSn_DIPR(sn, (uint8_t *)ip);
     setSn_DPORT(sn, port);
     wiz_send_data(sn, (uint8_t *)buf, len);
-    exec_cmd(sn, Sn_CR_SEND);
+    command(sn, Sn_CR_SEND);
     s_tx_busy[sn] = true;
     return true;
 }
