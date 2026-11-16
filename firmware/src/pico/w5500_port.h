@@ -59,6 +59,10 @@ bool w5500_spi_fast_failed(void);
 // inside still work). Core 0 only: it takes it once per receive round, with
 // priority over core 1's next piece.
 void w5500_lock(void);
+// The same, but gives up after `timeout_us` (false: the bus stayed taken,
+// e.g. core 1 hangs in the middle of a transfer).
+#define W5500_LOCK_TIMEOUT_US 2000
+bool w5500_lock_for(uint32_t timeout_us);
 void w5500_unlock(void);
 
 // Read one datagram from a UDP socket without blocking.

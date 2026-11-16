@@ -19,6 +19,9 @@ void ota_abort(void);
 // Reboot into the freshly written image (does not return).
 void ota_activate(void);
 
+// This start runs new firmware on trial (after an update, until confirmed).
+bool ota_trial_boot(void);
+
 // At boot (core 0, before core 1 starts): if we were booted on trial after
 // an update, confirm the image. Returns true if an update was confirmed.
 bool ota_confirm_if_trial(void);

@@ -4,11 +4,9 @@
 #include "hardware/structs/qmi.h"
 #include "hardware/structs/watchdog.h"
 #include "hardware/vreg.h"
-#include "hardware/watchdog.h"
 #include "pico/time.h"
 
 #define TRIAL_MARK 0x50534843u  // "PSHC" in watchdog scratch 0 (the boot ROM uses 4..7)
-#define TRIAL_WATCHDOG_MS 2000
 
 static uint32_t s_cpu_hz;
 static bool s_fell_back;
@@ -34,6 +32,9 @@ void clock_init(const pshb_settings_t *s) {
         // from RAM) gets a slower clock divider first, so it stays at most
         // 200 / 3 = 67 MHz. Then, as the SDK does for 200 MHz on the RP2040,
         // a little more core voltage before the faster clock.
+        // The watchdog (guard.c) runs already: a hang from here on restarts
+        // the board, and the mark makes that start run at 150 MHz.
+        watchdog_hw->scratch[0] = TRIAL_MARK;
         s_slow_flash = true;
         clock_flash_divider();
         vreg_set_voltage(VREG_VOLTAGE_1_15);
@@ -44,21 +45,18 @@ void clock_init(const pshb_settings_t *s) {
             // 33.3 MHz (and the UART is set up after this anyway).
             clock_configure_undivided(clk_peri, 0, CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,
                                       200 * 1000 * 1000);
-            watchdog_hw->scratch[0] = TRIAL_MARK;
-            watchdog_enable(TRIAL_WATCHDOG_MS, true);
             s_trial = true;
             s_trial_end = make_timeout_time_ms(CLOCK_TRIAL_MS);
+        } else {
+            watchdog_hw->scratch[0] = 0;
         }
     }
     s_cpu_hz = clock_get_hz(clk_sys);
 }
 
 void clock_service(void) {
-    if (!s_trial) return;
-    watchdog_update();
-    if (time_reached(s_trial_end)) {
+    if (s_trial && time_reached(s_trial_end)) {
         watchdog_hw->scratch[0] = 0;  // got through: the next start may use 200 MHz again
-        watchdog_disable();
         s_trial = false;
     }
 }

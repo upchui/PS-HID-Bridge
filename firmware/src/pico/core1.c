@@ -1,5 +1,6 @@
 #include "core1.h"
 #include "clock.h"
+#include "guard.h"
 #include "crypto_help.h"
 
 #include <stdio.h>
@@ -73,7 +74,10 @@ static void on_dhcp_assign(void) {
 // conflicting address, instead of its busy wait for a 1 s tick that only
 // this loop advances: give the DECLINE time to leave.
 void pshb_dhcp_decline_wait(void) {
-    sleep_ms(1000);
+    for (int i = 0; i < 10; i++) {
+        sleep_ms(100);
+        guard_core1_alive();
+    }
 }
 
 static void on_dhcp_conflict(void) {
@@ -209,6 +213,7 @@ static void be_status(void *ctx, web_status_t *out) {
     out->rx_filtered = g_bridge.stats.rx_filtered;
     out->rx_malformed = g_bridge.stats.rx_malformed;
     out->partition = g_running_slot;
+    out->watchdog_reset = guard_watchdog_reset();
     out->lat_usb_count = g_diag.usb.count;
     out->lat_usb_p50_us = latency_percentile(&g_diag.usb, 50);
     out->lat_usb_p95_us = latency_percentile(&g_diag.usb, 95);
@@ -258,6 +263,7 @@ static void be_diag(void *ctx, web_diag_t *out) {
     out->crypto_helped = crypto_help_helped();
     out->crypto_alone = crypto_help_alone();
     out->spi_hz = w5500_spi_hz();
+    out->bus_timeouts = g_diag.bus_timeouts;
 }
 
 static void be_clock(void *ctx, web_clock_t *out) {
@@ -447,6 +453,7 @@ void core1_main(void) {
 
     absolute_time_t next_web = get_absolute_time();
     for (;;) {
+        guard_core1_alive();
         network_service();
         if (s_state == C1_READY && (web_server_busy() || time_reached(next_web))) {
             next_web = make_timeout_time_us(WEB_IDLE_POLL_US);
@@ -467,6 +474,7 @@ void core1_main(void) {
             s_ota_activate = false;  // returns only if the image is not ready
             web_server_drain(1000);  // let the response reach the client
             clock_before_reboot();
+            guard_before_reboot();
             ota_activate();
         }
 
@@ -474,6 +482,7 @@ void core1_main(void) {
             printf("system: reboot\n");
             web_server_drain(1000);  // let the last answer reach the client
             clock_before_reboot();
+            guard_before_reboot();
             watchdog_reboot(0, 0, 0);
             for (;;) {
                 tight_loop_contents();

@@ -16,6 +16,7 @@
 #include "aead.h"
 #include "bridge.h"
 #include "clock.h"
+#include "guard.h"
 #include "proto.h"
 #include "core1.h"
 #include "crypto_help.h"
@@ -212,7 +213,14 @@ static void net_service(void) {
     // register accesses of a datagram. The interrupt is acknowledged before
     // the chip is asked what it holds: a datagram arriving later raises it
     // again (and SIR follows Sn_IR).
-    w5500_lock();
+    if (!w5500_lock_for(W5500_LOCK_TIMEOUT_US)) {
+        // Core 1 holds the bus far longer than any piece takes: it hangs.
+        // Keep USB and the failsafe going (input is let go after 250 ms);
+        // the watchdog restarts the board (guard.c).
+        g_diag.bus_timeouts++;
+        timing_pin(PSHB_TIMING_PIN_RX, false);
+        return;
+    }
     uint64_t locked = time_us_64();
     w5500_udp_irq_ack(W5500_SOCK_UDP);
     uint16_t left = 0;
@@ -346,6 +354,7 @@ int main(void) {
     // The clock first: UART, USB and SPI depend on it, and its setting is in
     // the flash (read through XIP, which needs no set-up).
     bool stored = settings_load(&g_settings_flash, &g_settings);
+    guard_start(ota_trial_boot());
     clock_init(&g_settings);
     stdio_init_all();
     gpio_init(PICO_DEFAULT_LED_PIN);
@@ -377,22 +386,26 @@ int main(void) {
     crypto_select();
     crypto_help_init_core0();
     s_chip_ok = w5500_port_init(g_settings.spi_fast);
+    guard_service();
     // Before the confirmation below: buying may erase the other slot.
     g_running_slot = ota_running_slot();
     g_bridge.no_partition_table = !ota_has_partition_table();
     // After an update the bootrom runs us "on trial": confirm only once the
     // essentials work, otherwise the next reset returns to the old firmware.
 #if !PSHB_OTA_NO_CONFIRM
-    if (s_chip_ok) ota_confirm_if_trial();
+    if (s_chip_ok && ota_confirm_if_trial()) guard_confirmed();
 #endif
+    guard_service();
     if (s_chip_ok) {
         multicore_launch_core1_with_stack(core1_main, s_core1_stack, sizeof(s_core1_stack));
+        guard_core1_launched();
     } else {
         printf("net: W5500 not responding\n");
         atomic_store(&g_net.state, NET_STATE_CHIP_ERROR);
     }
 
     while (true) {
+        guard_service();
         clock_service();
         tud_task();
         if (s_chip_ok) net_service();

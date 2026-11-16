@@ -139,7 +139,8 @@ function renderStatus(st) {
   $("s-net").textContent = `${st.net_state} · ${st.ip_mode === "static" ? "static address" : "DHCP"}`;
   $("s-fw").textContent = st.firmware;
   const slot = st.partition === "none" ? "no partition table" : `slot ${st.partition}`;
-  $("s-uptime").textContent = `up ${fmtUptime(st.uptime_ms)} · ${slot}`;
+  $("s-uptime").textContent = `up ${fmtUptime(st.uptime_ms)} · ${slot}` +
+    (st.watchdog_reset ? " · restarted by the watchdog (something hung)" : "");
   $("fw-current").textContent = `${st.firmware} · ${slot}`;
   $("fw-nopt").hidden = st.partition !== "none";
   const ms = (us) => (us / 1000).toFixed(2) + " ms";
@@ -197,7 +198,8 @@ function renderDiag(d) {
     : "–";
   $("d-crypto").textContent = d.crypto_avg_ns
     ? `${(d.crypto_avg_ns / 1000).toFixed(1)} µs on average${d.crypto_fast ? " (optimised for this CPU)" : ""}` : "–";
-  $("d-chip").textContent = `SPI ${(d.spi_hz / 1e6).toFixed(1)} MHz · ${d.datagrams} packets in ${d.rounds} rounds · ${d.core0_spi} transfers`;
+  $("d-chip").textContent = `SPI ${(d.spi_hz / 1e6).toFixed(1)} MHz · ${d.datagrams} packets in ${d.rounds} rounds · ${d.core0_spi} transfers` +
+    (d.bus_timeouts ? ` · ${d.bus_timeouts}× the bus stayed taken` : "");
 }
 
 async function refreshClock() {

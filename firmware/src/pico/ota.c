@@ -119,8 +119,12 @@ void ota_activate(void) {
     }
 }
 
+bool ota_trial_boot(void) {
+    return rom_get_last_boot_type() == BOOT_TYPE_FLASH_UPDATE;
+}
+
 bool ota_confirm_if_trial(void) {
-    if (rom_get_last_boot_type() != BOOT_TYPE_FLASH_UPDATE) return false;
+    if (!ota_trial_boot()) return false;
     int r = rom_explicit_buy(s_workarea, sizeof(s_workarea));
     clock_flash_divider();
     printf("ota: new firmware confirmed (%d)\n", r);

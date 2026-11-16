@@ -30,6 +30,7 @@ typedef struct {
     uint32_t mouse_host_skips; // reports armed in time but fetched a frame later (host skipped)
     uint32_t mouse_lead_us; // reports are armed this long before the fetch (0 = right away)
     uint32_t mouse_floor_us; // ... and at least this long (main loop's longest absence + margin)
+    uint32_t bus_timeouts;  // receive rounds skipped: the SPI bus stayed taken (core 1 hung)
     // Decrypting one INPUT packet, measured once at start (core 1).
     uint32_t crypto_min_ns, crypto_avg_ns, crypto_max_ns;
     bool crypto_fast;  // the assembly ChaCha20 block is in use (passed its check)

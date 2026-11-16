@@ -3,6 +3,7 @@
 #include "pico/time.h"
 
 #include "pshb_config.h"
+#include "guard.h"
 
 #include "socket.h"
 #include "w5500_port.h"
@@ -123,5 +124,6 @@ void web_server_drain(uint32_t timeout_ms) {
         }
         if (!busy) return;
         sleep_ms(5);
+        guard_core1_alive();
     }
 }

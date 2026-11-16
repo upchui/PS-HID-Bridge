@@ -32,6 +32,7 @@ typedef struct {
     bool failsafe;
     uint32_t rx_ok, rx_auth_fail, rx_replay, rx_filtered, rx_malformed;
     const char *partition;  // active firmware slot ("A", "B" or "-")
+    bool watchdog_reset;    // this start followed a restart by the watchdog (a core hung)
 
     // Input path diagnostics measured by core 0 since boot (count 0 = none).
     uint32_t lat_usb_count;                   // reports fetched by the host
@@ -72,6 +73,7 @@ typedef struct {
     uint32_t crypto_helped;      // packets whose second ChaCha20 block the other core computed
     uint32_t crypto_alone;       // ... and the ones computed by one core alone
     uint32_t spi_hz;             // SPI clock to the W5500
+    uint32_t bus_timeouts;       // receive rounds skipped: the SPI bus stayed taken
 } web_diag_t;
 
 // Clock speeds as they are (the settings say what is wanted).

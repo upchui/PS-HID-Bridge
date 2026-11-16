@@ -220,6 +220,13 @@ void w5500_lock(void) {
     s_core0_wants = false;
 }
 
+bool w5500_lock_for(uint32_t timeout_us) {
+    s_core0_wants = true;
+    bool ok = recursive_mutex_enter_timeout_us(&s_mutex, timeout_us);
+    s_core0_wants = false;  // also on a timeout: core 1 would wait for good
+    return ok;
+}
+
 void w5500_unlock(void) {
     recursive_mutex_exit(&s_mutex);
 }

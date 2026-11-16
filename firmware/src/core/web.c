@@ -352,6 +352,7 @@ static void h_status(web_app_t *app, web_conn_t *c) {
     jw_begin(&w, c->dyn, sizeof(c->dyn));
     jw_str(&w, "firmware", fw);
     jw_str(&w, "partition", st.partition ? st.partition : "-");
+    jw_bool(&w, "watchdog_reset", st.watchdog_reset);
     jw_int(&w, "uptime_ms", st.uptime_ms);
     jw_str(&w, "mac", mac);
     jw_bool(&w, "link_up", st.link_up);
@@ -437,6 +438,7 @@ static void h_diag(web_app_t *app, web_conn_t *c) {
     jw_int(&w, "crypto_helped", d.crypto_helped);
     jw_int(&w, "crypto_alone", d.crypto_alone);
     jw_int(&w, "spi_hz", d.spi_hz);
+    jw_int(&w, "bus_timeouts", d.bus_timeouts);
     respond_json(c, 200, &w, NULL);
 }
 
