@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "hardware/dma.h"
 #include "hardware/gpio.h"
 #include "hardware/spi.h"
 #include "hardware/sync.h"
@@ -90,6 +91,8 @@ static void spi_write_burst(uint8_t *buf, uint16_t len) {
 
 // ---------------------------------------------------------------- init
 
+static void dma_init(void);
+
 static void int_edge(uint gpio, uint32_t events) {
     (void)gpio;
     (void)events;
@@ -139,6 +142,7 @@ bool w5500_port_init(void) {
     recursive_mutex_init(&s_mutex);
 
     s_spi_hz = spi_init(W5500_SPI, PSHB_W5500_SPI_HZ);
+    dma_init();
     // SPI mode 3 (the W5500 takes modes 0 and 3): in mode 0 the PL022 pulls
     // its frame signal up between bytes and leaves the clock idle for about
     // 1.5 bit times after each one; with CPHA = 1 the bytes follow back to
@@ -245,6 +249,115 @@ uint32_t w5500_spi_hz(void) {
     return s_spi_hz;
 }
 
+// ---------------------------------------------------------------- core 0: raw SPI
+// Inside w5500_lock() core 0 talks to the chip straight through the SPI
+// registers: header and data in one stream, no ioLibrary layers (critical
+// section, callbacks, waiting for the bus to go idle between header and
+// data). A transaction ends when the last byte has come back, which also
+// means it is completely clocked out.
+
+#define SPI_HDR 3
+#define SPI_VDM 0x00  // variable data length mode (CS frames the transfer)
+
+static inline void spi_hdr(uint8_t hdr[SPI_HDR], uint32_t addr, bool write) {
+    hdr[0] = (uint8_t)(addr >> 16);
+    hdr[1] = (uint8_t)(addr >> 8);
+    hdr[2] = (uint8_t)((addr & 0xF8) | (write ? _W5500_SPI_WRITE_ : _W5500_SPI_READ_) | SPI_VDM);
+}
+
+static void raw_xfer(uint32_t addr, bool write, const uint8_t *tx, uint8_t *rx, uint16_t len) {
+    spi_hw_t *hw = spi_get_hw(W5500_SPI);
+    uint8_t hdr[SPI_HDR];
+    spi_hdr(hdr, addr, write);
+    uint32_t total = SPI_HDR + len, sent = 0, got = 0;
+    s_core0_spi++;
+    gpio_put(W5500_PIN_CS, 0);
+    while (got < total) {
+        // At most 8 bytes in flight: the receive FIFO never overflows.
+        if (sent < total && sent - got < 8 && (hw->sr & SPI_SSPSR_TNF_BITS)) {
+            hw->dr = sent < SPI_HDR ? hdr[sent] : (tx ? tx[sent - SPI_HDR] : 0);
+            sent++;
+        }
+        if (hw->sr & SPI_SSPSR_RNE_BITS) {
+            uint8_t b = (uint8_t)hw->dr;
+            if (rx && got >= SPI_HDR) rx[got - SPI_HDR] = b;
+            got++;
+        }
+    }
+    gpio_put(W5500_PIN_CS, 1);
+}
+
+static inline void raw_read(uint32_t addr, uint8_t *buf, uint16_t len) {
+    raw_xfer(addr, false, NULL, buf, len);
+}
+
+static inline void raw_write(uint32_t addr, const uint8_t *buf, uint16_t len) {
+    raw_xfer(addr, true, buf, NULL, len);
+}
+
+static uint16_t raw_read16(uint32_t addr) {
+    uint8_t b[2];
+    raw_read(addr, b, 2);
+    return (uint16_t)((b[0] << 8) | b[1]);
+}
+
+static void raw_write16(uint32_t addr, uint16_t v) {
+    uint8_t b[2] = {(uint8_t)(v >> 8), (uint8_t)v};
+    raw_write(addr, b, 2);
+}
+
+// The datagram itself is read by DMA, so the CPU can work on what has
+// arrived so far (see w5500_udp_recv's `early`).
+#define DMA_MAX (SPI_HDR + 64)
+static int s_dma_tx = -1, s_dma_rx = -1;
+static uint8_t s_dma_txbuf[DMA_MAX];  // SPI header, then zeros (clocked out while reading)
+static uint8_t s_dma_rxbuf[DMA_MAX];
+
+static void dma_init(void) {
+    s_dma_tx = dma_claim_unused_channel(true);
+    s_dma_rx = dma_claim_unused_channel(true);
+    dma_channel_config c = dma_channel_get_default_config((uint)s_dma_tx);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
+    channel_config_set_dreq(&c, spi_get_dreq(W5500_SPI, true));
+    channel_config_set_read_increment(&c, true);
+    channel_config_set_write_increment(&c, false);
+    dma_channel_configure((uint)s_dma_tx, &c, &spi_get_hw(W5500_SPI)->dr, s_dma_txbuf, 0, false);
+    c = dma_channel_get_default_config((uint)s_dma_rx);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
+    channel_config_set_dreq(&c, spi_get_dreq(W5500_SPI, false));
+    channel_config_set_read_increment(&c, false);
+    channel_config_set_write_increment(&c, true);
+    dma_channel_configure((uint)s_dma_rx, &c, s_dma_rxbuf, &spi_get_hw(W5500_SPI)->dr, 0, false);
+}
+
+static void dma_read_start(uint32_t addr, uint16_t len) {
+    spi_hdr(s_dma_txbuf, addr, false);
+    s_core0_spi++;
+    gpio_put(W5500_PIN_CS, 0);
+    dma_channel_set_write_addr((uint)s_dma_rx, s_dma_rxbuf, false);
+    dma_channel_set_trans_count((uint)s_dma_rx, SPI_HDR + len, false);
+    dma_channel_set_read_addr((uint)s_dma_tx, s_dma_txbuf, false);
+    dma_channel_set_trans_count((uint)s_dma_tx, SPI_HDR + len, false);
+    dma_start_channel_mask((1u << s_dma_rx) | (1u << s_dma_tx));
+}
+
+// Wait until `n` data bytes (after the SPI header) have arrived.
+static void dma_read_wait(uint16_t total_len, uint16_t n) {
+    uint32_t want_left = (uint32_t)total_len - n;  // transfers still to come at that point
+    while ((dma_channel_hw_addr((uint)s_dma_rx)->transfer_count & 0x0FFFFFFFu) > want_left) {
+        tight_loop_contents();
+    }
+    __compiler_memory_barrier();  // the buffer was written behind the compiler's back
+}
+
+static void dma_read_finish(void) {
+    while (dma_channel_is_busy((uint)s_dma_rx)) {
+        tight_loop_contents();
+    }
+    __compiler_memory_barrier();
+    gpio_put(W5500_PIN_CS, 1);
+}
+
 // ---------------------------------------------------------------- UDP fast path
 
 // Commands to a socket. The W5500 takes a command within a few of its own
@@ -253,22 +366,28 @@ uint32_t w5500_spi_hz(void) {
 // if the previous command to this socket is very recent; the next command
 // of the input path comes several SPI transactions (> 5 µs) later anyway.
 // The timing image checks every 16th command and counts how often Sn_CR
-// was still busy (expected: never).
+// was still busy (expected: never). Core 0 inside w5500_lock() only.
 #define CMD_SETTLE_US 5
 static uint32_t s_cmd_us[_WIZCHIP_SOCK_NUM_];
 #if PSHB_TIMING_GPIO
 static uint32_t s_cr_checks;
 #endif
 
+static uint8_t raw_cr(uint8_t sn) {
+    uint8_t v;
+    raw_read(Sn_CR(sn), &v, 1);
+    return v;
+}
+
 static void command(uint8_t sn, uint8_t cmd) {
 #if PSHB_TIMING_GPIO
-    if ((++s_cr_checks & 15) == 0 && getSn_CR(sn)) s_cr_busy++;
+    if ((++s_cr_checks & 15) == 0 && raw_cr(sn)) s_cr_busy++;
 #endif
     if (time_us_32() - s_cmd_us[sn] < CMD_SETTLE_US) {
-        while (getSn_CR(sn)) {
+        while (raw_cr(sn)) {
         }
     }
-    setSn_CR(sn, cmd);
+    raw_write(Sn_CR(sn), &cmd, 1);
     s_cmd_us[sn] = time_us_32();
 }
 
@@ -276,26 +395,20 @@ uint32_t w5500_cr_busy(void) {
     return s_cr_busy;
 }
 
+void w5500_udp_irq_ack(uint8_t sn) {
+    uint8_t v = Sn_IR_RECV;  // write 1 to clear; SIR follows
+    raw_write(Sn_IR(sn), &v, 1);
+}
+
 #if PSHB_W5500_FAST_RX
-
-static uint16_t read16(uint32_t addr) {
-    uint8_t b[2];
-    WIZCHIP_READ_BUF(addr, b, 2);
-    return (uint16_t)((b[0] << 8) | b[1]);
-}
-
-static void write16(uint32_t addr, uint16_t v) {
-    uint8_t b[2] = {(uint8_t)(v >> 8), (uint8_t)v};
-    WIZCHIP_WRITE_BUF(addr, b, 2);
-}
 
 // Sn_RX_RSR read until two reads agree, as the datasheet asks: the chip may
 // update it between its two bytes. Only needed when a single read does not
 // fit the datagrams (see w5500_udp_recv).
 static uint16_t rx_size_consistent(uint8_t sn) {
-    uint16_t a = read16(Sn_RX_RSR(sn));
+    uint16_t a = raw_read16(Sn_RX_RSR(sn));
     for (;;) {
-        uint16_t again = read16(Sn_RX_RSR(sn));
+        uint16_t again = raw_read16(Sn_RX_RSR(sn));
         if (again == a) return a;
         a = again;
     }
@@ -306,19 +419,20 @@ static uint16_t rx_size_consistent(uint8_t sn) {
 static uint16_t s_rx_rd[_WIZCHIP_SOCK_NUM_];
 static bool s_rx_pending[_WIZCHIP_SOCK_NUM_];
 
-static void rx_read(uint8_t sn, uint16_t ptr, uint8_t *buf, uint16_t len) {
+static inline uint32_t rx_addr(uint8_t sn, uint16_t ptr) {
     // The chip wraps reads at the end of the socket's buffer by itself.
-    WIZCHIP_READ_BUF(((uint32_t)ptr << 8) + (WIZCHIP_RXBUF_BLOCK(sn) << 3), buf, len);
+    return ((uint32_t)ptr << 8) + (WIZCHIP_RXBUF_BLOCK(sn) << 3);
 }
 
 void w5500_udp_commit(uint8_t sn) {
     if (!s_rx_pending[sn]) return;
-    write16(Sn_RX_RD(sn), s_rx_rd[sn]);
+    raw_write16(Sn_RX_RD(sn), s_rx_rd[sn]);
     command(sn, Sn_CR_RECV);
     s_rx_pending[sn] = false;
 }
 
-int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16_t *port, uint16_t *left) {
+int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16_t *port, uint16_t *left,
+                   w5500_early_fn early, uint16_t early_len, void *ctx) {
     uint16_t avail, ptr;
     bool fresh = *left == 0;
     if (!fresh) {
@@ -334,7 +448,7 @@ int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16
         // larger than the real one, and every byte it counts is there. If a
         // datagram does not fit, look again (below).
         uint8_t b[4];
-        WIZCHIP_READ_BUF(Sn_RX_RSR(sn), b, 4);
+        raw_read(Sn_RX_RSR(sn), b, 4);
         avail = (uint16_t)((b[0] << 8) | b[1]);
         ptr = (uint16_t)((b[2] << 8) | b[3]);
     }
@@ -342,11 +456,19 @@ int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16
     if (avail < 8) return W5500_RX_EMPTY;
 
     // In UDP mode every datagram is preceded by an 8-byte header:
-    // source IP (4), source port (2), payload length (2).
-    // Header and a typical payload in one go.
-    uint8_t first[FAST_RX_FIRST];
-    uint16_t n_first = avail < sizeof(first) ? avail : (uint16_t)sizeof(first);
-    rx_read(sn, ptr, first, n_first);
+    // source IP (4), source port (2), payload length (2). Header and a
+    // typical payload in one DMA transfer; once the header and the first
+    // `early_len` payload bytes are in, `early` may already work on them.
+    uint16_t n_first = avail < FAST_RX_FIRST ? avail : (uint16_t)FAST_RX_FIRST;
+    dma_read_start(rx_addr(sn, ptr), n_first);
+    if (early && n_first >= 8 + early_len) {
+        dma_read_wait(n_first, (uint16_t)(8 + early_len));
+        const uint8_t *h = s_dma_rxbuf + SPI_HDR;
+        uint16_t udp_len = (uint16_t)((h[6] << 8) | h[7]);
+        if (udp_len <= cap && 8u + udp_len <= avail) early(ctx, h + 8, udp_len);
+    }
+    dma_read_finish();
+    uint8_t *first = s_dma_rxbuf + SPI_HDR;
     memcpy(ip, first, 4);
     *port = (uint16_t)((first[4] << 8) | first[5]);
     uint16_t len = (uint16_t)((first[6] << 8) | first[7]);
@@ -366,10 +488,10 @@ int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16
             return W5500_RX_OVERSIZE;
         }
         avail = again;
-        if (n_first < sizeof(first) && n_first < total) {
+        if (n_first < FAST_RX_FIRST && n_first < total) {
             // The first read was cut short by the smaller size: read the rest.
-            uint16_t more = (uint16_t)((total < sizeof(first) ? total : sizeof(first)) - n_first);
-            rx_read(sn, (uint16_t)(ptr + n_first), first + n_first, more);
+            uint16_t more = (uint16_t)((total < FAST_RX_FIRST ? total : FAST_RX_FIRST) - n_first);
+            raw_read(rx_addr(sn, (uint16_t)(ptr + n_first)), first + n_first, more);
             n_first = (uint16_t)(n_first + more);
         }
     }
@@ -377,7 +499,7 @@ int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16
     if (len <= cap) {
         uint16_t have = (uint16_t)(n_first - 8 < len ? n_first - 8 : len);
         memcpy(buf, first + 8, have);
-        if (have < len) rx_read(sn, (uint16_t)(ptr + 8 + have), buf + have, (uint16_t)(len - have));
+        if (have < len) raw_read(rx_addr(sn, (uint16_t)(ptr + 8 + have)), buf + have, (uint16_t)(len - have));
         result = len;
     }
     // Released later, once per round (w5500_udp_commit).
@@ -389,7 +511,11 @@ int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16
 
 #else
 
-int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16_t *port, uint16_t *left) {
+int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16_t *port, uint16_t *left,
+                   w5500_early_fn early, uint16_t early_len, void *ctx) {
+    (void)early;  // no early look at the data on this path
+    (void)early_len;
+    (void)ctx;
     uint16_t avail = getSn_RX_RSR(sn);
     *left = 0;
     if (avail < 8) return W5500_RX_EMPTY;

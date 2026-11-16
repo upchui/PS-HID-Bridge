@@ -215,6 +215,35 @@ void pshb_aead_seal(const uint8_t key[32], const uint8_t nonce[12], const uint8_
     pshb_wipe(st, sizeof(st));
 }
 
+void pshb_aead_prepare(pshb_aead_pre_t *pre, const uint8_t key[32], const uint8_t nonce[12]) {
+    uint32_t st[16];
+    chacha_init(st, key, nonce);
+    pshb_chacha20_block(pre->block0, st);
+    st[12] = 1;
+    pshb_chacha20_block(pre->block1, st);
+    pshb_wipe(st, sizeof(st));
+    memcpy(pre->key, key, sizeof(pre->key));
+    memcpy(pre->nonce, nonce, sizeof(pre->nonce));
+    pre->valid = true;
+}
+
+bool pshb_aead_open_pre(const pshb_aead_pre_t *pre, const uint8_t key[32], const uint8_t nonce[12],
+                        const uint8_t *ad, size_t ad_len, const uint8_t *ct, size_t len, const uint8_t tag[16],
+                        uint8_t *pt) {
+    if (!pre || !pre->valid || len > 64 || memcmp(pre->nonce, nonce, sizeof(pre->nonce)) != 0 ||
+        memcmp(pre->key, key, sizeof(pre->key)) != 0) {
+        return pshb_aead_open(key, nonce, ad, ad_len, ct, len, tag, pt);
+    }
+    uint8_t real[16];
+    aead_tag(real, pre->block0, ad, ad_len, ct, len);
+    bool ok = crypto_verify16(real, tag) == 0;
+    if (ok) {
+        for (size_t i = 0; i < len; i++) pt[i] = ct[i] ^ (uint8_t)(pre->block1[i >> 2] >> (8 * (i & 3)));
+    }
+    pshb_wipe(real, sizeof(real));
+    return ok;
+}
+
 bool pshb_aead_open(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *ad, size_t ad_len,
                     const uint8_t *ct, size_t len, const uint8_t tag[16], uint8_t *pt) {
     uint32_t st[16], block0[16];

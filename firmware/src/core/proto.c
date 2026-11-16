@@ -15,11 +15,33 @@ bool proto_check(const uint8_t *pkt, size_t len, pshb_header_t *h) {
 // packet independent (aead.c, the same result as Monocypher's IETF AEAD).
 bool proto_decrypt(const uint8_t key[PSHB_KEY_LEN], uint32_t direction, const uint8_t *pkt,
                    size_t len, uint8_t *payload_out) {
+    return proto_decrypt_pre(NULL, key, direction, pkt, len, payload_out);
+}
+
+bool proto_decrypt_pre(const pshb_aead_pre_t *pre, const uint8_t key[PSHB_KEY_LEN], uint32_t direction,
+                       const uint8_t *pkt, size_t len, uint8_t *payload_out) {
     size_t payload_len = len - PSHB_HDR_LEN - PSHB_TAG_LEN;
     uint8_t nonce[PSHB_NONCE_LEN];
     pshb_nonce(nonce, direction, pshb_rd64(&pkt[2]));
-    return pshb_aead_open(key, nonce, pkt, PSHB_HDR_LEN, pkt + PSHB_HDR_LEN, payload_len,
-                          pkt + PSHB_HDR_LEN + payload_len, payload_out);
+    return pshb_aead_open_pre(pre, key, nonce, pkt, PSHB_HDR_LEN, pkt + PSHB_HDR_LEN, payload_len,
+                              pkt + PSHB_HDR_LEN + payload_len, payload_out);
+}
+
+bool proto_prepare(pshb_aead_pre_t *pre, const uint8_t key[PSHB_KEY_LEN], uint32_t direction,
+                   const uint8_t *hdr, size_t len) {
+    pre->valid = false;
+    pshb_header_t h;
+    if (len < PSHB_HDR_LEN + PSHB_TAG_LEN) return false;
+    pshb_header_decode(hdr, &h);
+    size_t payload_len = pshb_payload_len(h.type);
+    if (h.version != PSHB_PROTO_VERSION || payload_len == 0 || payload_len > 64 ||
+        len != PSHB_HDR_LEN + payload_len + PSHB_TAG_LEN) {
+        return false;
+    }
+    uint8_t nonce[PSHB_NONCE_LEN];
+    pshb_nonce(nonce, direction, h.counter);
+    pshb_aead_prepare(pre, key, nonce);
+    return true;
 }
 
 size_t proto_seal(const uint8_t key[PSHB_KEY_LEN], uint32_t direction, uint8_t type,

@@ -120,6 +120,11 @@ static size_t handle_plain(bridge_t *b, const uint8_t *pkt, size_t len, uint64_t
 
 size_t bridge_handle_packet(bridge_t *b, const uint8_t *pkt, size_t len, uint32_t src_ip,
                             uint64_t now_us, uint8_t *reply, size_t reply_cap) {
+    return bridge_handle_packet_pre(b, pkt, len, src_ip, now_us, reply, reply_cap, NULL);
+}
+
+size_t bridge_handle_packet_pre(bridge_t *b, const uint8_t *pkt, size_t len, uint32_t src_ip,
+                                uint64_t now_us, uint8_t *reply, size_t reply_cap, const pshb_aead_pre_t *pre) {
     if (len >= PSHB_HDR_LEN && pkt[0] == PSHB_PROTO_VERSION_PLAIN && b->allow_plaintext) {
         if (!bridge_sender_allowed(b, src_ip)) {
             b->stats.rx_filtered++;
@@ -147,7 +152,7 @@ size_t bridge_handle_packet(bridge_t *b, const uint8_t *pkt, size_t len, uint32_
     // 4. authenticity
     uint8_t payload[PSHB_INPUT_PAYLOAD_LEN > PSHB_PING_PAYLOAD_LEN ? PSHB_INPUT_PAYLOAD_LEN
                                                                    : PSHB_PING_PAYLOAD_LEN];
-    if (!b->key_set || !proto_decrypt(b->key, PSHB_DIR_APP_TO_BOARD, pkt, len, payload)) {
+    if (!b->key_set || !proto_decrypt_pre(pre, b->key, PSHB_DIR_APP_TO_BOARD, pkt, len, payload)) {
         b->stats.rx_auth_fail++;
         return 0;
     }

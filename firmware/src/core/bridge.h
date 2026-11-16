@@ -12,6 +12,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "aead.h"
 #include "input_state.h"
 #include "packet.h"
 
@@ -71,6 +72,10 @@ void bridge_set_key(bridge_t *b, const uint8_t key[32]);
 // `reply` (0 = nothing to send back to the sender).
 size_t bridge_handle_packet(bridge_t *b, const uint8_t *pkt, size_t len, uint32_t src_ip,
                             uint64_t now_us, uint8_t *reply, size_t reply_cap);
+// The same, with the ChaCha20 blocks for the packet prepared while it was
+// still being read (proto_prepare; may be NULL or for another packet).
+size_t bridge_handle_packet_pre(bridge_t *b, const uint8_t *pkt, size_t len, uint32_t src_ip,
+                                uint64_t now_us, uint8_t *reply, size_t reply_cap, const pshb_aead_pre_t *pre);
 
 // Does the sender filter let `src_ip` through?
 static inline bool bridge_sender_allowed(const bridge_t *b, uint32_t src_ip) {

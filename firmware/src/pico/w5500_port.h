@@ -68,8 +68,16 @@ void w5500_unlock(void);
 // INTn again).
 // The space of the datagrams read is given back to the chip only by
 // w5500_udp_commit(): once per round, after the input has been applied.
-int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16_t *port, uint16_t *left);
+// `early` (may be NULL) is called while the datagram is still being read,
+// once its first `early_len` payload bytes are in: with the payload so far
+// and the payload's length (e.g. to start on its decryption).
+typedef void (*w5500_early_fn)(void *ctx, const uint8_t *payload, uint16_t len);
+int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16_t *port, uint16_t *left,
+                   w5500_early_fn early, uint16_t early_len, void *ctx);
 void w5500_udp_commit(uint8_t sn);
+
+// Acknowledge socket `sn`'s RECV interrupt (core 0, inside w5500_lock).
+void w5500_udp_irq_ack(uint8_t sn);
 
 // Diagnostics: how often Sn_CR was still busy before a command (timing
 // image only, every 16th command is checked).

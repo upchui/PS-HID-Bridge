@@ -33,4 +33,23 @@ void pshb_aead_seal(const uint8_t key[32], const uint8_t nonce[12], const uint8_
 bool pshb_aead_open(const uint8_t key[32], const uint8_t nonce[12], const uint8_t *ad, size_t ad_len,
                     const uint8_t *ct, size_t len, const uint8_t tag[16], uint8_t *pt);
 
+// The two ChaCha20 blocks of a packet of at most 64 bytes depend only on key
+// and nonce, not on the data: they can be computed while the rest of the
+// packet is still being read (pico/w5500_port.c reads it by DMA).
+typedef struct {
+    bool valid;
+    uint8_t key[32];
+    uint8_t nonce[12];
+    uint32_t block0[16];  // Poly1305 key (first half)
+    uint32_t block1[16];  // keystream for bytes 0..63
+} pshb_aead_pre_t;
+
+void pshb_aead_prepare(pshb_aead_pre_t *pre, const uint8_t key[32], const uint8_t nonce[12]);
+
+// pshb_aead_open with the blocks from `pre` if it was prepared for this key
+// and nonce and the text fits one block; otherwise computed as usual.
+bool pshb_aead_open_pre(const pshb_aead_pre_t *pre, const uint8_t key[32], const uint8_t nonce[12],
+                        const uint8_t *ad, size_t ad_len, const uint8_t *ct, size_t len, const uint8_t tag[16],
+                        uint8_t *pt);
+
 #endif

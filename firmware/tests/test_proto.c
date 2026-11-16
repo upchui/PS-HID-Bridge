@@ -66,6 +66,26 @@ TEST(own_aead_matches_monocypher) {
     }
 }
 
+// Blocks prepared from the header give the same result as without; blocks
+// for another packet (or another key) are not used.
+TEST(prepared_blocks) {
+    const vec_packet_t *v = &k_packets[0];
+    uint8_t a[PSHB_PONG_PAYLOAD_LEN], b[PSHB_PONG_PAYLOAD_LEN];
+    pshb_aead_pre_t pre;
+    CHECK(proto_prepare(&pre, v->key, v->direction, v->packet, v->packet_len));
+    CHECK(proto_decrypt(v->key, v->direction, v->packet, v->packet_len, a));
+    CHECK(proto_decrypt_pre(&pre, v->key, v->direction, v->packet, v->packet_len, b));
+    CHECK_MEM(a, b, v->packet_len - PSHB_HDR_LEN - PSHB_TAG_LEN);
+    const vec_packet_t *w = &k_packets[1];
+    CHECK(proto_decrypt_pre(&pre, w->key, w->direction, w->packet, w->packet_len, b));  // other nonce
+    uint8_t other[32];
+    memcpy(other, v->key, sizeof(other));
+    other[0] ^= 1;
+    CHECK(!proto_decrypt_pre(&pre, other, v->direction, v->packet, v->packet_len, b));  // other key
+    CHECK(!proto_prepare(&pre, v->key, v->direction, v->packet, v->packet_len + 1));    // wrong length
+    CHECK(!pre.valid);
+}
+
 TEST(seal_matches_vectors) {
     for (size_t i = 0; i < COUNT(k_packets); i++) {
         const vec_packet_t *v = &k_packets[i];
@@ -155,6 +175,7 @@ int main(void) {
     RUN(rfc8439_aead);
     RUN(own_aead_matches_rfc8439);
     RUN(own_aead_matches_monocypher);
+    RUN(prepared_blocks);
     RUN(seal_matches_vectors);
     RUN(open_matches_vectors);
     RUN(input_fields_decode);

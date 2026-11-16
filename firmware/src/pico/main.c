@@ -15,6 +15,7 @@
 
 #include "aead.h"
 #include "bridge.h"
+#include "proto.h"
 #include "core1.h"
 #include "diag.h"
 #include "flash_store.h"
@@ -151,6 +152,15 @@ static inline void timing_pin(uint pin, bool on) {
 
 // ---------------------------------------------------------------- network input
 
+// ChaCha20 blocks for the datagram being read: computed from its header
+// while the DMA still brings in the rest (w5500_udp_recv's `early`).
+static pshb_aead_pre_t s_pre;
+
+static void rx_early(void *ctx, const uint8_t *payload, uint16_t len) {
+    (void)ctx;
+    if (g_bridge.key_set) proto_prepare(&s_pre, g_bridge.key, PSHB_DIR_APP_TO_BOARD, payload, len);
+}
+
 // Datagrams per receive round. In between, the main loop serves USB (arms
 // reports): a burst of datagrams (WLAN delivers them in bunches) must not
 // keep it away for long.
@@ -198,7 +208,7 @@ static void net_service(void) {
     // again (and SIR follows Sn_IR).
     w5500_lock();
     uint64_t locked = time_us_64();
-    setSn_IR(W5500_SOCK_UDP, Sn_IR_RECV);
+    w5500_udp_irq_ack(W5500_SOCK_UDP);
     uint16_t left = 0;
     int got = 0;
     s_rx_more = false;
@@ -207,7 +217,9 @@ static void net_service(void) {
         uint8_t ip[4];
         uint16_t port;
         uint64_t t0 = time_us_64();
-        int n = w5500_udp_recv(W5500_SOCK_UDP, pkt, sizeof(pkt), ip, &port, &left);
+        s_pre.valid = false;
+        int n = w5500_udp_recv(W5500_SOCK_UDP, pkt, sizeof(pkt), ip, &port, &left, rx_early, PSHB_HDR_LEN,
+                               NULL);
         if (n == W5500_RX_EMPTY) break;
         if (n == W5500_RX_AGAIN) {
             s_rx_more = true;  // look again in a new round, right away
@@ -222,8 +234,9 @@ static void net_service(void) {
         } else {
             uint8_t reply[PSHB_MAX_PACKET_LEN];
             g_bridge.input_applied = false;
-            size_t rlen = bridge_handle_packet(&g_bridge, pkt, (size_t)n, ip_to_u32(ip), t1, reply,
-                                               sizeof(reply));
+            size_t rlen = bridge_handle_packet_pre(&g_bridge, pkt, (size_t)n, ip_to_u32(ip), t1, reply,
+                                                   sizeof(reply), &s_pre);
+            if (s_pre.valid) pshb_wipe(&s_pre, sizeof(s_pre));  // keystream
             uint64_t t2 = time_us_64();
             latency_add(&g_diag.handle, (uint32_t)(t2 - t1));
             if (rlen) w5500_udp_send_nb(W5500_SOCK_UDP, reply, (uint16_t)rlen, ip, port);

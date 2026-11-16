@@ -60,6 +60,7 @@ function(pshb_add_firmware name)
         pico_rand
         pico_sync
         pico_unique_id
+        hardware_dma
         hardware_flash
         hardware_spi
         hardware_watchdog
