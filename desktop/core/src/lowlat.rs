@@ -172,7 +172,16 @@ impl AdapterTimer {
             self.restore();
             return;
         }
-        if self.saved.is_some() {
+        if let Some((iface, _)) = &self.saved {
+            // Switched already. The adapter may have come back since (dock
+            // plugged in again, resume) with the driver's default: switch
+            // it again, and keep the value noted first for putting back.
+            if let Some(info) = self.info.as_mut().filter(|i| i.iface == *iface && i.writable)
+                && read_timer(&self.sys, &info.iface).is_some_and(|us| us != 0)
+                && write_timer(&self.sys, &info.iface, 0).is_ok()
+            {
+                info.timer_us = 0;
+            }
             return;
         }
         let Some(info) = &mut self.info else {
@@ -530,6 +539,23 @@ mod tests {
         drop(t);
         assert_eq!(timer(&root, "eth0"), 400);
         assert!(!state.exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn adapter_back_with_its_default_is_switched_again() {
+        let root = fake_net("replug", &[("eth0", "400\n")]);
+        let mut t = AdapterTimer::with_root(&root, None);
+        t.set_adapter(adapter_info_in(&root, "eth0"));
+        t.set_active(true);
+        assert_eq!(timer(&root, "eth0"), 0);
+        // Plugged in again: the driver's default is back.
+        write_timer(&root, "eth0", 400).unwrap();
+        t.set_adapter(adapter_info_in(&root, "eth0")); // the periodic check
+        assert_eq!(timer(&root, "eth0"), 0);
+        assert!(t.status().unwrap().at_once_now);
+        t.set_active(false);
+        assert_eq!(timer(&root, "eth0"), 400);
         fs::remove_dir_all(&root).unwrap();
     }
 
