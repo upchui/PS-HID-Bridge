@@ -256,7 +256,7 @@ struct Runner {
     /// Where the board is (for the network adapter check).
     board: Option<SocketAddr>,
     /// Switches the bundling of the adapter towards the board off while
-    /// the devices are grabbed (if the user may).
+    /// the service runs (if the user may).
     adapter: AdapterTimer,
     net_check_running: bool,
     /// A check was asked for while one was running (its result may be old).
@@ -337,7 +337,6 @@ impl Runner {
         let grabbed = self.guard.is_grabbed();
         self.idle.set(grabbed);
         self.cpu.set_active(grabbed);
-        self.adapter.set_active(grabbed);
     }
 
     /// Devices that could not be grabbed or released: one message for the
@@ -581,12 +580,16 @@ impl Runner {
     fn shutdown(&mut self) {
         self.ctl.shutdown();
         self.apply_requests();
+        self.adapter.set_active(false);
         let mut msgs = Vec::new();
         self.inputs.update(&[], &[], &mut msgs);
     }
 
     fn run(mut self, rx: Receiver<ServiceCmd>) {
         self.realtime = rt::make_current_thread_realtime(rt::PRIORITY).is_ok();
+        // The adapter sends at once as long as the service runs (as soon as
+        // the check below has found it).
+        self.adapter.set_active(true);
         self.rescan();
         let watchdog = Watchdog::start(self.link.clone(), self.guard.clone(), Duration::from_secs(1));
         let mut next_status = Instant::now();

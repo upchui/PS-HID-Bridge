@@ -105,8 +105,7 @@ pub mod qobject {
         #[qproperty(QString, usb_status)]
         /// USB network adapter towards the board that can bundle packets
         /// ("" = none), how long it holds a packet back at most when it does
-        /// (ms), and who decides: "managed" (the app, only while the bridge
-        /// is on), "delaying" (bundles, the app may not switch it) or
+        /// (ms), and who decides: "managed" (the app, while it runs), "delaying" (bundles, the app may not switch it) or
         /// "fixed" (sends at once, set outside the app).
         #[qproperty(QString, adapter_iface)]
         #[qproperty(f64, adapter_delay_ms)]
@@ -1045,8 +1044,8 @@ impl qobject::AppController {
                 // The service looks at the adapter and the permissions again.
                 self.command(ServiceCmd::CheckLowLatency);
                 if on {
-                    "Set up: from now on the app switches the network adapter to “send at once” \
-                     while the bridge is on, without asking for a password."
+                    "Set up: from now on the network adapter sends at once while the app runs \
+                     and bundles again when it is closed, without asking for a password."
                         .to_string()
                 } else {
                     "Undone: the rule is gone, the network adapter bundles packets again (400 µs), \

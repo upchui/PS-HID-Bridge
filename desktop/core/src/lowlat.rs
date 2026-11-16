@@ -6,8 +6,9 @@
 //!   timer, up to three rounds of `tx_timer_usecs` (400 µs by default), so
 //!   about 1 ms. [`adapter_info`] finds out whether the way to the board goes
 //!   through such an adapter. 0 switches the waiting off; [`AdapterTimer`]
-//!   does that only while the bridge is on, if the user may write the setting
-//!   (set up once as root, see [`crate::access::latency_rule`]).
+//!   does that while the app runs and puts it back afterwards, if the user
+//!   may write the setting (set up once as root, see
+//!   [`crate::access::latency_rule`]).
 //! * Idle cores sleep in states that take up to a few hundred microseconds
 //!   to wake up from. [`CpuWake`] holds a PM QoS request through
 //!   `/dev/cpu_dma_latency` while the bridge is on, so they only use the
@@ -89,8 +90,8 @@ fn may_write(path: &Path) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdapterStatus {
     pub iface: String,
-    /// The driver's own timer (µs): what it bundles with while the bridge
-    /// is off (0 = it never bundles).
+    /// The driver's own timer (µs): what it bundles with when the app does
+    /// not switch it (0 = it never bundles).
     pub timer_us: u32,
     /// The app switches it (the user may write the setting).
     pub managed: bool,
@@ -98,8 +99,9 @@ pub struct AdapterStatus {
     pub at_once_now: bool,
 }
 
-/// Switches the bundling of the adapter towards the board off while the
-/// bridge is on and back on afterwards, if the user may write the setting.
+/// Switches the bundling of the adapter towards the board off while it is
+/// active (the app runs) and back on afterwards, if the user may write the
+/// setting.
 /// A file notes what to put back, so that a crash does not leave the
 /// adapter switched for good: the next start puts it back.
 pub struct AdapterTimer {
@@ -157,8 +159,7 @@ impl AdapterTimer {
         self.apply();
     }
 
-    /// The bridge holds the devices (true) or not. Cheap when nothing
-    /// changes: called after every input event.
+    /// Switch (true) or put back.
     pub fn set_active(&mut self, active: bool) {
         if active != self.active {
             self.active = active;

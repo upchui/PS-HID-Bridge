@@ -101,7 +101,7 @@ AppPage {
         text: "The network adapter " + AppController.adapterIface + " holds every packet back up to about "
               + AppController.adapterDelayMs.toFixed(1) + " ms before sending it, to bundle packets (USB adapter, cdc_ncm). "
               + "This comes on top of “Input → network” and shows in the round trip. "
-              + "Set up once (administrator password); after that the app switches bundling off only while the bridge is on, without a password."
+              + "Set up once (administrator password); after that the adapter sends at once while the app runs and bundles again when it is closed, without a password."
               + (AppController.latencySetupMessage !== "" ? "\n" + AppController.latencySetupMessage : "")
         actions: AppButton {
             text: AppController.latencySetupBusy ? "Setting up …" : "Set up"

@@ -456,21 +456,22 @@ fn cmd_run(
 
     let link = Arc::new(start_link_rt(ctx, board, Duration::from_secs(1), true)?);
     // Switches the bundling of a USB network adapter towards the board off
-    // while the bridge is on (if set up, see the README); puts back what a
-    // crashed run left switched.
+    // while this runs (if set up, see the README); puts back what a crashed
+    // run left switched.
     let mut adapter = AdapterTimer::new(Some(config::adapter_state_path()));
     let adapter_info = board_addr(ctx, board).ok().and_then(lowlat::adapter_info);
     if let Some(d) = adapter_info.as_ref().filter(|d| d.timer_us > 0 && !d.writable) {
         eprintln!(
             "Note: the network adapter {iface} holds every packet back up to about {ms:.1} ms before \
-             sending it (USB adapter, cdc_ncm). Set up once (as root) so that the bridge may switch \
-             that off while it is on: the app's Latency page (\"Set up\"), or see the README \
+             sending it (USB adapter, cdc_ncm). Set up once (as root) so that the app may switch \
+             that off while it runs: the app's Latency page (\"Set up\"), or see the README \
              (section \"Latency\").",
             iface = d.iface,
             ms = 3.0 * d.timer_us as f64 / 1000.0,
         );
     }
     adapter.set_adapter(adapter_info);
+    adapter.set_active(true);
     if link.wait_connected(Duration::from_secs(2)) {
         if let Some(p) = link.status().board {
             println!("Board connected: {}", describe(&p));
@@ -535,7 +536,7 @@ fn cmd_run(
                 "Network adapter {}: {}",
                 a.iface,
                 if a.managed {
-                    "sends at once while the bridge is on"
+                    "sends at once while this runs"
                 } else if a.at_once_now {
                     "sends at once (set outside the app)"
                 } else {
@@ -544,30 +545,26 @@ fn cmd_run(
             );
         }
     }
-    let apply_grab = |ctl: &mut Controller,
-                      inputs: &mut InputSet,
-                      idle: &mut IdleInhibitor,
-                      cpu: &mut CpuWake,
-                      adapter: &mut AdapterTimer| {
-        let forgotten = ctl.take_forgotten();
-        if !forgotten.is_empty() {
-            inputs.forget(&forgotten);
-        }
-        while let Some(on) = ctl.take_grab_request() {
-            let problems = inputs.set_grab(on);
-            if let Some(text) = input::grab_problems(&problems) {
-                eprintln!("{text}");
+    let apply_grab =
+        |ctl: &mut Controller, inputs: &mut InputSet, idle: &mut IdleInhibitor, cpu: &mut CpuWake| {
+            let forgotten = ctl.take_forgotten();
+            if !forgotten.is_empty() {
+                inputs.forget(&forgotten);
             }
-            if problems.iter().any(|m| matches!(m, InputMsg::GrabFailed { .. })) {
-                for n in ctl.command(Action::Off) {
-                    println!("{}", notice_text(n));
+            while let Some(on) = ctl.take_grab_request() {
+                let problems = inputs.set_grab(on);
+                if let Some(text) = input::grab_problems(&problems) {
+                    eprintln!("{text}");
+                }
+                if problems.iter().any(|m| matches!(m, InputMsg::GrabFailed { .. })) {
+                    for n in ctl.command(Action::Off) {
+                        println!("{}", notice_text(n));
+                    }
                 }
             }
-        }
-        idle.set(grabbed.is_grabbed());
-        cpu.set_active(grabbed.is_grabbed());
-        adapter.set_active(grabbed.is_grabbed());
-    };
+            idle.set(grabbed.is_grabbed());
+            cpu.set_active(grabbed.is_grabbed());
+        };
 
     let mut connected = link.is_connected();
     let mut result = Ok(());
@@ -584,7 +581,7 @@ fn cmd_run(
                     for n in ctl.handle(event, Instant::now(), ts_us) {
                         println!("{}", notice_text(n));
                     }
-                    apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu, &mut adapter);
+                    apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu);
                 }
                 // Its keys were released just before (InputSet sends key-ups).
                 InputMsg::Gone { path, error } => {
@@ -611,7 +608,7 @@ fn cmd_run(
             for n in ctl.command(Action::Off) {
                 println!("{}", notice_text(n));
             }
-            apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu, &mut adapter);
+            apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu);
         }
         let now_connected = link.is_connected();
         if now_connected != connected {
@@ -638,7 +635,8 @@ fn cmd_run(
     }
 
     ctl.shutdown();
-    apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu, &mut adapter);
+    apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu);
+    adapter.set_active(false);
     drop(watchdog);
     drop(inputs);
     thread::sleep(Duration::from_millis(30));

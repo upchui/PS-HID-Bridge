@@ -59,13 +59,13 @@ pub const LATENCY_RULE_PATH: &str = "/etc/udev/rules.d/70-ps-hid-bridge-latency.
 
 /// Low latency outside the app (see [`crate::lowlat`]), set up once:
 /// user `uid` may switch the packet bundling of USB network adapters with
-/// the cdc_ncm driver (the app does so only while the bridge is on, without
+/// the cdc_ncm driver (the app does so while it runs, without
 /// root), and with `cpu_access` the logged-in user may keep the CPU out of
 /// deep sleep states (only needed where the system does not allow it).
 pub fn latency_rule(uid: u32, cpu_access: bool) -> String {
     let mut out = format!(
         "# PS HID Bridge: low latency (written by the app; remove this file to revoke)\n\
-         # USB network adapters (cdc_ncm): user {uid} may switch packet bundling off; the app does so only while the bridge is on\n\
+         # USB network adapters (cdc_ncm): user {uid} may switch packet bundling off; the app does so while it runs\n\
          ACTION==\"add\", SUBSYSTEM==\"net\", TEST==\"{NCM_TIMER}\", RUN+=\"/bin/chown {uid} %S%p/{NCM_TIMER}\"\n"
     );
     if cpu_access {

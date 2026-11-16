@@ -294,8 +294,8 @@ AppPage {
                 text: AppController.adapterMode === "delaying"
                       ? `${AppController.adapterIface} holds every packet back up to about ${AppController.adapterDelayMs.toFixed(1)} ms (USB adapter, cdc_ncm)`
                       : AppController.adapterMode === "managed"
-                      ? (AppController.adapterAtOnceNow ? `${AppController.adapterIface} sends at once now (the bridge is on)`
-                         : `${AppController.adapterIface} sends at once while the bridge is on; bundles packets otherwise (up to ${AppController.adapterDelayMs.toFixed(1)} ms)`)
+                      ? (AppController.adapterAtOnceNow ? `${AppController.adapterIface} sends at once while the app runs (bundles again when it is closed)`
+                         : `${AppController.adapterIface} bundles packets (up to ${AppController.adapterDelayMs.toFixed(1)} ms); the app switches it to “send at once”`)
                       : AppController.adapterMode === "fixed" ? `${AppController.adapterIface} sends at once (set outside the app)`
                       : AppController.connected ? "sends packets at once" : "–"
             }
@@ -350,7 +350,7 @@ AppPage {
                 wrapMode: Text.WordWrap
                 color: Style.muted
                 text: AppController.latencySetupMessage !== "" ? AppController.latencySetupMessage
-                      : setupRow.needed ? "Asks for the administrator password once and installs a udev rule: this user may then switch the bundling of USB network adapters (the app does so only while the bridge is on, without a password) and, where needed, keep the processor awake."
+                      : setupRow.needed ? "Asks for the administrator password once and installs a udev rule: this user may then switch the bundling of USB network adapters (the app turns it off while it runs and back on when it is closed, without a password) and, where needed, keep the processor awake."
                       : "Set up through /etc/udev/rules.d/70-ps-hid-bridge-latency.rules. “Undo” removes it: the network adapter bundles packets again and the app no longer switches it (administrator password)."
             }
         }
