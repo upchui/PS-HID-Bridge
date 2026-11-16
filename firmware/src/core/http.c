@@ -85,6 +85,8 @@ static void parse_header(http_req_t *r) {
         r->has_ota_auth2 = hex32(r, v, r->ota_auth2);
     } else if (header_is(r->line, "X-PSHB-OTA-Hash", &v)) {
         r->has_ota_hash = hex32(r, v, r->ota_hash);
+    } else if (header_is(r->line, "X-PSHB-Auth", &v)) {
+        r->has_auth = hex32(r, v, r->auth);
     } else if (header_is(r->line, "Cookie", &v)) {
         const char *p = strstr(v, "pshb_session=");
         while (p && p != v && p[-1] != ' ' && p[-1] != ';') p = strstr(p + 1, "pshb_session=");

@@ -100,7 +100,10 @@ function selectTab(name) {
   }
   for (const p of document.querySelectorAll(".tabpane")) p.hidden = p.id !== "t-" + name;
   if (lastStatus && name !== "status") fillForms(lastStatus);
-  if (name === "system") checkForUpdate();
+  if (name === "system") {
+    checkForUpdate();
+    refreshClock();
+  }
 }
 
 function fmtUptime(ms) {
@@ -195,6 +198,18 @@ function renderDiag(d) {
   $("d-crypto").textContent = d.crypto_avg_ns
     ? `${(d.crypto_avg_ns / 1000).toFixed(1)} µs on average${d.crypto_fast ? " (optimised for this CPU)" : ""}` : "–";
   $("d-chip").textContent = `SPI ${(d.spi_hz / 1e6).toFixed(1)} MHz · ${d.datagrams} packets in ${d.rounds} rounds · ${d.core0_spi} transfers`;
+}
+
+async function refreshClock() {
+  try {
+    const c = await api("/api/clock");
+    const f = $("f-clock");
+    f.cpu.value = String(c.cpu_mhz);
+    f.spi.value = c.spi_fast ? "1" : "0";
+    $("clk-now").textContent = `CPU ${(c.cpu_hz / 1e6).toFixed(0)} MHz · SPI ${(c.spi_hz / 1e6).toFixed(1)} MHz`;
+    $("clk-fell-back").hidden = !c.cpu_fell_back;
+    $("clk-spi-failed").hidden = !c.spi_fast_failed;
+  } catch (e) { /* shown at the next refresh */ }
 }
 
 async function refreshStatus(fill) {
@@ -395,6 +410,15 @@ function init() {
     waitForReboot("Firmware written. The board starts the new version …");
   });
 
+  $("f-clock").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = $("f-clock");
+    try {
+      const r = await api("/api/clock", { cpu_mhz: Number(f.cpu.value), spi_fast: f.spi.value === "1" });
+      if (r.reboot) waitForReboot("Clock speed saved. The board is restarting …");
+      else message("Nothing changed.", true);
+    } catch (e) { message(e.message, false); }
+  });
   $("b-reboot").addEventListener("click", async () => {
     try {
       await api("/api/reboot", {});

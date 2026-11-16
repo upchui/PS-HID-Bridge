@@ -71,7 +71,7 @@ apply 54 µs (decrypting one 49-byte packet with Monocypher: 52.9 µs).
 | Receive only on INTn | no 1 ms poll; INTn is level-triggered; leftovers of a round continue without waiting | idle SPI 3052/s → 0/s; detect P99 >128 → 5 µs; packet → fetched median 1200 → 800 µs |
 | Fewer SPI transactions | size read once (torn reads handled), read pointer + RECV once per round after applying, no wait for Sn_CR | ~7 → ~5 transactions; SPI 47 → 32 µs; ready median 106 → 92 µs |
 | Bus in pieces | ioLibrary buffer transfers in 128-byte pieces, core 0 has priority | bus wait max with web / upload load 394 / 392 → 55 / 52 µs |
-| 37.5 MHz option | `PSHB_W5500_SPI_FAST` with a self-test, default stays 25 MHz | (option) SPI 32 → 24 µs |
+| 37.5 MHz option | fast SPI clock with a self-test, default stays 25 MHz (now a setting, see "Clock speeds") | (option) SPI 32 → 24 µs |
 | Faster decryption | own RFC 8439 AEAD (Poly1305 26-bit limbs), ChaCha20 block in Cortex-M33 assembly, word-wise wiping | decrypt 52.5 → 33.2 µs; ready median 92 → 76 µs |
 | SPI mode 3 | the PL022 sends bytes back to back (mode 0 leaves gaps) | SPI 32 → 28 µs; ready median 76 → 72 µs |
 | Decrypt while it arrives | datagram by DMA, both ChaCha20 blocks computed from the header while the rest arrives; small accesses straight on the SPI registers | ready median 72 → 60 µs |
@@ -91,9 +91,29 @@ apply 54 µs (decrypting one 49-byte packet with Monocypher: 52.9 µs).
 | packet → fetched, P99 / max (µs) | 1150 / 3386 | 1100 / 1720 | 1100 / 1778 |
 | SPI transactions by core 0 when idle | 0/s | | |
 
-With `PSHB_W5500_SPI_FAST=ON` (37.5 MHz, self-test passed, no bad
-signatures): packet → ready median 52 µs, first datagram of a round median
-50 µs, P99 100 µs; bus wait max 33 µs (web) / 31 µs (upload).
+With the fast SPI clock (37.5 MHz, self-test passed, no bad signatures):
+packet → ready median 52 µs, first datagram of a round median 50 µs, P99
+100 µs; bus wait max 33 µs (web) / 31 µs (upload).
+
+### Clock speeds
+
+Both clocks are settings (web interface → System → Clock speed, the app's
+Board page, `pshb-cli board --cpu 150|200 --spi standard|fast`); the board
+restarts to apply them. 200 MHz is beyond the RP2350's rating: a start at
+200 MHz is on trial for 10 s under the hardware watchdog, and if it hangs,
+the next start runs at 150 MHz and stores that. At 200 MHz the peripheral
+clock follows the CPU, so the fast SPI clock is 33.3 MHz, which the W5500 is
+rated for.
+
+| 1.0.25 at 200 MHz, SPI 33.3 MHz | mouse | + web | + upload |
+|---|---|---|---|
+| packet → ready, median / P99 / max (µs) | 40 / 84 / 1377 | 40 / 100 / 382 | 40 / 84 / 186 |
+| … first datagram of a round, median / P99 (µs) | 40 / 78 | 40 / 78 | 40 / 80 |
+| core 0 waits for the bus, max (µs) | 4 | 35 | 34 |
+| missed polls | 0 | 0 | 0 |
+
+Decrypting one packet takes 24.8 µs there (33 µs at 150 MHz). With that
+setting both latency targets are met.
 
 The median of "packet → fetched" (500–800 µs) depends on where the test
 sender's packets fall within the PlayStation's frame (both run at 1 kHz); for
@@ -105,8 +125,8 @@ gain for the player: ~400 µs on average.
 
 | Target | Result |
 |---|---|
-| packet → report ready < 50 µs median | **52–56 µs** at 25 MHz, 50–52 µs at 37.5 MHz: close, not quite |
-| … < 100 µs P99 | **106 µs** (first datagram of a round) at 25 MHz, 100 µs at 37.5 MHz; over all datagrams 148–152 µs because WLAN bunches queue behind each other |
+| packet → report ready < 50 µs median | **52–56 µs** at 25 MHz, 50–52 µs at 37.5 MHz: close, not quite; **40 µs** with the CPU at 200 MHz |
+| … < 100 µs P99 | **106 µs** (first datagram of a round) at 25 MHz, 100 µs at 37.5 MHz, **78–80 µs** at 200 MHz; over all datagrams 148–152 µs at 150 MHz because WLAN bunches queue behind each other |
 | core 0 waits for the bus < 0.1 ms | **met**: at most 46 µs with web load, 45 µs during uploads |
 | missed polls near 0 with continuous motion | **met**: 0 in ~75000 reports (the ~0.6–0.9 % skipped polls are the PlayStation's) |
 
@@ -137,11 +157,9 @@ part 14 µs.
 - **33 MHz SPI:** not possible from the 150 MHz peripheral clock (even
   divider: 25 or 37.5 MHz). 37.5 MHz is above the 33.3 MHz the datasheet
   guarantees and therefore an option with a self-test, not the default.
-- **Not done:** a higher system clock (the SDK has an official 200 MHz
-  preset only for the RP2040; on the RP2350 it would be overclocking, which
-  would also give exactly 33.3 MHz SPI), Poly1305 in assembly (UMAAL),
-  Poly1305 over the header while the data arrives. Each would bring a few
-  µs; the first would likely reach the 50 µs median.
+- **Not done:** Poly1305 in assembly (UMAAL), Poly1305 over the header
+  while the data arrives; each would bring a few µs. A higher CPU clock
+  came later as a setting (see "Clock speeds").
 
 ## Measuring yourself
 

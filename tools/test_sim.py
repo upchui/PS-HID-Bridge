@@ -809,6 +809,65 @@ class WebTests(unittest.TestCase):
         self.assertEqual((status, r), (200, {"ok": True, "bytes": len(body)}))
         self.assertFalse(self.sim.wait_line(f"OTA BEGIN {len(body)}", timeout=0.2))
 
+    def signed(self, method: str, path: str, key: bytes, body: bytes = b"", nonce: bytes | None = None):
+        """A request signed with the key, as the app sends it (no login)."""
+        import urllib.error
+        import urllib.request
+        if nonce is None:
+            status, r, _ = Web(self.sim.http_port).req("GET", "/api/ota/challenge")
+            self.assertEqual(status, 200)
+            nonce = bytes.fromhex(r["nonce"])
+        req = urllib.request.Request(f"http://127.0.0.1:{self.sim.http_port}{path}",
+                                     data=body if method == "POST" else None, method=method)
+        if method == "POST":
+            req.add_header("X-PSHB", "1")
+            req.add_header("Content-Type", "application/json")
+        req.add_header("X-PSHB-Auth", proto.request_mac(key, nonce, method, path, body).hex())
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"{}")
+
+    def test_clock_settings(self):
+        anon = Web(self.sim.http_port)
+        status, c, _ = anon.req("GET", "/api/clock")  # readable without login
+        self.assertEqual(status, 200)
+        self.assertEqual((c["cpu_mhz"], c["spi_fast"], c["cpu_hz"], c["spi_hz"]), (150, False, 150000000, 25000000))
+        self.assertEqual(anon.req("POST", "/api/clock", {"cpu_mhz": 200})[0], 401)
+        self.setup_password()
+        self.assertEqual(self.web.req("POST", "/api/clock", {"cpu_mhz": 175})[0], 400)
+        # Unchanged: no restart.
+        self.assertEqual(self.web.req("POST", "/api/clock", {"cpu_mhz": 150})[1], {"ok": True, "reboot": False})
+        status, r, _ = self.web.req("POST", "/api/clock", {"cpu_mhz": 200, "spi_fast": True})
+        self.assertEqual((status, r), (200, {"ok": True, "reboot": True}))
+        self.assertTrue(self.sim.wait_line("REBOOT", timeout=2))
+        c = anon.req("GET", "/api/clock")[1]
+        self.assertEqual((c["cpu_mhz"], c["spi_fast"], c["cpu_hz"]), (200, True, 200000000))
+
+    def test_signed_requests(self):
+        key = self.setup_key()
+        # The app reads status and diagnostics and sets the clock with the key.
+        status, st = self.signed("GET", "/api/status", key)
+        self.assertEqual(status, 200)
+        self.assertEqual(st["udp_port"], 45045)
+        self.assertEqual(self.signed("GET", "/api/diag", key)[0], 200)
+        self.assertEqual(self.signed("POST", "/api/diag/reset", key, b"{}"), (200, {"ok": True}))
+        body = json.dumps({"spi_fast": True}).encode()
+        self.assertEqual(self.signed("POST", "/api/clock", key, body), (200, {"ok": True, "reboot": True}))
+        self.assertTrue(self.sim.wait_line("REBOOT", timeout=2))
+        # A wrong key, a used-up challenge, another body than signed: refused.
+        status, r = self.signed("GET", "/api/status", bytes(32))
+        self.assertEqual(status, 403)
+        self.assertIn("Signature", r["error"])
+        nonce = bytes.fromhex(Web(self.sim.http_port).req("GET", "/api/ota/challenge")[1]["nonce"])
+        self.assertEqual(self.signed("GET", "/api/status", key, nonce=nonce)[0], 200)
+        self.assertEqual(self.signed("GET", "/api/status", key, nonce=nonce)[0], 403)
+        # Password, key and network stay with the login.
+        status, r = self.signed("POST", "/api/psk/generate", key, b"{}")
+        self.assertEqual(status, 403)
+        self.assertIn("Not allowed", r["error"])
+
     def test_firmware_upload_needs_login(self):
         import zlib
         uf2 = make_uf2(4)

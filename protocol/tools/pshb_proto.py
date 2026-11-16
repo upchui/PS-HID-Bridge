@@ -187,6 +187,7 @@ def open_packet(key: bytes, direction: int, packet: bytes) -> tuple[int, int, by
 OTA_KEY_LABEL = b"pshb-ota-key-v1"
 OTA_MAC_LABEL = b"pshb-ota-v1"
 OTA_MAC2_LABEL = b"pshb-ota-v2"
+REQ_MAC_LABEL = b"pshb-req-v1"
 
 
 def ota_key(psk: bytes) -> bytes:
@@ -208,6 +209,14 @@ def ota_hash(image: bytes) -> bytes:
     """X-PSHB-OTA-Hash: BLAKE2b-256 of the file."""
     import hashlib
     return hashlib.blake2b(image, digest_size=32).digest()
+
+
+def request_mac(psk: bytes, nonce: bytes, method: str, path: str, body: bytes = b"") -> bytes:
+    """X-PSHB-Auth: a request signed with the key (status, diagnostics, clock)."""
+    import hashlib
+    h = hashlib.blake2b(key=ota_key(psk), digest_size=32)
+    h.update(REQ_MAC_LABEL + nonce + method.encode() + b" " + path.encode() + b"\n" + body)
+    return h.digest()
 
 
 def ota_mac2(psk: bytes, nonce: bytes, image: bytes) -> bytes:

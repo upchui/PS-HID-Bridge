@@ -15,6 +15,7 @@
 
 #include "aead.h"
 #include "bridge.h"
+#include "clock.h"
 #include "proto.h"
 #include "core1.h"
 #include "crypto_help.h"
@@ -316,8 +317,9 @@ static void usb_status_service(void) {
     prev = s;
 }
 
-static void load_settings(void) {
-    if (!settings_load(&g_settings_flash, &g_settings)) {
+// The settings were read at the very start (main, for the clock).
+static void load_settings(bool stored) {
+    if (!stored) {
         printf("settings: none stored, using defaults\n");
     }
 #ifdef PSHB_DEV_PSK
@@ -341,6 +343,10 @@ static void load_settings(void) {
 static uint32_t s_core1_stack[8192 / sizeof(uint32_t)];
 
 int main(void) {
+    // The clock first: UART, USB and SPI depend on it, and its setting is in
+    // the flash (read through XIP, which needs no set-up).
+    bool stored = settings_load(&g_settings_flash, &g_settings);
+    clock_init(&g_settings);
     stdio_init_all();
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
@@ -356,19 +362,21 @@ int main(void) {
            (PSHB_FW_VERSION >> 16) & 0xFF, PSHB_FW_VERSION & 0xFFFF,
            PSHB_TEST_PATTERN ? " (test pattern)" : "",
            PSHB_PLAINTEXT_DEBUG ? " (PLAINTEXT DEBUG)" : "");
+    printf("clock: CPU at %lu MHz%s\n", (unsigned long)(clock_cpu_hz() / 1000000),
+           clock_fell_back() ? " (200 MHz did not get through its trial last time)" : "");
 
     input_state_init(&g_input);
     diag_init();
     bridge_init(&g_bridge, &g_input, get_rand_64(), get_rand_64(), time_us_64());
     g_bridge.allow_plaintext = PSHB_PLAINTEXT_DEBUG;
     critical_section_init(&s_cfg_lock);
-    load_settings();
+    load_settings(stored);
     hid_out_init(&g_input);
     tud_init(0);
 
     crypto_select();
     crypto_help_init_core0();
-    s_chip_ok = w5500_port_init();
+    s_chip_ok = w5500_port_init(g_settings.spi_fast);
     // Before the confirmation below: buying may erase the other slot.
     g_running_slot = ota_running_slot();
     g_bridge.no_partition_table = !ota_has_partition_table();
@@ -385,6 +393,7 @@ int main(void) {
     }
 
     while (true) {
+        clock_service();
         tud_task();
         if (s_chip_ok) net_service();
 #if PSHB_TEST_PATTERN

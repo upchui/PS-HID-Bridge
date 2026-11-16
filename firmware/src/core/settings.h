@@ -35,8 +35,13 @@ typedef struct {
     // reserved (zero) bytes, so settings stored before it existed keep
     // meaning "exactly this address".
     uint8_t allowed_host_bits;
+    // Clock speeds, also from the reserved bytes (0 = as before): the CPU at
+    // 200 instead of 150 MHz (beyond the RP2350's rating), the SPI clock to
+    // the W5500 at its fast setting after a self-test (pico/clock.c).
+    uint8_t cpu_200mhz;
+    uint8_t spi_fast;
 
-    uint8_t reserved[PSHB_SETTINGS_SIZE - 4 - 2 - 2 - 4 - 1 - 16 - 1 - 2 - 32 - 4 - 1 - 16 - 32 - 1 - 4];
+    uint8_t reserved[PSHB_SETTINGS_SIZE - 4 - 2 - 2 - 4 - 1 - 16 - 1 - 2 - 32 - 4 - 1 - 16 - 32 - 1 - 2 - 4];
     uint32_t crc;              // CRC-32 of all bytes before this field
 } pshb_settings_t;
 

@@ -114,6 +114,8 @@ pshb-cli update --check                            # installed and newest versio
 pshb-cli update                                    # replace pshb-cli with the newest release
 pshb-cli update --firmware                         # install the newest firmware on the board
 pshb-cli update --firmware --file ps-hid-bridge.uf2  # ... or a file
+pshb-cli board                                     # latency of the board's input path, status, clock
+pshb-cli board --cpu 200 --spi fast                # set the clock speeds (the board restarts)
 pshb-cli flash                                     # first installation over USB (BOOTSEL), see below
 pshb-cli flash --image erase                       # recovery images: firmware, hidtest, hidtest-mouse8, erase
 ```
@@ -144,7 +146,7 @@ At `http://<board IP>/`, light or dark like the browser. The tab is part of the 
 - **Status:** state of the PlayStation connection and input, tiles for network, firmware and slot, and latency, packet counters; more under "Details".
 - **Network:** DHCP or static address, UDP port. Saving restarts the board.
 - **Security:** generate a pre-shared key (shown exactly once) or enter an existing one, sender filter (one address such as `192.168.1.20` or a subnet such as `192.168.1.0/24`), change the password.
-- **System:** firmware update, restart, factory reset.
+- **System:** firmware update, clock speed (CPU 150 or 200 MHz, SPI to the network chip standard or fast; see [docs/latency.md](docs/latency.md), "Clock speeds"), restart, factory reset.
 
 The web interface uses unencrypted HTTP in the local network. The password protects against accidental changes and against other devices in the network, not against someone who can capture the network traffic. The input itself is always encrypted.
 

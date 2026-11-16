@@ -1,4 +1,5 @@
 #include "core1.h"
+#include "clock.h"
 #include "crypto_help.h"
 
 #include <stdio.h>
@@ -255,6 +256,14 @@ static void be_diag(void *ctx, web_diag_t *out) {
     out->spi_hz = w5500_spi_hz();
 }
 
+static void be_clock(void *ctx, web_clock_t *out) {
+    (void)ctx;
+    out->cpu_hz = clock_cpu_hz();
+    out->spi_hz = w5500_spi_hz();
+    out->cpu_fell_back = clock_fell_back();
+    out->spi_fast_failed = w5500_spi_fast_failed();
+}
+
 static void be_diag_reset(void *ctx) {
     (void)ctx;
     g_diag.reset_request = true;  // core 0 owns the statistics
@@ -374,6 +383,7 @@ static const web_backend_t k_backend = {
     .status = be_status,
     .diag = be_diag,
     .diag_reset = be_diag_reset,
+    .clock = be_clock,
     .save = be_save,
     .apply = be_apply,
     .reboot = be_reboot,
@@ -418,6 +428,14 @@ void core1_main(void) {
 
     crypto_bench();
     crypto_help_init_core1();
+    if (clock_fell_back() && g_settings.cpu_200mhz) {
+        // 200 MHz did not run stably: keep 150 MHz from now on (the web
+        // interface and the app say why).
+        pshb_settings_t next = g_settings;
+        next.cpu_200mhz = 0;
+        if (settings_save(&g_settings_flash, &next)) g_settings = next;
+        printf("clock: back to 150 MHz for good\n");
+    }
     reg_dhcp_cbfunc(on_dhcp_assign, on_dhcp_assign, on_dhcp_conflict);
     set_state(C1_NO_LINK);
     web_server_init(&k_backend, &g_settings);
@@ -443,12 +461,14 @@ void core1_main(void) {
         if (s_ota_activate) {
             s_ota_activate = false;  // returns only if the image is not ready
             web_server_drain(1000);  // let the response reach the client
+            clock_before_reboot();
             ota_activate();
         }
 
         if (s_reboot) {
             printf("system: reboot\n");
             web_server_drain(1000);  // let the last answer reach the client
+            clock_before_reboot();
             watchdog_reboot(0, 0, 0);
             for (;;) {
                 tight_loop_contents();

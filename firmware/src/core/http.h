@@ -38,6 +38,8 @@ typedef struct {
     uint8_t ota_auth2[32];    // X-PSHB-OTA-Auth2: MAC over the body hash, checked before writing
     bool has_ota_hash;
     uint8_t ota_hash[32];     // X-PSHB-OTA-Hash: BLAKE2b-256 of the body
+    bool has_auth;
+    uint8_t auth[32];         // X-PSHB-Auth: MAC of a signed request (status, diagnostics, clock)
 
     // Body: buffered (<= HTTP_MAX_BODY) or streamed through a callback.
     // After the headers the parser pauses until the caller sets

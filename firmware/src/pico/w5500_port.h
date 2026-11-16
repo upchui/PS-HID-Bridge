@@ -35,10 +35,11 @@
 #define W5500_RX_OVERSIZE (-2)
 #define W5500_RX_AGAIN    (-3)  // ask the chip again in a new round
 
-// Reset and initialise the chip (buffers, MAC, retry timing).
+// Reset and initialise the chip (buffers, MAC, retry timing); `spi_fast`:
+// the fast SPI clock if it passes a self-test (else the standard one).
 // Call once on core 0 before core 1 is launched. Returns false if the chip
 // does not answer (VERSIONR != 0x04).
-bool w5500_port_init(void);
+bool w5500_port_init(bool spi_fast);
 
 void w5500_get_mac(uint8_t mac[6]);
 
@@ -51,6 +52,8 @@ uint64_t w5500_int_time_take(void);
 uint32_t w5500_core0_spi(void);
 void w5500_core0_spi_reset(void);
 uint32_t w5500_spi_hz(void);
+// The fast SPI clock was asked for but failed its self-test.
+bool w5500_spi_fast_failed(void);
 
 // Hold the SPI bus across several calls (recursive; the ioLibrary calls
 // inside still work). Core 0 only: it takes it once per receive round, with

@@ -31,6 +31,7 @@ static recursive_mutex_t s_mutex;
 static uint8_t s_mac[6];
 static bool s_tx_busy[8];
 static uint32_t s_spi_hz;
+static bool s_spi_fast_failed;
 // Diagnostics: SPI transactions started by core 0, and when INTn last fell
 // (0 = not since it was taken).
 static volatile uint32_t s_core0_spi;
@@ -99,9 +100,8 @@ static void int_edge(uint gpio, uint32_t events) {
     if (!s_int_us) s_int_us = time_us_64();
 }
 
-#if PSHB_W5500_SPI_FAST
-// Faster SPI clock (PSHB_W5500_SPI_FAST): above the 33.3 MHz the datasheet
-// guarantees, so it has to prove itself first. Patterns through the TX
+// Faster SPI clock (setting "spi_fast"): at a CPU clock of 150 MHz above
+// the 33.3 MHz the datasheet guarantees, so it has to prove itself first. Patterns through the TX
 // buffer of the unused socket 7 (1 KiB) and one of its registers, read back
 // at the new clock; any difference means back to the safe clock.
 static bool spi_selftest(void) {
@@ -129,7 +129,6 @@ static bool spi_selftest(void) {
     setSn_PORT(7, 0);
     return true;
 }
-#endif
 
 static void make_mac(uint8_t mac[6]) {
     pico_unique_board_id_t id;
@@ -138,7 +137,7 @@ static void make_mac(uint8_t mac[6]) {
     memcpy(&mac[1], &id.id[3], 5);
 }
 
-bool w5500_port_init(void) {
+bool w5500_port_init(bool spi_fast) {
     recursive_mutex_init(&s_mutex);
 
     s_spi_hz = spi_init(W5500_SPI, PSHB_W5500_SPI_HZ);
@@ -179,15 +178,16 @@ bool w5500_port_init(void) {
         sleep_ms(5);
     }
 
-#if PSHB_W5500_SPI_FAST
-    s_spi_hz = spi_set_baudrate(W5500_SPI, PSHB_W5500_SPI_FAST_HZ);
-    if (spi_selftest()) {
-        printf("w5500: SPI at %lu Hz\n", (unsigned long)s_spi_hz);
-    } else {
-        s_spi_hz = spi_set_baudrate(W5500_SPI, PSHB_W5500_SPI_HZ);
-        printf("w5500: SPI self-test failed at the fast clock, back to %lu Hz\n", (unsigned long)s_spi_hz);
+    if (spi_fast) {
+        s_spi_hz = spi_set_baudrate(W5500_SPI, PSHB_W5500_SPI_FAST_HZ);
+        if (spi_selftest()) {
+            printf("w5500: SPI at %lu Hz\n", (unsigned long)s_spi_hz);
+        } else {
+            s_spi_hz = spi_set_baudrate(W5500_SPI, PSHB_W5500_SPI_HZ);
+            s_spi_fast_failed = true;
+            printf("w5500: SPI self-test failed at the fast clock, back to %lu Hz\n", (unsigned long)s_spi_hz);
+        }
     }
-#endif
 
     // Socket buffers in KB (16 KB each direction in total):
     // 0 DHCP, 1 input UDP, 2-3 HTTP, 4-7 unused.
@@ -247,6 +247,10 @@ void w5500_core0_spi_reset(void) {
 
 uint32_t w5500_spi_hz(void) {
     return s_spi_hz;
+}
+
+bool w5500_spi_fast_failed(void) {
+    return s_spi_fast_failed;
 }
 
 // ---------------------------------------------------------------- core 0: raw SPI
@@ -360,14 +364,16 @@ static void dma_read_finish(void) {
 
 // ---------------------------------------------------------------- UDP fast path
 
-// Commands to a socket. The W5500 takes a command within a few of its own
-// clock cycles and then clears Sn_CR; datasheet code waits for that after
-// every command (one or more SPI transactions). Here the wait happens only
-// if the previous command to this socket is very recent; the next command
-// of the input path comes several SPI transactions (> 5 µs) later anyway.
+// Commands to a socket. The W5500 carries out a command and then clears
+// Sn_CR; datasheet code waits for that after every command (one or more SPI
+// transactions). Here the wait happens only where it matters and the last
+// command to this socket is recent: before the next command, and before
+// the received size is read -- until RECV is carried out, Sn_RX_RSR still
+// counts the datagrams just released, and they would be read again (seen
+// at 200 MHz, where the next round follows a RECV within a few µs).
 // The timing image checks every 16th command and counts how often Sn_CR
-// was still busy (expected: never). Core 0 inside w5500_lock() only.
-#define CMD_SETTLE_US 5
+// was still busy. Core 0 inside w5500_lock() only.
+#define CMD_SETTLE_US 20
 static uint32_t s_cmd_us[_WIZCHIP_SOCK_NUM_];
 #if PSHB_TIMING_GPIO
 static uint32_t s_cr_checks;
@@ -379,14 +385,19 @@ static uint8_t raw_cr(uint8_t sn) {
     return v;
 }
 
-static void command(uint8_t sn, uint8_t cmd) {
-#if PSHB_TIMING_GPIO
-    if ((++s_cr_checks & 15) == 0 && raw_cr(sn)) s_cr_busy++;
-#endif
+// Wait until the last command to `sn` is carried out, if it is recent.
+static void command_settle(uint8_t sn) {
     if (time_us_32() - s_cmd_us[sn] < CMD_SETTLE_US) {
         while (raw_cr(sn)) {
         }
     }
+}
+
+static void command(uint8_t sn, uint8_t cmd) {
+#if PSHB_TIMING_GPIO
+    if ((++s_cr_checks & 15) == 0 && raw_cr(sn)) s_cr_busy++;
+#endif
+    command_settle(sn);
     raw_write(Sn_CR(sn), &cmd, 1);
     s_cmd_us[sn] = time_us_32();
 }
@@ -447,6 +458,7 @@ int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16
         // byte comes first, so a value torn by an update in between is never
         // larger than the real one, and every byte it counts is there. If a
         // datagram does not fit, look again (below).
+        command_settle(sn);  // a RECV just issued must be carried out first
         uint8_t b[4];
         raw_read(Sn_RX_RSR(sn), b, 4);
         avail = (uint16_t)((b[0] << 8) | b[1]);

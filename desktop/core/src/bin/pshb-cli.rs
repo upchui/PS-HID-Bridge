@@ -142,6 +142,34 @@ enum Command {
         #[arg(long, default_value_t = 80)]
         http_port: u16,
     },
+    /// The board's latency diagnostics, status and clock speeds (signed
+    /// with the key); with --cpu/--spi it changes the clock (the board
+    /// restarts)
+    Board {
+        #[command(flatten)]
+        board: BoardArgs,
+        /// Set the CPU clock: 150 (rated) or 200 MHz (overclocked)
+        #[arg(long, value_parser = ["150", "200"])]
+        cpu: Option<String>,
+        /// Set the SPI clock to the network chip
+        #[arg(long, value_enum)]
+        spi: Option<SpiClock>,
+        /// Start the latency statistics over
+        #[arg(long)]
+        reset: bool,
+        /// Print the board's answers as JSON
+        #[arg(long)]
+        json: bool,
+        /// Port of the board's web interface
+        #[arg(long, default_value_t = 80)]
+        http_port: u16,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum SpiClock {
+    Standard,
+    Fast,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -752,6 +780,91 @@ fn cmd_update(
 
 /// Install firmware on the board (newest release or a file), then wait until
 /// it runs the new version.
+fn cmd_board(
+    ctx: &Ctx,
+    board: &BoardArgs,
+    cpu: Option<&str>,
+    spi: Option<SpiClock>,
+    reset: bool,
+    json: bool,
+    http_port: u16,
+) -> Result<(), String> {
+    let addr = board_addr(ctx, board)?;
+    let key = load_key(board)?;
+    let api = update::BoardApi::new(&addr.ip().to_string(), http_port, &key);
+    if cpu.is_some() || spi.is_some() {
+        let now = api.clock()?;
+        let cpu_mhz = cpu.map_or(now.cpu_mhz, |c| c.parse().unwrap_or(150));
+        let spi_fast = spi.map_or(now.spi_fast, |s| matches!(s, SpiClock::Fast));
+        if api.set_clock(cpu_mhz, spi_fast)? {
+            println!("Clock speeds stored; the board restarts.");
+        } else {
+            println!("Clock speeds unchanged.");
+        }
+        return Ok(());
+    }
+    if reset {
+        api.diag_reset()?;
+        println!("Latency statistics start over.");
+        return Ok(());
+    }
+    let clock = api.clock()?;
+    let diag = api.diag()?;
+    let status = api.status()?;
+    if json {
+        let all = serde_json::json!({ "status": status, "diag": diag, "clock": clock });
+        println!("{}", serde_json::to_string_pretty(&all).unwrap_or_default());
+        return Ok(());
+    }
+    let n = |k: &str| diag.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+    println!(
+        "Firmware {} (slot {}), CPU {} MHz, SPI {:.1} MHz{}",
+        status.get("firmware").and_then(|v| v.as_str()).unwrap_or("?"),
+        status.get("partition").and_then(|v| v.as_str()).unwrap_or("?"),
+        clock.cpu_hz / 1_000_000,
+        f64::from(clock.spi_hz) / 1e6,
+        if clock.cpu_fell_back {
+            " (200 MHz did not run stably)"
+        } else {
+            ""
+        }
+    );
+    println!(
+        "{:<40} {:>7} {:>6} {:>7} {:>6} {:>6}  (µs)",
+        "", "n", "min", "median", "p99", "max"
+    );
+    for (k, label) in [
+        ("ready", "packet -> report ready"),
+        ("ready1", "  first datagram of a round"),
+        ("detect", "  noticed by the board"),
+        ("bus", "  waiting for the network chip"),
+        ("spi", "  reading it"),
+        ("handle", "  checking and decrypting"),
+        ("usb", "packet -> fetched by the PlayStation"),
+    ] {
+        if n(&format!("{k}_n")) > 0 {
+            println!(
+                "{label:<40} {:>7} {:>6} {:>7} {:>6} {:>6}",
+                n(&format!("{k}_n")),
+                n(&format!("{k}_min")),
+                n(&format!("{k}_p50")),
+                n(&format!("{k}_p99")),
+                n(&format!("{k}_max"))
+            );
+        }
+    }
+    let fetches = n("mouse_fetches");
+    if fetches > 0 {
+        println!(
+            "Missed polls {} of {fetches}, PlayStation skipped {}, armed {} µs before the poll",
+            n("mouse_misses"),
+            n("mouse_host_skips"),
+            n("mouse_lead_us")
+        );
+    }
+    Ok(())
+}
+
 fn update_firmware(ctx: &Ctx, board: &BoardArgs, file: Option<&Path>, http_port: u16) -> Result<(), String> {
     let addr = board_addr(ctx, board)?;
     let key = load_key(board)?;
@@ -944,6 +1057,14 @@ fn main() -> ExitCode {
             http_port,
         } => cmd_update(&ctx, board, *check, *firmware, file.as_deref(), *http_port),
         Command::Flash { image, file, yes } => cmd_flash(image.image(), file.as_deref(), *yes),
+        Command::Board {
+            board,
+            cpu,
+            spi,
+            reset,
+            json,
+            http_port,
+        } => cmd_board(&ctx, board, cpu.as_deref(), *spi, *reset, *json, *http_port),
     };
     match res {
         Ok(()) => ExitCode::SUCCESS,

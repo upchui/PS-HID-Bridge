@@ -31,6 +31,7 @@ set(PSHB_PICO_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/main.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/bootsel.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/chacha20_m33.S
+    ${CMAKE_CURRENT_LIST_DIR}/src/pico/clock.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/core1.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/crypto_help.c
     ${CMAKE_CURRENT_LIST_DIR}/src/pico/flash_store.c
@@ -64,6 +65,7 @@ function(pshb_add_firmware name)
         hardware_dma
         hardware_flash
         hardware_spi
+        hardware_vreg
         hardware_watchdog
         tinyusb_device
         iolibrary
@@ -106,16 +108,6 @@ if(PSHB_W5500_FAST_RX)
     add_compile_definitions(PSHB_W5500_FAST_RX=1)
 else()
     add_compile_definitions(PSHB_W5500_FAST_RX=0)
-endif()
-
-# W5500 SPI clock: 25 MHz (ON: 37.5 MHz after a self-test at start, above
-# the 33.3 MHz the datasheet guarantees; falls back to 25 MHz if the test
-# fails), e.g. make firmware FW_CMAKE_ARGS=-DPSHB_W5500_SPI_FAST=ON
-option(PSHB_W5500_SPI_FAST "SPI clock 37.5 MHz after a self-test (else 25 MHz)" OFF)
-if(PSHB_W5500_SPI_FAST)
-    add_compile_definitions(PSHB_W5500_SPI_FAST=1)
-else()
-    add_compile_definitions(PSHB_W5500_SPI_FAST=0)
 endif()
 
 # Development PSK until settings exist: make firmware DEV_PSK=<64 hex digits>

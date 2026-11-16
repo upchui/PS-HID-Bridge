@@ -172,6 +172,23 @@
         <button type="submit">Upload and install</button>
         <p class="hint">Written to the second slot and kept only once it has started; otherwise the board returns to the previous version.</p>
       </form>
+      <form id="f-clock" class="card">
+        <h2><svg class="i"><use href="#i-latency"/></svg>Clock speed <span id="clk-now" class="pill">–</span></h2>
+        <p id="clk-fell-back" class="banner warn" hidden><svg class="i"><use href="#i-warning"/></svg><span>200 MHz did not run stably on this board (it restarted by itself within 10 s), so it runs at 150 MHz again.</span></p>
+        <p id="clk-spi-failed" class="banner warn" hidden><svg class="i"><use href="#i-warning"/></svg><span>The fast SPI clock failed its self-test at start; the network chip runs at the standard clock.</span></p>
+        <label>Processor</label>
+        <div class="seg">
+          <label><input type="radio" name="cpu" value="150"><span>150 MHz (rated)</span></label>
+          <label><input type="radio" name="cpu" value="200"><span>200 MHz (overclocked)</span></label>
+        </div>
+        <label>Network chip (SPI)</label>
+        <div class="seg">
+          <label><input type="radio" name="spi" value="0"><span>Standard (25 MHz)</span></label>
+          <label><input type="radio" name="spi" value="1"><span>Fast (33–37.5 MHz)</span></label>
+        </div>
+        <button type="submit">Save and restart</button>
+        <p class="hint">Faster clocks make the input path a few microseconds shorter. 200 MHz is beyond the processor's rating: if the board does not run stably, it goes back to 150 MHz by itself. The fast SPI clock is checked at every start (37.5 MHz at 150 MHz, 33.3 MHz at 200 MHz, which the network chip is rated for).</p>
+      </form>
       <div class="card row">
         <div><h2><svg class="i"><use href="#i-power"/></svg>Restart</h2><p class="hint">Input stops for a few seconds.</p></div>
         <button id="b-reboot" class="secondary">Restart</button>

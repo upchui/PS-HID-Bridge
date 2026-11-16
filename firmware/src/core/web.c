@@ -15,6 +15,9 @@
 // Signed firmware updates (protocol/SPEC.md, "Firmware update with the key").
 #define OTA_KEY_LABEL "pshb-ota-key-v1"
 #define OTA_MAC_LABEL "pshb-ota-v2"
+#define REQ_MAC_LABEL "pshb-req-v1"
+
+static void ota_key(const uint8_t psk[32], uint8_t out[32]);
 #define OTA_CHALLENGE_US 60000000ull
 
 // ---------------------------------------------------------------- helpers
@@ -437,6 +440,105 @@ static void h_diag(web_app_t *app, web_conn_t *c) {
     respond_json(c, 200, &w, NULL);
 }
 
+static void h_clock_get(web_app_t *app, web_conn_t *c) {
+    web_clock_t now;
+    memset(&now, 0, sizeof(now));
+    if (app->be->clock) app->be->clock(app->be->ctx, &now);
+    json_writer_t w;
+    jw_begin(&w, c->dyn, sizeof(c->dyn));
+    jw_int(&w, "cpu_mhz", app->settings->cpu_200mhz ? 200 : 150);
+    jw_bool(&w, "spi_fast", app->settings->spi_fast);
+    jw_int(&w, "cpu_hz", now.cpu_hz);
+    jw_int(&w, "spi_hz", now.spi_hz);
+    jw_bool(&w, "cpu_fell_back", now.cpu_fell_back);
+    jw_bool(&w, "spi_fast_failed", now.spi_fast_failed);
+    respond_json(c, 200, &w, NULL);
+}
+
+// {"cpu_mhz": 150 | 200, "spi_fast": bool}; both optional. A change is
+// stored and the board restarts (the clocks are set at start).
+static void h_clock_set(web_app_t *app, web_conn_t *c) {
+    const char *b = c->req.body;
+    size_t bl = c->req.body_received;
+    pshb_settings_t next = *app->settings;
+    long long mhz;
+    bool fast;
+    if (jr_int(b, bl, "cpu_mhz", &mhz)) {
+        if (mhz != 150 && mhz != 200) {
+            respond_error(c, 400, "CPU clock must be 150 or 200 MHz");
+            return;
+        }
+        next.cpu_200mhz = mhz == 200;
+    }
+    if (jr_bool(b, bl, "spi_fast", &fast)) next.spi_fast = fast;
+    bool changed = next.cpu_200mhz != app->settings->cpu_200mhz || next.spi_fast != app->settings->spi_fast;
+    if (changed && !save_apply(app, c, &next)) return;
+    json_writer_t w;
+    jw_begin(&w, c->dyn, sizeof(c->dyn));
+    jw_bool(&w, "ok", true);
+    jw_bool(&w, "reboot", changed);
+    respond_json(c, 200, &w, NULL);
+    if (changed) c->after = WEB_AFTER_REBOOT;
+}
+
+// A request signed with the key (the app): the last challenge, still fresh
+// (and used up here), and BLAKE2b-256(key = K_ota, "pshb-req-v1" || nonce ||
+// method || " " || path || "\n" || body). Returns 1 if it is valid, 0 if
+// the request is not signed, -1 if it is signed wrongly (answered).
+static int check_signature(web_app_t *app, web_conn_t *c) {
+    const http_req_t *r = &c->req;
+    if (!r->has_auth) return 0;
+    if (!app->settings->psk_set) {
+        respond_error(c, 403, "No key set on the board");
+        return -1;
+    }
+    bool fresh = app->ota_nonce_until_us != 0 && now(app) < app->ota_nonce_until_us;
+    app->ota_nonce_until_us = 0;
+    if (!fresh) {
+        respond_error(c, 403, "Challenge missing or expired (GET /api/ota/challenge first)");
+        return -1;
+    }
+    uint8_t key[32], mac[32];
+    ota_key(app->settings->psk, key);
+    crypto_blake2b_ctx h;
+    crypto_blake2b_keyed_init(&h, 32, key, sizeof(key));
+    crypto_wipe(key, sizeof(key));
+    const char *method = r->method == HTTP_POST ? "POST" : "GET";
+    crypto_blake2b_update(&h, (const uint8_t *)REQ_MAC_LABEL, strlen(REQ_MAC_LABEL));
+    crypto_blake2b_update(&h, app->ota_nonce, sizeof(app->ota_nonce));
+    crypto_blake2b_update(&h, (const uint8_t *)method, strlen(method));
+    crypto_blake2b_update(&h, (const uint8_t *)" ", 1);
+    crypto_blake2b_update(&h, (const uint8_t *)r->path, strlen(r->path));
+    crypto_blake2b_update(&h, (const uint8_t *)"\n", 1);
+    crypto_blake2b_update(&h, (const uint8_t *)r->body, r->body_received);
+    crypto_blake2b_final(&h, mac);
+    if (crypto_verify32(mac, r->auth) != 0) {
+        respond_error(c, 403, "Signature does not match (wrong key?)");
+        return -1;
+    }
+    return 1;
+}
+
+// What a signed request may do: read status and diagnostics, start the
+// diagnostics over, set the clocks. Password, key, network settings and
+// firmware stay with their own ways in.
+static void handle_signed(web_app_t *app, web_conn_t *c) {
+    const http_req_t *r = &c->req;
+    const char *p = r->path;
+    if (r->method == HTTP_GET && strcmp(p, "/api/status") == 0) {
+        h_status(app, c);
+    } else if (r->method == HTTP_GET && strcmp(p, "/api/diag") == 0 && app->be->diag) {
+        h_diag(app, c);
+    } else if (r->method == HTTP_POST && strcmp(p, "/api/diag/reset") == 0 && app->be->diag_reset) {
+        app->be->diag_reset(app->be->ctx);
+        respond_ok(c);
+    } else if (r->method == HTTP_POST && strcmp(p, "/api/clock") == 0) {
+        h_clock_set(app, c);
+    } else {
+        respond_error(c, 403, "Not allowed with a signature");
+    }
+}
+
 static void h_network(web_app_t *app, web_conn_t *c) {
     const char *b = c->req.body;
     size_t bl = c->req.body_received;
@@ -605,7 +707,17 @@ static void handle(web_app_t *app, web_conn_t *c) {
         return;
     }
     if (strcmp(p, "/api/ota/challenge") == 0 && r->method == HTTP_GET) {
-        h_ota_challenge(app, c);  // no login: the upload itself proves the key
+        h_ota_challenge(app, c);  // no login: the signed request itself proves the key
+        return;
+    }
+    if (strcmp(p, "/api/clock") == 0 && r->method == HTTP_GET) {
+        h_clock_get(app, c);  // no login: clock speeds are no secret
+        return;
+    }
+    int sig = check_signature(app, c);
+    if (sig < 0) return;
+    if (sig > 0) {
+        handle_signed(app, c);
         return;
     }
     if (!logged_in) {
@@ -653,6 +765,10 @@ static void handle(web_app_t *app, web_conn_t *c) {
         }
         if (strcmp(p, "/api/allowed-sender") == 0) {
             h_allowed_sender(app, c);
+            return;
+        }
+        if (strcmp(p, "/api/clock") == 0) {
+            h_clock_set(app, c);
             return;
         }
         if (strcmp(p, "/api/reboot") == 0) {

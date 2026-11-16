@@ -74,9 +74,18 @@ typedef struct {
     uint32_t spi_hz;             // SPI clock to the W5500
 } web_diag_t;
 
+// Clock speeds as they are (the settings say what is wanted).
+typedef struct {
+    uint32_t cpu_hz, spi_hz;
+    bool cpu_fell_back;    // 200 MHz wanted, but it did not get through its trial
+    bool spi_fast_failed;  // the fast SPI clock failed its self-test
+} web_clock_t;
+
 typedef struct {
     void *ctx;
     void (*status)(void *ctx, web_status_t *out);
+    // Clock speeds in use (optional).
+    void (*clock)(void *ctx, web_clock_t *out);
     // Latency diagnostics, and starting them over (both optional).
     void (*diag)(void *ctx, web_diag_t *out);
     void (*diag_reset)(void *ctx);

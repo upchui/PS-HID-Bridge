@@ -31,6 +31,7 @@ pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 const OTA_KEY_LABEL: &[u8] = b"pshb-ota-key-v1";
 const OTA_MAC_LABEL: &[u8] = b"pshb-ota-v1";
 const OTA_MAC2_LABEL: &[u8] = b"pshb-ota-v2";
+const REQ_MAC_LABEL: &[u8] = b"pshb-req-v1";
 
 /// MAJOR.MINOR.PATCH (the patch counts the commits since MAJOR.MINOR changed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -275,6 +276,23 @@ pub fn ota_mac2(psk: &[u8; 32], nonce: &[u8; 16], image: &[u8]) -> [u8; 32] {
     blake2b_mac(&ota_key(psk), &[OTA_MAC2_LABEL, nonce, &len, &ota_hash(image)])
 }
 
+/// X-PSHB-Auth of a request signed with the key (status, diagnostics,
+/// clock; protocol/SPEC.md "Signed requests").
+pub fn request_mac(psk: &[u8; 32], nonce: &[u8; 16], method: &str, path: &str, body: &[u8]) -> [u8; 32] {
+    blake2b_mac(
+        &ota_key(psk),
+        &[
+            REQ_MAC_LABEL,
+            nonce,
+            method.as_bytes(),
+            b" ",
+            path.as_bytes(),
+            b"\n",
+            body,
+        ],
+    )
+}
+
 /// CRC-32 (IEEE), as the board checks it (X-PSHB-CRC32).
 pub fn crc32(data: &[u8]) -> u32 {
     let mut crc = !0u32;
@@ -300,33 +318,137 @@ fn board_error(resp: &mut ureq::http::Response<ureq::Body>) -> String {
     format!("Board answered {}: {msg}", resp.status())
 }
 
-/// Install `image` (a UF2 file) on the board at `host` (web interface on
-/// `http_port`), signed with the key. The board restarts into it afterwards.
-pub fn board_ota(host: &str, http_port: u16, psk: &[u8; 32], image: &[u8]) -> Result<(), String> {
-    let base = if host.contains(':') {
+fn board_base(host: &str, http_port: u16) -> String {
+    if host.contains(':') {
         format!("http://[{host}]:{http_port}") // IPv6
     } else {
         format!("http://{host}:{http_port}")
-    };
-    let agent = agent(Duration::from_secs(120), true);
+    }
+}
+
+fn read_json(resp: &mut ureq::http::Response<ureq::Body>) -> Result<serde_json::Value, String> {
+    if resp.status() != 200 {
+        return Err(board_error(resp));
+    }
+    let text = resp.body_mut().read_to_string().map_err(http_error)?;
+    serde_json::from_str(&text).map_err(|e| format!("Board: unexpected answer ({e})"))
+}
+
+/// A fresh one-time challenge for a signed request or upload.
+fn board_challenge(agent: &ureq::Agent, base: &str) -> Result<[u8; 16], String> {
     let mut resp = agent
         .get(format!("{base}/api/ota/challenge"))
         .call()
         .map_err(http_error)?;
-    if resp.status() != 200 {
-        return Err(board_error(&mut resp));
-    }
-    let text = resp.body_mut().read_to_string().map_err(http_error)?;
-    let nonce_hex = serde_json::from_str::<serde_json::Value>(&text)
-        .ok()
-        .and_then(|v| v.get("nonce").and_then(|n| n.as_str()).map(str::to_string))
+    let v = read_json(&mut resp)?;
+    let nonce_hex = v
+        .get("nonce")
+        .and_then(|n| n.as_str())
         .ok_or("Board: no challenge in the answer")?;
-    let nonce: [u8; 16] = (0..16)
+    (0..16)
         .map(|i| u8::from_str_radix(nonce_hex.get(2 * i..2 * i + 2).unwrap_or("x"), 16))
         .collect::<Result<Vec<u8>, _>>()
         .ok()
         .and_then(|v| v.try_into().ok())
-        .ok_or("Board: invalid challenge")?;
+        .ok_or_else(|| "Board: invalid challenge".to_string())
+}
+
+/// The board's web API with the key instead of the web password: status,
+/// latency diagnostics and the clock speeds (protocol/SPEC.md "Signed
+/// requests"). Every signed request fetches its own challenge first.
+pub struct BoardApi {
+    base: String,
+    psk: [u8; 32],
+    agent: ureq::Agent,
+}
+
+/// Clock speeds of the board: what the settings ask for and what runs.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct BoardClock {
+    pub cpu_mhz: u32,
+    pub spi_fast: bool,
+    pub cpu_hz: u32,
+    pub spi_hz: u32,
+    pub cpu_fell_back: bool,
+    pub spi_fast_failed: bool,
+}
+
+impl BoardApi {
+    pub fn new(host: &str, http_port: u16, psk: &[u8; 32]) -> Self {
+        Self {
+            base: board_base(host, http_port),
+            psk: *psk,
+            agent: agent(Duration::from_secs(5), false),
+        }
+    }
+
+    fn signed(&self, method: &str, path: &str, body: &[u8]) -> Result<serde_json::Value, String> {
+        let nonce = board_challenge(&self.agent, &self.base)?;
+        let mac = hex(&request_mac(&self.psk, &nonce, method, path, body));
+        let url = format!("{}{path}", self.base);
+        let mut resp = if method == "POST" {
+            self.agent
+                .post(url)
+                .header("X-PSHB", "1")
+                .header("Content-Type", "application/json")
+                .header("X-PSHB-Auth", mac)
+                .send(body)
+        } else {
+            self.agent.get(url).header("X-PSHB-Auth", mac).call()
+        }
+        .map_err(http_error)?;
+        read_json(&mut resp)
+    }
+
+    /// Board status (network, packets, firmware, ...), as the web interface shows it.
+    pub fn status(&self) -> Result<serde_json::Value, String> {
+        self.signed("GET", "/api/status", b"")
+    }
+
+    /// Latency of the input path, stage by stage (docs/latency.md).
+    pub fn diag(&self) -> Result<serde_json::Value, String> {
+        self.signed("GET", "/api/diag", b"")
+    }
+
+    /// Start the latency statistics over.
+    pub fn diag_reset(&self) -> Result<(), String> {
+        self.signed("POST", "/api/diag/reset", b"{}").map(drop)
+    }
+
+    /// The clock speeds (readable without the key).
+    pub fn clock(&self) -> Result<BoardClock, String> {
+        let mut resp = self
+            .agent
+            .get(format!("{}/api/clock", self.base))
+            .call()
+            .map_err(http_error)?;
+        let v = read_json(&mut resp)?;
+        let num = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+        let flag = |k: &str| v.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
+        Ok(BoardClock {
+            cpu_mhz: num("cpu_mhz"),
+            spi_fast: flag("spi_fast"),
+            cpu_hz: num("cpu_hz"),
+            spi_hz: num("spi_hz"),
+            cpu_fell_back: flag("cpu_fell_back"),
+            spi_fast_failed: flag("spi_fast_failed"),
+        })
+    }
+
+    /// Store new clock speeds; returns true if the board restarts for them.
+    pub fn set_clock(&self, cpu_mhz: u32, spi_fast: bool) -> Result<bool, String> {
+        let body = serde_json::json!({ "cpu_mhz": cpu_mhz, "spi_fast": spi_fast }).to_string();
+        let v = self.signed("POST", "/api/clock", body.as_bytes())?;
+        Ok(v.get("reboot").and_then(|r| r.as_bool()).unwrap_or(false))
+    }
+}
+
+/// Install `image` (a UF2 file) on the board at `host` (web interface on
+/// `http_port`), signed with the key. The board restarts into it afterwards.
+pub fn board_ota(host: &str, http_port: u16, psk: &[u8; 32], image: &[u8]) -> Result<(), String> {
+    let base = board_base(host, http_port);
+    let agent = agent(Duration::from_secs(120), true);
+    let nonce = board_challenge(&agent, &base)?;
     let mut resp = agent
         .post(format!("{base}/api/ota"))
         .header("Content-Type", "application/octet-stream")
@@ -415,6 +537,26 @@ mod tests {
         assert_eq!(
             hex(&ota_mac2(&psk, &[0; 16], b"abc")),
             "8d5efd6a6ed49b245ad596bf92a29135162ba317b6e9d0ea470f7b46a397a7cd"
+        );
+    }
+
+    #[test]
+    fn request_mac_matches_the_reference() {
+        // protocol/tools/pshb_proto.py: request_mac(bytes(range(32)), bytes(16), ...)
+        let psk: [u8; 32] = std::array::from_fn(|i| i as u8);
+        assert_eq!(
+            hex(&request_mac(&psk, &[0; 16], "GET", "/api/status", b"")),
+            "7b405d8cd09b7f10d3756ec871ad11c575350e41ae7938fbcf646475d0aabbc4"
+        );
+        assert_eq!(
+            hex(&request_mac(
+                &psk,
+                &[0; 16],
+                "POST",
+                "/api/clock",
+                br#"{"cpu_mhz":200,"spi_fast":true}"#
+            )),
+            "4cbcb3b57c1ac62c0e9be0868a11009f462ff030d149d018e42380c80f513c64"
         );
     }
 

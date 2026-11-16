@@ -282,6 +282,14 @@ static void be_diag_reset(void *ctx) {
     s_diag_resets++;
 }
 
+// The simulator cannot change its clock: it reports what the settings ask for.
+static void be_clock(void *ctx, web_clock_t *out) {
+    (void)ctx;
+    memset(out, 0, sizeof(*out));
+    out->cpu_hz = S.settings.cpu_200mhz ? 200000000u : 150000000u;
+    out->spi_hz = S.settings.spi_fast ? 37500000u : 25000000u;
+}
+
 static void be_ota_activate(void *ctx) {
     (void)ctx;
     s_ota_running = false;
@@ -293,6 +301,7 @@ static const web_backend_t k_backend = {
     .status = be_status,
     .diag = be_diag,
     .diag_reset = be_diag_reset,
+    .clock = be_clock,
     .save = be_save,
     .apply = be_apply,
     .reboot = be_reboot,
