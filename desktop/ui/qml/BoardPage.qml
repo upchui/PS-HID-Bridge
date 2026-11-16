@@ -32,7 +32,7 @@ AppPage {
         text: page.error
     }
     Banner {
-        kind: AppController.connected ? "ok" : "info"
+        kind: AppController.connected ? "ok" : AppController.lastError !== "" ? "warn" : "info"
         visible: page.saved && page.error === ""
         text: AppController.connected ? "Connected."
               : AppController.lastError !== "" ? "Saved. " + AppController.lastError
@@ -44,8 +44,10 @@ AppPage {
         icon: "network"
         help: "Your router lists the board as ps-hid-bridge-… with its address. The key is created in the board's web interface under \"Security\"."
         actions: Pill {
-            level: AppController.boardAddress === "" ? "" : AppController.connected ? "ok" : "bad"
-            text: AppController.boardAddress === "" ? "not set up" : AppController.connected ? "connected" : "not reachable"
+            readonly property bool connecting: AppController.statusText === "Connecting …"
+            level: AppController.boardAddress === "" || connecting ? "" : AppController.connected ? "ok" : "bad"
+            text: AppController.boardAddress === "" ? "not set up" : AppController.connected ? "connected"
+                  : connecting ? "connecting …" : "not reachable"
         }
 
         GridLayout {
@@ -114,20 +116,23 @@ AppPage {
         title: "Details"
         icon: "board"
         GridLayout {
+            id: details
             Layout.fillWidth: true
-            columns: 2
+            // Two pairs per line where they fit, else one.
+            columns: width > 480 ? 2 : 1
             columnSpacing: 24
             rowSpacing: 6
             Repeater {
                 model: [
                     ["Firmware", AppController.boardFirmware !== "" ? AppController.boardFirmware : "–"],
-                    ["PlayStation", AppController.boardUsb !== "" ? AppController.boardUsb : "–"],
-                    ["Round trip", AppController.rttMs >= 0 ? Math.round(AppController.rttMs * 1000) + " µs" : "–"],
+                    ["PlayStation", AppController.boardUsb !== "" ? Style.playStation(AppController.boardUsb) : "–"],
+                    ["Round trip", AppController.rttMs >= 0 ? Style.us(AppController.rttMs * 1000) : "–"],
                     ["Desktop app", AppController.version]
                 ]
                 delegate: RowLayout {
                     required property var modelData
-                    Layout.columnSpan: 1
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: details.columns > 1 ? (details.width - details.columnSpacing) / 2 : details.width
                     spacing: 12
                     Controls.Label {
                         Layout.preferredWidth: 110
@@ -135,8 +140,10 @@ AppPage {
                         color: Style.muted
                     }
                     Controls.Label {
+                        Layout.fillWidth: true
                         text: parent.modelData[1]
                         color: Style.text
+                        elide: Text.ElideRight
                     }
                 }
             }

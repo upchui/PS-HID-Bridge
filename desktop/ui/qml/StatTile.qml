@@ -3,7 +3,8 @@ import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import PSHIDBridge
 
-// A tile with an icon, a label, a big value and a line below.
+// A tile with an icon, a label (and a "?" next to it if `help` is set), a
+// big value and a line below.
 Rectangle {
     id: tile
 
@@ -12,6 +13,7 @@ Rectangle {
     property string value
     property string detail
     property string level: ""
+    property string help: ""
     default property alias extra: extraColumn.data
 
     Layout.fillWidth: true
@@ -43,11 +45,22 @@ Rectangle {
                 }
             }
             Controls.Label {
-                Layout.fillWidth: true
+                Layout.fillWidth: tile.help === ""
+                // With a "?": right after the text (rounded up: the layout
+                // rounds widths down, which would cut the text off).
+                Layout.maximumWidth: tile.help === "" ? -1 : Math.ceil(implicitWidth) + 1
                 text: tile.label
                 color: Style.muted
                 font.weight: Font.DemiBold
                 elide: Text.ElideRight
+            }
+            HelpHint {
+                visible: tile.help !== ""
+                text: tile.help
+            }
+            Item {
+                visible: tile.help !== ""
+                Layout.fillWidth: true
             }
         }
         Controls.Label {

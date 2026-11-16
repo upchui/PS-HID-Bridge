@@ -57,4 +57,31 @@ QtObject {
         return state === "ok" ? ok : state === "warn" ? warn : state === "bad" ? bad
              : state === "accent" ? accent : muted;
     }
+
+    // ---- numbers in text: a number and its unit stay on one line (no-break
+    // space), big counts get digit groups.
+
+    /// Microseconds, rounded: "172 µs".
+    function us(v) {
+        return Math.round(v) + "\u00a0µs";
+    }
+    /// A share in percent ("0.14 %"), "–" without a whole.
+    function percent(part, whole) {
+        return whole > 0 ? (100 * part / whole).toFixed(2) + "\u00a0%" : "–";
+    }
+    /// "12 345 678": narrow no-break spaces between groups of three, which
+    /// read the same in English and German.
+    function count(n) {
+        return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, "\u202f");
+    }
+    /// The board's USB state ("PlayStation in rest mode", …) in short, as
+    /// on the Status page.
+    function playStation(usb) {
+        return usb === "" ? "Unknown" : usb === "PlayStation connected" ? "Connected"
+             : usb === "PlayStation in rest mode" ? "Rest mode" : "Not connected";
+    }
+    /// "1 packet", "12 345 packets".
+    function plural(n, one, many) {
+        return count(n) + "\u00a0" + (Math.round(n) === 1 ? one : many);
+    }
 }

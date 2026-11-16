@@ -21,7 +21,8 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.maximumWidth: Style.maxWidth + 2 * Style.pad
+            // As wide as the content below (the margins come on top).
+            Layout.maximumWidth: Style.maxWidth
             Layout.alignment: Qt.AlignHCenter
             Layout.margins: Style.pad
             Layout.bottomMargin: Style.gap

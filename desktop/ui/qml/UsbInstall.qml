@@ -85,6 +85,8 @@ ColumnLayout {
             valueRole: "value"
             onActivated: root.confirmErase = false
         }
+        // The source on a line of its own (a chosen file's path needs the
+        // room), the buttons below it.
         RowLayout {
             Layout.fillWidth: true
             spacing: 8
@@ -101,14 +103,16 @@ ColumnLayout {
                 text: root.file === "" ? "Files from the newest release"
                       : decodeURIComponent(root.file.replace(/^file:\/\//, ""))
             }
+        }
+        Flow {
+            Layout.fillWidth: true
+            spacing: 8
             AppButton {
                 text: "Choose file …"
-                flat: true
                 onClicked: fileDialog.open()
             }
             AppButton {
                 text: "Newest release"
-                flat: true
                 visible: root.file !== ""
                 onClicked: root.file = ""
             }

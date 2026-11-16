@@ -34,7 +34,10 @@ ColumnLayout {
                     visible: modelData.value > 0
                     height: track.height
                     radius: 4
-                    color: Style.series[index % Style.series.length]
+                    // A fixed colour per part if given (a part keeps it when
+                    // another one is missing), else by position.
+                    readonly property int series: modelData.series ?? index
+                    color: Style.series[series % Style.series.length]
 
                     TextMetrics {
                         id: fit
@@ -49,7 +52,7 @@ ColumnLayout {
                         visible: fit.width + 16 <= block.width
                         text: fit.text
                         font: fit.font
-                        color: Style.onSeries(block.index)
+                        color: Style.onSeries(block.series)
                     }
                     MouseArea {
                         id: hover
@@ -65,21 +68,24 @@ ColumnLayout {
         }
     }
 
+    // The legend: only the parts that have a block above.
     Flow {
         Layout.fillWidth: true
-        spacing: 16
+        spacing: 4
         Repeater {
             model: bar.parts
             delegate: Row {
                 required property var modelData
                 required property int index
+                visible: modelData.value > 0
                 spacing: 6
+                rightPadding: 12
                 Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     width: 10
                     height: 10
                     radius: 2
-                    color: Style.series[index % Style.series.length]
+                    color: Style.series[(modelData.series ?? index) % Style.series.length]
                 }
                 Controls.Label {
                     text: modelData.name

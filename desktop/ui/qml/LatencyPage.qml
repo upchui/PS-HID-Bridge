@@ -22,6 +22,9 @@ AppPage {
     readonly property var st: info ? info.status : ({})
     readonly property var clk: info ? info.clock : ({})
     readonly property bool have: info !== null
+    // The board did not answer the last request: what is shown is its last
+    // answer (dimmed, see the banner).
+    readonly property bool stale: have && AppController.boardInfoError !== ""
     // The clock choice before "Apply" ("" = what the board runs). It ends
     // when the board reports other speeds (after the restart, or a fall
     // back to 150 MHz), so the controls always come back to the truth.
@@ -35,10 +38,13 @@ AppPage {
                  p99: d[key + "_p99"] || 0, max: d[key + "_max"] || 0 };
     }
     function us(v) {
-        return v === undefined ? "–" : Math.round(v) + " µs";
+        return v === undefined ? "–" : Style.us(v);
     }
     function pct(a, b) {
-        return b > 0 ? (100 * a / b).toFixed(2) + " %" : "–";
+        return Style.percent(a, b);
+    }
+    function n(v) {
+        return v === undefined ? "–" : Style.count(v);
     }
     function uptime(msecs) {
         let s = Math.floor(msecs / 1000);
@@ -66,7 +72,7 @@ AppPage {
             text: "Start over"
             icon.name: "reconnect"
             flat: true
-            enabled: page.have
+            enabled: page.have && !page.stale
             onClicked: AppController.resetBoardDiag()
         }
     ]
@@ -75,6 +81,7 @@ AppPage {
         kind: "warn"
         visible: AppController.boardInfoError !== ""
         text: "The board did not answer: " + AppController.boardInfoError
+              + (page.have ? "\nThe values below are its last answer." : "")
     }
     Banner {
         kind: "info"
@@ -85,11 +92,16 @@ AppPage {
     // ---- the headline: packet -> report ready
     Card {
         visible: page.have
+        opacity: page.stale ? 0.5 : 1
         title: "Packet → report ready"
         icon: "latency"
         help: "From the network chip's interrupt for a packet until its input is in the state the next USB report carries. Median: half of the packets were faster."
-        RowLayout {
-            spacing: 24
+        // The lines go under the big number when the card is narrow.
+        GridLayout {
+            Layout.fillWidth: true
+            columns: width > 560 ? 2 : 1
+            columnSpacing: 24
+            rowSpacing: 4
             Controls.Label {
                 text: page.d.ready_n ? page.us(page.d.ready_p50) : "–"
                 font.pointSize: Style.fontSize * 3.2
@@ -97,19 +109,28 @@ AppPage {
                 color: Style.text
             }
             ColumnLayout {
+                Layout.fillWidth: true
                 spacing: 2
                 Controls.Label {
-                    text: page.d.ready_n ? `99 % below ${page.us(page.d.ready_p99)} · slowest ${page.us(page.d.ready_max)}` : "no input yet"
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: page.d.ready_n ? `99\u00a0% below ${page.us(page.d.ready_p99)} · slowest ${page.us(page.d.ready_max)}` : "no input yet"
                     color: Style.muted
                 }
                 Controls.Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    visible: text !== ""
                     text: page.d.ready1_n
-                        ? `not queued behind another packet: median ${page.us(page.d.ready1_p50)}, 99 % below ${page.us(page.d.ready1_p99)}`
+                        ? `not queued behind another packet: median ${page.us(page.d.ready1_p50)}, 99\u00a0% below ${page.us(page.d.ready1_p99)}`
                         : ""
                     color: Style.muted
                 }
                 Controls.Label {
-                    text: page.d.ready_n ? `${page.d.ready_n} packets since the start or the last reset` : ""
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    visible: text !== ""
+                    text: page.d.ready_n ? `${Style.plural(page.d.ready_n, "packet", "packets")} since the start or the last reset` : ""
                     color: Style.muted
                 }
             }
@@ -118,6 +139,7 @@ AppPage {
 
     GridLayout {
         visible: page.have
+        opacity: page.stale ? 0.5 : 1
         Layout.fillWidth: true
         columns: page.width > 760 ? 4 : 2
         columnSpacing: Style.gap
@@ -126,7 +148,7 @@ AppPage {
             icon: "gamepad"
             label: "PlayStation fetch"
             value: page.d.usb_n ? page.us(page.d.usb_p50) : "–"
-            detail: page.d.usb_n ? `median · 99 % below ${page.us(page.d.usb_p99)}` : "no reports yet"
+            detail: page.d.usb_n ? `median · 99\u00a0% below ${page.us(page.d.usb_p99)}` : "no reports yet"
         }
         StatTile {
             icon: "network"
@@ -138,13 +160,13 @@ AppPage {
             icon: "target"
             label: "Missed polls"
             level: (page.d.mouse_misses || 0) > 0 ? "warn" : ""
-            value: page.d.mouse_fetches ? String(page.d.mouse_misses) : "–"
-            detail: page.d.mouse_fetches ? `of ${page.d.mouse_fetches} reports (${page.pct(page.d.mouse_misses, page.d.mouse_fetches)})` : ""
+            value: page.d.mouse_fetches ? page.n(page.d.mouse_misses) : "–"
+            detail: page.d.mouse_fetches ? `of ${Style.plural(page.d.mouse_fetches, "report", "reports")} (${page.pct(page.d.mouse_misses, page.d.mouse_fetches)})` : ""
         }
         StatTile {
             icon: "key"
             label: "Decryption"
-            value: page.d.crypto_avg_ns ? (page.d.crypto_avg_ns / 1000).toFixed(1) + " µs" : "–"
+            value: page.d.crypto_avg_ns ? (page.d.crypto_avg_ns / 1000).toFixed(1) + "\u00a0µs" : "–"
             detail: page.d.crypto_fast ? "optimised for this CPU, both cores" : "portable code"
         }
     }
@@ -152,6 +174,7 @@ AppPage {
     // ---- where the time goes
     Card {
         visible: page.have && (page.d.ready_n || 0) > 0
+        opacity: page.stale ? 0.5 : 1
         title: "Where the time goes"
         subtitle: "A typical packet: the median of every stage."
         icon: "status"
@@ -170,6 +193,7 @@ AppPage {
     // ---- spread per stage
     Card {
         visible: page.have && (page.d.ready_n || 0) > 0
+        opacity: page.stale ? 0.5 : 1
         title: "Spread per stage"
         subtitle: "Bar: fastest to 99 %. Dot: median. Mark: slowest (▸ beyond the scale)."
         icon: "latency"
@@ -189,6 +213,7 @@ AppPage {
     // ---- mouse reports and the PlayStation
     Card {
         visible: page.have && (page.d.mouse_fetches || 0) > 0
+        opacity: page.stale ? 0.5 : 1
         title: "Mouse reports and the PlayStation"
         subtitle: "The PlayStation fetches a report once per millisecond; the board fills it shortly before."
         icon: "mouse"
@@ -210,8 +235,8 @@ AppPage {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
             color: Style.muted
-            text: `Missed polls: ${page.d.mouse_misses} of ${page.d.mouse_fetches} (${page.pct(page.d.mouse_misses, page.d.mouse_fetches)}) · `
-                + `skipped by the PlayStation: ${page.d.mouse_host_skips} (${page.pct(page.d.mouse_host_skips, page.d.mouse_fetches)}) · `
+            text: `Missed polls: ${page.n(page.d.mouse_misses)} of ${page.n(page.d.mouse_fetches)} (${page.pct(page.d.mouse_misses, page.d.mouse_fetches)}) · `
+                + `skipped by the PlayStation: ${page.n(page.d.mouse_host_skips)} (${page.pct(page.d.mouse_host_skips, page.d.mouse_fetches)}) · `
                 + `motion that waited for a report already filled: ${page.pct(page.d.mouse_waits, page.d.mouse_inputs)}`
         }
     }
@@ -219,6 +244,7 @@ AppPage {
     // ---- clock speed
     Card {
         visible: page.have
+        opacity: page.stale ? 0.5 : 1
         title: "Clock speed"
         subtitle: page.clk.cpu_hz ? `now: processor ${(page.clk.cpu_hz / 1e6).toFixed(0)} MHz, network chip ${(page.clk.spi_hz / 1e6).toFixed(1)} MHz` : ""
         icon: "bolt"
@@ -234,8 +260,11 @@ AppPage {
             visible: page.clk.spi_fast_failed === true
             text: "The fast SPI clock failed its self-test; the network chip runs at the standard clock."
         }
+        // Label and choice side by side, or the choice below its label when
+        // the card is too narrow for both.
         GridLayout {
-            columns: 2
+            Layout.fillWidth: true
+            columns: width > 480 ? 2 : 1
             columnSpacing: 16
             rowSpacing: 10
             Controls.Label { text: "Processor"; color: Style.text }
@@ -258,7 +287,7 @@ AppPage {
             AppButton {
                 text: "Apply"
                 highlighted: true
-                enabled: !AppController.clockBusy && !AppController.active
+                enabled: !AppController.clockBusy && !AppController.active && !page.stale
                         && (cpuChoice.value !== String(page.clk.cpu_mhz) || (spiChoice.value === "fast") !== page.clk.spi_fast)
                 onClicked: AppController.setBoardClock(Number(cpuChoice.value), spiChoice.value === "fast")
             }
@@ -275,7 +304,7 @@ AppPage {
     Card {
         title: "This PC"
         subtitle: AppController.inputP50 >= 0
-                  ? `input → network: median ${(AppController.inputP50 * 1000).toFixed(0)} µs · max ${(AppController.inputMax * 1000).toFixed(0)} µs`
+                  ? `input → network: median ${Style.us(AppController.inputP50 * 1000)} · max ${Style.us(AppController.inputMax * 1000)}`
                   : "input → network is measured while the bridge is on"
         icon: "network"
         help: "Before the board sees a packet, this PC has to notice the input and send it. Two things in the system can add more than the board's whole input path: USB network adapters that hold packets back to bundle them (about 1 ms), and now and then a core that has to wake up from a deep sleep state first (a few hundred µs)."
@@ -291,9 +320,9 @@ AppPage {
                 wrapMode: Text.WordWrap
                 color: Style.muted
                 text: AppController.upP50 >= 0
-                      ? `PC → board: median ${(AppController.upP50 * 1000).toFixed(0)} µs · 95 % below ${(AppController.upP95 * 1000).toFixed(0)} µs (measured with the board's time stamps)`
+                      ? `PC → board: median ${Style.us(AppController.upP50 * 1000)} · 95\u00a0% below ${Style.us(AppController.upP95 * 1000)} (measured with the board's time stamps)`
                       : AppController.rttP50 >= 0
-                      ? `≈ ${(AppController.rttP50 * 500).toFixed(0)} µs, half the round trip (exact with newer board firmware)`
+                      ? `≈ ${Style.us(AppController.rttP50 * 500)}, half the round trip (exact with newer board firmware)`
                       : "–"
             }
             Controls.Label { text: "Round trip"; color: Style.text }
@@ -302,7 +331,7 @@ AppPage {
                 wrapMode: Text.WordWrap
                 color: Style.muted
                 text: AppController.rttP50 >= 0
-                      ? `median ${(AppController.rttP50 * 1000).toFixed(0)} µs · 95 % below ${(AppController.rttP95 * 1000).toFixed(0)} µs (there and back, with the board's processing)`
+                      ? `median ${Style.us(AppController.rttP50 * 1000)} · 95\u00a0% below ${Style.us(AppController.rttP95 * 1000)} (there and back, with the board's processing)`
                       : "–"
             }
             Controls.Label { text: "Network adapter"; color: Style.text }
@@ -311,10 +340,10 @@ AppPage {
                 wrapMode: Text.WordWrap
                 color: AppController.adapterMode === "delaying" ? Style.stateColor("warn") : Style.muted
                 text: AppController.adapterMode === "delaying"
-                      ? `${AppController.adapterIface} holds every packet back up to about ${(AppController.adapterDelayMs * 1000).toFixed(0)} µs (USB adapter, cdc_ncm)`
+                      ? `${AppController.adapterIface} holds every packet back up to about ${Style.us(AppController.adapterDelayMs * 1000)} (USB adapter, cdc_ncm)`
                       : AppController.adapterMode === "managed"
                       ? (AppController.adapterAtOnceNow ? `${AppController.adapterIface} sends at once while the app runs (bundles again when it is closed)`
-                         : `${AppController.adapterIface} bundles packets (up to ${(AppController.adapterDelayMs * 1000).toFixed(0)} µs); the app switches it to “send at once”`)
+                         : `${AppController.adapterIface} bundles packets (up to ${Style.us(AppController.adapterDelayMs * 1000)}); the app switches it to “send at once”`)
                       : AppController.adapterMode === "fixed" ? `${AppController.adapterIface} sends at once (set outside the app)`
                       : AppController.connected ? "sends packets at once" : "–"
             }
@@ -351,14 +380,14 @@ AppPage {
             visible: needed || AppController.latencyRuleInstalled || AppController.latencySetupMessage !== ""
             spacing: 12
             AppButton {
-                text: AppController.latencySetupBusy ? "Working …" : "Set up"
+                text: AppController.latencySetupBusy ? "Setting up …" : "Set up"
                 highlighted: true
                 visible: setupRow.needed
                 enabled: !AppController.latencySetupBusy
                 onClicked: AppController.setupLowLatency()
             }
             AppButton {
-                text: AppController.latencySetupBusy && !setupRow.needed ? "Working …" : "Undo"
+                text: AppController.latencySetupBusy && !setupRow.needed ? "Removing …" : "Undo"
                 visible: AppController.latencyRuleInstalled
                 enabled: !AppController.latencySetupBusy
                 onClicked: AppController.removeLowLatency()
@@ -378,11 +407,17 @@ AppPage {
     // ---- details, as in the web interface
     Card {
         visible: page.have
+        opacity: page.stale ? 0.5 : 1
         title: "Details"
         icon: "board"
-        ColumnLayout {
+        // One grid: the values line up from row to row; below each name
+        // when the card is narrow.
+        GridLayout {
+            id: detailGrid
             Layout.fillWidth: true
-            spacing: 6
+            columns: width > 480 ? 2 : 1
+            columnSpacing: 16
+            rowSpacing: 6
             Repeater {
                 model: page.have ? [
                     ["Firmware", `${page.st.firmware} · slot ${page.st.partition} · up ${page.uptime(page.st.uptime_ms)}`],
@@ -392,27 +427,19 @@ AppPage {
                     ["MAC address", page.st.mac],
                     ["UDP port", String(page.st.udp_port)],
                     ["Sender filter", page.st.allowed_sender || "any sender"],
-                    ["Packets", `${page.st.rx_ok} ok · ${page.st.rx_auth_fail} bad signature · ${page.st.rx_replay} replayed · ${page.st.rx_filtered} unknown sender · ${page.st.rx_malformed} malformed`],
-                    ["Receive rounds", `${page.d.datagrams} packets in ${page.d.rounds} rounds · ${page.d.core0_spi} SPI transfers`],
-                    ["Keystream on core 1", `${page.d.crypto_helped} packets · ${page.d.crypto_alone} on core 0 alone`],
-                    ["Mouse input that waited", `${page.d.mouse_waits} of ${page.d.mouse_inputs} (${page.pct(page.d.mouse_waits, page.d.mouse_inputs)})`]
-                ] : []
-                delegate: RowLayout {
+                    ["Packets", `${page.n(page.st.rx_ok)} ok · ${page.n(page.st.rx_auth_fail)} bad signature · ${page.n(page.st.rx_replay)} replayed · ${page.n(page.st.rx_filtered)} unknown sender · ${page.n(page.st.rx_malformed)} malformed`],
+                    ["Receive rounds", `${Style.plural(page.d.datagrams || 0, "packet", "packets")} in ${Style.plural(page.d.rounds || 0, "round", "rounds")} · ${page.n(page.d.core0_spi)} SPI transfers`],
+                    ["Keystream on core 1", `${Style.plural(page.d.crypto_helped || 0, "packet", "packets")} · ${page.n(page.d.crypto_alone)} on core 0 alone`],
+                    ["Mouse input that waited", `${page.n(page.d.mouse_waits)} of ${page.n(page.d.mouse_inputs)} (${page.pct(page.d.mouse_waits, page.d.mouse_inputs)})`]
+                ].reduce((all, row) => all.concat([{ name: true, text: row[0] }, { name: false, text: row[1] }]), []) : []
+                delegate: Controls.Label {
                     required property var modelData
-                    Layout.fillWidth: true
-                    spacing: 16
-                    Controls.Label {
-                        Layout.preferredWidth: 190
-                        Layout.alignment: Qt.AlignTop
-                        text: modelData[0]
-                        color: Style.muted
-                    }
-                    Controls.Label {
-                        Layout.fillWidth: true
-                        text: modelData[1] === undefined ? "–" : String(modelData[1])
-                        color: Style.text
-                        wrapMode: Text.WordWrap
-                    }
+                    Layout.fillWidth: !modelData.name
+                    Layout.alignment: Qt.AlignTop
+                    Layout.topMargin: modelData.name && detailGrid.columns === 1 ? 4 : 0
+                    text: modelData.text === undefined ? "–" : String(modelData.text)
+                    color: modelData.name ? Style.muted : Style.text
+                    wrapMode: Text.WordWrap
                 }
             }
         }

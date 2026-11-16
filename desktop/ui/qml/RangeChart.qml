@@ -7,64 +7,78 @@ import PSHIDBridge
 // to the 99th percentile, a dot at the median, a mark at the slowest (an
 // arrow at the axis end if it lies beyond). The figures stand to the right
 // (they are also the table of the chart); hover shows everything.
+// Narrow: name and figures on one line, the bar below them at full width.
 // rows: [{label, n, min, p50, p99, max}] in µs.
 ColumnLayout {
     id: chart
     property var rows: []
-    property int labelWidth: 210
+    readonly property bool narrow: width < 560
+    readonly property int labelWidth: Math.min(210, Math.round(width * 0.3))
     readonly property int valuesWidth: 170
-    readonly property real scaleMax: nice(Math.max(1, ...rows.map(r => r.p99)) * 1.15)
-    readonly property var ticks: [0, 1, 2, 3, 4].map(i => scaleMax * i / 4)
+    // The plot's width (the axis below has the same).
+    readonly property real plotWidth: narrow ? width : Math.max(0, width - labelWidth - valuesWidth - 24)
+    // Axis steps of 1, 2 or 5 × 10^n, about four of them (two on a short axis).
+    readonly property real upper: Math.max(1, ...rows.map(r => r.p99)) * 1.15
+    readonly property real step: niceStep(upper / (plotWidth < 240 ? 2 : 4))
+    readonly property real scaleMax: Math.ceil(upper / step) * step
+    readonly property var ticks: {
+        const t = [];
+        for (let v = 0; v <= scaleMax + step / 2; v += step)
+            t.push(v);
+        return t;
+    }
     spacing: 0
 
-    function nice(v) {
+    function niceStep(v) {
         const mag = Math.pow(10, Math.floor(Math.log10(v)));
-        for (const s of [1, 2, 2.5, 5, 10]) {
+        for (const s of [1, 2, 5]) {
             if (s * mag >= v)
                 return s * mag;
         }
         return 10 * mag;
     }
     function fmt(us) {
-        return Math.round(us) + " µs";
+        return Style.us(us);
     }
     function pos(v, w) {
         return Math.min(1, Math.max(0, v / scaleMax)) * w;
     }
 
-    RowLayout {
+    Controls.Label {
         Layout.fillWidth: true
-        spacing: 12
-        Item { Layout.preferredWidth: chart.labelWidth }
-        Item { Layout.fillWidth: true }
-        Controls.Label {
-            Layout.preferredWidth: chart.valuesWidth
-            text: "median · 99 % · slowest"
-            color: Style.muted
-            font.pointSize: Style.fontSize * 0.85
-            horizontalAlignment: Text.AlignRight
-        }
+        Layout.bottomMargin: 2
+        text: "median · 99\u00a0% · slowest"
+        color: Style.muted
+        font.pointSize: Style.fontSize * 0.85
+        horizontalAlignment: Text.AlignRight
     }
 
     Repeater {
         model: chart.rows
-        delegate: RowLayout {
+        delegate: GridLayout {
             id: row
             required property var modelData
             Layout.fillWidth: true
-            Layout.preferredHeight: 28
-            spacing: 12
+            columns: chart.narrow ? 2 : 3
+            columnSpacing: 12
+            rowSpacing: 0
 
             Controls.Label {
-                Layout.preferredWidth: chart.labelWidth
+                Layout.row: 0
+                Layout.column: 0
+                Layout.fillWidth: chart.narrow
+                Layout.preferredWidth: chart.narrow ? -1 : chart.labelWidth
                 text: row.modelData.label
                 color: Style.text
                 elide: Text.ElideRight
             }
             Item {
                 id: plot
+                Layout.row: chart.narrow ? 1 : 0
+                Layout.column: chart.narrow ? 0 : 1
+                Layout.columnSpan: chart.narrow ? 2 : 1
                 Layout.fillWidth: true
-                Layout.fillHeight: true
+                Layout.preferredHeight: 28
                 readonly property bool beyond: row.modelData.max > chart.scaleMax
 
                 Repeater {
@@ -116,10 +130,13 @@ ColumnLayout {
                     hoverEnabled: true
                 }
                 Controls.ToolTip.visible: hover.containsMouse
-                Controls.ToolTip.text: `${row.modelData.label}: median ${chart.fmt(row.modelData.p50)}, 99 % below ${chart.fmt(row.modelData.p99)}, fastest ${chart.fmt(row.modelData.min)}, slowest ${chart.fmt(row.modelData.max)} (${row.modelData.n} times)`
+                Controls.ToolTip.text: `${row.modelData.label}: median ${chart.fmt(row.modelData.p50)}, 99\u00a0% below ${chart.fmt(row.modelData.p99)}, fastest ${chart.fmt(row.modelData.min)}, slowest ${chart.fmt(row.modelData.max)} (${Style.plural(row.modelData.n, "time", "times")})`
             }
             Controls.Label {
-                Layout.preferredWidth: chart.valuesWidth
+                Layout.row: 0
+                Layout.column: chart.narrow ? 1 : 2
+                Layout.preferredWidth: chart.narrow ? -1 : chart.valuesWidth
+                Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
                 text: `${chart.fmt(row.modelData.p50)} · ${chart.fmt(row.modelData.p99)} · ${chart.fmt(row.modelData.max)}`
                 color: Style.muted
                 font.features: { "tnum": 1 }
@@ -128,27 +145,22 @@ ColumnLayout {
         }
     }
 
-    RowLayout {  // axis
+    Item {  // axis, under the plots (as wide: margins for the columns beside them)
+        id: axis
         Layout.fillWidth: true
-        spacing: 12
-        Item { Layout.preferredWidth: chart.labelWidth }
-        Item {
-            id: axis
-            Layout.fillWidth: true
-            implicitHeight: 18
-            Repeater {
-                model: chart.ticks
-                delegate: Controls.Label {
-                    required property real modelData
-                    required property int index
-                    x: Math.min(axis.width - width, Math.max(0, chart.pos(modelData, axis.width) - width / 2))
-                    text: chart.fmt(modelData)
-                    color: Style.muted
-                    font.pointSize: Style.fontSize * 0.85
-                    font.features: { "tnum": 1 }
-                }
+        Layout.leftMargin: chart.narrow ? 0 : chart.labelWidth + 12
+        Layout.rightMargin: chart.narrow ? 0 : chart.valuesWidth + 12
+        implicitHeight: 18
+        Repeater {
+            model: chart.ticks
+            delegate: Controls.Label {
+                required property real modelData
+                x: Math.min(axis.width - width, Math.max(0, chart.pos(modelData, axis.width) - width / 2))
+                text: chart.fmt(modelData)
+                color: Style.muted
+                font.pointSize: Style.fontSize * 0.85
+                font.features: { "tnum": 1 }
             }
         }
-        Item { Layout.preferredWidth: chart.valuesWidth }
     }
 }

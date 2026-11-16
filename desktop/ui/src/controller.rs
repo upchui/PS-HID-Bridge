@@ -99,6 +99,9 @@ pub mod qobject {
         #[qproperty(bool, app_updated)]
         #[qproperty(bool, update_busy)]
         #[qproperty(QString, update_status)]
+        /// How `update_status` reads: "info" (working, a note), "ok" (done)
+        /// or "warn" (it failed).
+        #[qproperty(QString, update_level)]
         /// The board's status, latency diagnostics and clock speeds as JSON
         /// {"status": …, "diag": …, "clock": …} (signed requests, see
         /// refresh_board_info); "" until the first answer.
@@ -324,6 +327,7 @@ pub struct AppControllerRust {
     app_updated: bool,
     update_busy: bool,
     update_status: QString,
+    update_level: QString,
     board_info_json: QString,
     board_info_error: QString,
     board_info_busy: bool,
@@ -450,6 +454,7 @@ impl Default for AppControllerRust {
             app_updated: false,
             update_busy: false,
             update_status: QString::default(),
+            update_level: QString::from("info"),
             board_info_json: QString::default(),
             board_info_error: QString::default(),
             board_info_busy: false,
@@ -817,7 +822,7 @@ impl qobject::AppController {
                 self.as_mut().rust_mut().board_expected = None;
                 self.as_mut().set_update_busy(false);
                 self.as_mut()
-                    .set_update_status(QString::from(&format!("The board runs firmware {want}.")));
+                    .update_message("ok", &format!("The board runs firmware {want}."));
             }
         } else if !self.board_firmware().is_empty() || !self.board_usb().is_empty() {
             // Not reachable: what it said last no longer holds.
@@ -925,6 +930,8 @@ impl qobject::AppController {
         } else if !config::psk_path().exists() {
             return QString::from("Please paste the key from the board's web interface.");
         }
+        // An error of the old settings would read as the new ones' result.
+        self.as_mut().set_last_error(QString::default());
         if self.config_ref().board != address {
             // The latency page shows the new board's figures only.
             self.as_mut().set_board_info_json(QString::default());
@@ -960,6 +967,9 @@ impl qobject::AppController {
     }
 
     pub fn set_device_selected(mut self: Pin<&mut Self>, id: &QString, selected: bool) {
+        // "Please select keyboard and mouse first." and the like: answered
+        // by this very change, or stale.
+        self.as_mut().set_access_message(QString::default());
         let id = String::from(id).to_lowercase();
         let list = self.rust().devices.clone();
         {
@@ -1269,8 +1279,7 @@ impl qobject::AppController {
 
     pub fn check_updates(mut self: Pin<&mut Self>) {
         if !*self.update_busy() {
-            self.as_mut()
-                .set_update_status(QString::from("Looking for updates …"));
+            self.as_mut().update_message("info", "Looking for updates …");
         }
         self.start_update_check(true);
     }
@@ -1301,7 +1310,7 @@ impl qobject::AppController {
                 // An automatic check stays quiet (offline, rate limit).
                 if manual && !*self.update_busy() {
                     self.as_mut()
-                        .set_update_status(QString::from(&format!("Could not look for updates: {e}")));
+                        .update_message("warn", &format!("Could not look for updates: {e}"));
                 }
                 return;
             }
@@ -1315,15 +1324,16 @@ impl qobject::AppController {
         self.as_mut().refresh_board_update(connected);
         let any = newer_app || *self.board_update_available();
         if manual && !*self.update_busy() {
-            self.as_mut().set_update_status(QString::from(&if any {
-                format!("Version {v} is available.")
+            if any {
+                self.as_mut()
+                    .update_message("info", &format!("Version {v} is available."));
             } else {
-                "Everything is up to date.".to_string()
-            }));
+                self.as_mut().update_message("ok", "Everything is up to date.");
+            }
         } else if any && !*self.update_busy() {
             // An earlier "Everything is up to date." (or an error) would stand
             // in the banner that now offers the update.
-            self.as_mut().set_update_status(QString::default());
+            self.as_mut().update_message("info", "");
         }
         if any && self.rust().notified != Some(v) {
             self.as_mut().rust_mut().notified = Some(v);
@@ -1344,9 +1354,15 @@ impl qobject::AppController {
         }
     }
 
+    /// Set `update_status` and how it reads (`update_level`).
+    fn update_message(mut self: Pin<&mut Self>, level: &str, text: &str) {
+        self.as_mut().set_update_level(QString::from(level));
+        self.as_mut().set_update_status(QString::from(text));
+    }
+
     fn update_progress(mut self: Pin<&mut Self>, text: String) {
         if *self.update_busy() {
-            self.as_mut().set_update_status(QString::from(&text));
+            self.as_mut().update_message("info", &text);
         }
     }
 
@@ -1355,17 +1371,17 @@ impl qobject::AppController {
             return;
         }
         let Some(path) = appimage_path() else {
-            self.as_mut().set_update_status(QString::from(
+            self.as_mut().update_message(
+                "warn",
                 "This app does not run as an AppImage in a writable folder: download the new version from the release page.",
-            ));
+            );
             return;
         };
         let Some(release) = self.rust().latest.clone() else {
             return;
         };
         self.as_mut().set_update_busy(true);
-        self.as_mut()
-            .set_update_status(QString::from("Downloading the app …"));
+        self.as_mut().update_message("info", "Downloading the app …");
         let progress = self.qt_thread();
         let done = self.qt_thread();
         let _ = thread::Builder::new()
@@ -1395,13 +1411,14 @@ impl qobject::AppController {
             Ok(v) => {
                 self.as_mut().set_app_updated(true);
                 self.as_mut().set_app_update_available(false);
-                self.as_mut().set_update_status(QString::from(&format!(
-                    "Version {v} is installed. Restart the app to use it."
-                )));
+                self.as_mut().update_message(
+                    "ok",
+                    &format!("Version {v} is installed. Restart the app to use it."),
+                );
             }
             Err(e) => self
                 .as_mut()
-                .set_update_status(QString::from(&format!("App update failed: {e}"))),
+                .update_message("warn", &format!("App update failed: {e}")),
         }
     }
 
@@ -1417,7 +1434,7 @@ impl qobject::AppController {
             Ok(_) => std::process::exit(0),
             Err(e) => {
                 self.as_mut()
-                    .set_update_status(QString::from(&format!("Restart failed: {e}")));
+                    .update_message("warn", &format!("Restart failed: {e}"));
                 self.as_mut().restart_service();
             }
         }
@@ -1524,9 +1541,10 @@ impl qobject::AppController {
             return;
         }
         if *self.active() {
-            self.as_mut().set_update_status(QString::from(
+            self.as_mut().update_message(
+                "warn",
                 "Switch the bridge off first: the board restarts during the update.",
-            ));
+            );
             return;
         }
         let Some(release) = self.rust().latest.clone() else {
@@ -1535,14 +1553,13 @@ impl qobject::AppController {
         let key = match config::load_psk(&config::psk_path()) {
             Ok(k) => k,
             Err(e) => {
-                self.as_mut().set_update_status(QString::from(&e));
+                self.as_mut().update_message("warn", &e);
                 return;
             }
         };
         let board = self.config_ref().board.clone();
         self.as_mut().set_update_busy(true);
-        self.as_mut()
-            .set_update_status(QString::from("Downloading the firmware …"));
+        self.as_mut().update_message("info", "Downloading the firmware …");
         let progress = self.qt_thread();
         let done = self.qt_thread();
         let _ = thread::Builder::new()
@@ -1566,16 +1583,17 @@ impl qobject::AppController {
             Err(e) => {
                 self.as_mut().set_update_busy(false);
                 self.as_mut()
-                    .set_update_status(QString::from(&format!("Board update failed: {e}")));
+                    .update_message("warn", &format!("Board update failed: {e}"));
                 return;
             }
         };
         let n = self.rust().board_updates + 1;
         self.as_mut().rust_mut().board_updates = n;
         self.as_mut().rust_mut().board_expected = Some((v, n));
-        self.as_mut().set_update_status(QString::from(&format!(
-            "Written and checked. The board restarts into firmware {v} …"
-        )));
+        self.as_mut().update_message(
+            "info",
+            &format!("Written and checked. The board restarts into firmware {v} …"),
+        );
         let qt = self.qt_thread();
         let _ = thread::Builder::new()
             .name("pshb-update-wait".into())
@@ -1679,9 +1697,10 @@ impl qobject::AppController {
         self.as_mut().rust_mut().board_expected = None;
         self.as_mut().set_update_busy(false);
         let now = self.board_firmware().to_string();
-        self.as_mut().set_update_status(QString::from(&format!(
-            "The board did not come back with firmware {v} (it reports {now}): it probably went back to the previous version."
-        )));
+        self.as_mut().update_message(
+            "warn",
+            &format!("The board did not come back with firmware {v} (it reports {now}): it probably went back to the previous version."),
+        );
     }
 }
 

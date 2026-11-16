@@ -16,43 +16,61 @@ AppPage {
         property string pillLevel
         property string pillText
         default property alias buttons: buttonRow.data
+        // Too narrow for name, pill and buttons side by side: pill and
+        // buttons go below the name.
+        readonly property bool narrow: width < 460
         Layout.fillWidth: true
         implicitHeight: vlayout.implicitHeight + 20
         radius: Style.radius
         color: Style.surfaceAlt
-        RowLayout {
+        GridLayout {
             id: vlayout
             anchors.fill: parent
             anchors.margins: 10
             anchors.leftMargin: 14
-            spacing: 12
+            columns: vrow.narrow ? 2 : 3
+            columnSpacing: 12
+            rowSpacing: 8
             AppIcon {
+                Layout.row: 0
+                Layout.column: 0
                 name: vrow.icon
                 color: Style.muted
                 implicitWidth: 20
                 implicitHeight: 20
             }
             ColumnLayout {
+                Layout.row: 0
+                Layout.column: 1
                 Layout.fillWidth: true
                 spacing: 0
                 Controls.Label {
+                    Layout.fillWidth: true
                     text: vrow.name
                     color: Style.text
                     font.weight: Font.DemiBold
+                    elide: Text.ElideRight
                 }
                 Controls.Label {
+                    Layout.fillWidth: true
                     text: vrow.detail
                     color: Style.muted
+                    wrapMode: Text.WordWrap
                 }
             }
-            Pill {
-                visible: vrow.showPill
-                level: vrow.pillLevel
-                text: vrow.pillText
-            }
             RowLayout {
-                id: buttonRow
-                spacing: 6
+                Layout.row: vrow.narrow ? 1 : 0
+                Layout.column: vrow.narrow ? 1 : 2
+                spacing: 8
+                Pill {
+                    visible: vrow.showPill
+                    level: vrow.pillLevel
+                    text: vrow.pillText
+                }
+                RowLayout {
+                    id: buttonRow
+                    spacing: 6
+                }
             }
         }
     }
@@ -74,6 +92,8 @@ AppPage {
             icon: "status"
             name: "Desktop app"
             detail: "installed " + AppController.version
+                    + (AppController.appUpdateAvailable && !AppController.canUpdateApp
+                       ? " · not an AppImage: download the new version from the release page" : "")
             showPill: AppController.latestVersion !== ""
             pillLevel: AppController.appUpdateAvailable ? "accent" : "ok"
             pillText: AppController.appUpdated ? "restart to use it"
@@ -81,8 +101,9 @@ AppPage {
             AppButton {
                 text: AppController.appUpdated ? "Restart now" : "Update"
                 highlighted: true
-                visible: AppController.appUpdateAvailable || AppController.appUpdated
-                enabled: !AppController.updateBusy && (AppController.appUpdated || AppController.canUpdateApp)
+                // Not an AppImage: nothing to update here (the line above says why).
+                visible: (AppController.appUpdateAvailable && AppController.canUpdateApp) || AppController.appUpdated
+                enabled: !AppController.updateBusy
                 onClicked: AppController.appUpdated ? AppController.restartApp() : AppController.updateApp()
             }
         }
@@ -93,13 +114,24 @@ AppPage {
             showPill: AppController.latestVersion !== "" && AppController.boardFirmware !== ""
             pillLevel: AppController.boardUpdateAvailable ? "accent" : "ok"
             pillText: AppController.boardUpdateAvailable ? AppController.latestVersion + " available" : "up to date"
-            AppButton {
-                text: "Update"
-                highlighted: true
+            // In a wrapper: a disabled button gets no hover, the wrapper does
+            // (the tooltip says why it is disabled).
+            Item {
                 visible: AppController.boardUpdateAvailable
-                enabled: !AppController.updateBusy && !AppController.active
-                onClicked: AppController.updateBoard()
-                Controls.ToolTip.visible: hovered && AppController.active
+                implicitWidth: boardUpdate.implicitWidth
+                implicitHeight: boardUpdate.implicitHeight
+                AppButton {
+                    id: boardUpdate
+                    anchors.fill: parent
+                    text: "Update"
+                    highlighted: true
+                    enabled: !AppController.updateBusy && !AppController.active
+                    onClicked: AppController.updateBoard()
+                }
+                HoverHandler {
+                    id: boardUpdateHover
+                }
+                Controls.ToolTip.visible: boardUpdateHover.hovered && AppController.active
                 Controls.ToolTip.text: "Switch the bridge off first: the board restarts."
             }
         }
@@ -115,7 +147,7 @@ AppPage {
         }
 
         Banner {
-            kind: AppController.updateStatus.indexOf("failed") >= 0 || AppController.updateStatus.indexOf("not") >= 0 ? "warn" : "info"
+            kind: AppController.updateLevel === "warn" ? "warn" : AppController.updateLevel === "ok" ? "ok" : "info"
             visible: AppController.updateStatus !== ""
             text: AppController.updateStatus
         }

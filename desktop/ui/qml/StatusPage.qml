@@ -7,7 +7,7 @@ AppPage {
     id: page
     // Every latency in microseconds (most are well below a millisecond).
     function us(ms) {
-        return Math.round(ms * 1000) + " µs";
+        return Style.us(ms * 1000);
     }
     title: "Status"
 
@@ -25,9 +25,11 @@ AppPage {
 
     // The board's own measurements (signed request, see LatencyPage.qml):
     // its part of the way to the PlayStation.
+    // Not while the board is gone: its last answer would look current.
     readonly property var diag: {
         try {
-            return AppController.boardInfoJson === "" ? ({}) : (JSON.parse(AppController.boardInfoJson).diag || ({}));
+            return AppController.boardInfoJson === "" || !AppController.connected ? ({})
+                 : (JSON.parse(AppController.boardInfoJson).diag || ({}));
         } catch (e) {
             return ({});
         }
@@ -74,12 +76,15 @@ AppPage {
         }
     }
 
-    // "Shift + A · mouse: left" -> ["Shift", "A", "mouse: left"]
+    // "Shift + A · mouse: left" -> ["Shift", "A", "mouse: left"]; nothing
+    // held ("no key", or "no key · mouse: left" without a key) is no chip.
     function keyChips(text) {
         if (text === "")
             return [];
-        return text.split(" · ").map(p => p.split(" + ")).reduce((a, b) => a.concat(b), []);
+        return text.split(" · ").map(p => p.split(" + ")).reduce((a, b) => a.concat(b), [])
+                   .filter(c => c !== "no key");
     }
+    readonly property var liveChips: keyChips(AppController.liveText)
 
     function triggerChips() {
         const actions = { "toggle": "toggle", "on": "on", "off": "off", "pause": "pause", "release-all": "release all" };
@@ -104,7 +109,8 @@ AppPage {
         }
     }
     Banner {
-        kind: "ok"
+        // Green for the offer and progress, yellow when something failed.
+        kind: AppController.updateStatus !== "" && AppController.updateLevel === "warn" ? "warn" : "ok"
         visible: AppController.appUpdateAvailable || AppController.boardUpdateAvailable
                  || AppController.appUpdated || AppController.updateBusy
         text: AppController.updateStatus !== "" ? AppController.updateStatus
@@ -166,6 +172,7 @@ AppPage {
                 Rectangle {
                     implicitWidth: 48
                     implicitHeight: 48
+                    Layout.alignment: Qt.AlignTop
                     radius: 24
                     color: page.level === "" ? Style.surfaceAlt : Style.stateColor(page.level)
                     AppIcon {
@@ -180,10 +187,12 @@ AppPage {
                     Layout.fillWidth: true
                     spacing: 2
                     Controls.Label {
+                        Layout.fillWidth: true
                         text: AppController.statusText
                         color: Style.text
                         font.pointSize: Style.fontSize * 1.6
                         font.weight: Font.DemiBold
+                        wrapMode: Text.WordWrap
                     }
                     Controls.Label {
                         Layout.fillWidth: true
@@ -232,7 +241,7 @@ AppPage {
                     verticalAlignment: Text.AlignVCenter
                 }
                 Repeater {
-                    model: page.keyChips(AppController.liveText)
+                    model: page.liveChips
                     delegate: Rectangle {
                         id: keyChip
                         required property string modelData
@@ -251,14 +260,17 @@ AppPage {
                     }
                 }
                 Controls.Label {
-                    visible: AppController.liveText === ""
+                    visible: page.liveChips.length === 0
                     text: "no key"
                     color: Style.muted
                     height: 26
                     verticalAlignment: Text.AlignVCenter
                 }
                 Controls.Label {
-                    visible: AppController.liveText !== "" && AppController.liveDevice !== ""
+                    visible: page.liveChips.length > 0 && AppController.liveDevice !== ""
+                    // At most as wide as the row, so a long device name is cut
+                    // off with "…" instead of running out of the box.
+                    width: Math.min(implicitWidth, parent.width)
                     text: "from " + AppController.liveDevice
                     color: Style.muted
                     height: 26
@@ -297,9 +309,7 @@ AppPage {
             label: "PlayStation"
             level: AppController.boardUsb === "PlayStation connected" ? "ok"
                    : AppController.boardUsb === "" ? "" : "warn"
-            value: AppController.boardUsb === "" ? "Unknown"
-                   : AppController.boardUsb === "PlayStation connected" ? "Connected"
-                   : AppController.boardUsb === "PlayStation in rest mode" ? "Rest mode" : "Not connected"
+            value: Style.playStation(AppController.boardUsb)
             detail: "USB connection of the board"
         }
         StatTile {
@@ -313,11 +323,11 @@ AppPage {
             value: oneWay ? page.us(AppController.upP50)
                    : roundTrip ? "≈ " + page.us(AppController.rttP50 / 2) : "–"
             detail: oneWay
-                    ? "PC → board, median · 95 % below " + page.us(AppController.upP95)
+                    ? "PC → board, median · 95\u00a0% below " + page.us(AppController.upP95)
                       + (roundTrip ? " · round trip " + page.us(AppController.rttP50) : "")
                     : roundTrip
                     ? "half the round trip (exact with newer board firmware) · round trip " + page.us(AppController.rttP50)
-                      + ", 95 % below " + page.us(AppController.rttP95)
+                      + ", 95\u00a0% below " + page.us(AppController.rttP95)
                     : "measured while connected"
 
             Canvas {
@@ -359,68 +369,65 @@ AppPage {
             label: "Input → network"
             value: AppController.inputP50 >= 0 ? page.us(AppController.inputP50) : "–"
             detail: AppController.inputP50 >= 0
-                    ? "median · max " + page.us(AppController.inputMax) + " · " + AppController.packetsPerSecond + " packets/s"
+                    ? "median · max " + page.us(AppController.inputMax) + " · "
+                      + Style.plural(AppController.packetsPerSecond, "packet/s", "packets/s")
                     : "measured while the bridge is on"
 
-            RowLayout {
+            // A Flow, not a row: the pills wrap to the next line instead of
+            // running out of the tile.
+            Flow {
+                Layout.fillWidth: true
                 spacing: 6
                 Pill {
                     visible: AppController.connected
                     level: AppController.realtime ? "ok" : "warn"
                     text: AppController.realtime ? "real-time priority" : "normal priority"
+                    help: AppController.realtime ? ""
+                          : "Real-time priority is not available (rtkit or a realtime group is missing, see README). Input still works, with more variance under load."
                 }
                 Pill {
                     visible: AppController.cpuWakeState === "held" || AppController.cpuWakeState === "not_permitted"
                     level: AppController.cpuWakeState === "held" ? "ok" : "warn"
                     text: AppController.cpuWakeState === "held" ? "CPU kept awake" : "CPU may sleep deeply"
-                }
-                HelpHint {
-                    visible: AppController.cpuWakeState === "not_permitted"
-                    text: "While the bridge is on, the app keeps the processor out of deep sleep states, so no input has to wait for a core to wake up first (now and then a few hundred microseconds). This user may not do that yet: set it up on the Latency page (asks for the administrator password)."
-                }
-                HelpHint {
-                    visible: AppController.connected && !AppController.realtime
-                    text: "Real-time priority is not available (rtkit or a realtime group is missing, see README). Input still works, with more variance under load."
+                    help: AppController.cpuWakeState !== "not_permitted" ? ""
+                          : "While the bridge is on, the app keeps the processor out of deep sleep states, so no input has to wait for a core to wake up first (now and then a few hundred microseconds). This user may not do that yet: set it up on the Latency page (asks for the administrator password)."
                 }
                 Pill {
                     level: AppController.devicesBlocked > 0 ? "warn" : AppController.devicesOpen > 0 ? "accent" : ""
-                    text: AppController.devicesBlocked > 0 ? AppController.devicesBlocked + " without access"
-                          : AppController.devicesOpen + " device interface(s)"
+                    text: AppController.devicesBlocked > 0 ? Style.count(AppController.devicesBlocked) + " without access"
+                          : Style.plural(AppController.devicesOpen, "device interface", "device interfaces")
                 }
                 Pill {
                     visible: AppController.inputResyncs > 0
                     level: "warn"
-                    text: AppController.inputResyncs + "× input corrected"
-                }
-                HelpHint {
-                    visible: AppController.inputResyncs > 0
-                    text: "The kernel dropped input events because the app fell behind for a moment (or a release went missing). The app compared with the real key state and released or pressed what was lost, so no key stays stuck. If this count rises often, set up real-time priority (see README)."
+                    text: Style.count(AppController.inputResyncs) + "× input corrected"
+                    help: "The kernel dropped input events because the app fell behind for a moment (or a release went missing). The app compared with the real key state and released or pressed what was lost, so no key stays stuck. If this count rises often, set up real-time priority (see README)."
                 }
             }
         }
         StatTile {
+            id: psTile
             readonly property bool complete: page.pcUs >= 0 && page.netUs >= 0 && page.fetchUs >= 0
             Layout.columnSpan: tiles.columns
             icon: "gamepad"
             label: "Input → PlayStation"
-            value: complete ? "≈ " + (page.pcUs + page.netUs + page.fetchUs) + " µs" : "–"
+            value: complete ? "≈ " + Style.us(page.pcUs + page.netUs + page.fetchUs) : "–"
             detail: complete ? "typical: from the input reaching this PC to the PlayStation fetching the report"
                     : "complete while the bridge is on (and the board answers)"
-
+            // Only with every part known: a bar of some parts would look
+            // like the whole. Each part keeps its colour.
             StageBar {
                 Layout.fillWidth: true
                 Layout.topMargin: 4
-                visible: parts.length > 0
+                visible: psTile.complete
                 parts: [
-                    { name: "this PC", value: page.pcUs },
-                    { name: AppController.upP50 >= 0 ? "network" : "network (≈ half the round trip)", value: page.netUs },
-                    { name: "board", value: page.boardUs },
-                    { name: "waiting for the PlayStation's poll", value: page.waitUs }
-                ].filter(p => p.value >= 0)
+                    { name: "this PC", value: page.pcUs, series: 0 },
+                    { name: AppController.upP50 >= 0 ? "network" : "network (≈ half the round trip)", value: page.netUs, series: 1 },
+                    { name: "board", value: page.boardUs, series: 2 },
+                    { name: "waiting for the PlayStation's poll", value: page.waitUs, series: 3 }
+                ]
             }
-            HelpHint {
-                text: "Medians of each part, added up. This PC: input event to packet sent (last 1000 packets). Network: PC → board, measured with the board's time stamps (last 120 answers: about 24 s while this page is open, it pings five times a second). Board: packet arrived to report ready. Waiting: until the PlayStation fetches the report; it polls once per millisecond. The board's parts count since it started or since \"Start over\" on the Latency page. Not included: the time until this PC fetches the report from the mouse or keyboard (their own USB polling)."
-            }
+            help: "Medians of each part, added up. This PC: input event to packet sent (last 1000 packets). Network: PC → board, measured with the board's time stamps (last 120 answers: about 24 s while this page is open, it pings five times a second). Board: packet arrived to report ready. Waiting: until the PlayStation fetches the report; it polls once per millisecond. The board's parts count since it started or since \"Start over\" on the Latency page. Not included: the time until this PC fetches the report from the mouse or keyboard (their own USB polling)."
         }
     }
 
@@ -462,24 +469,30 @@ AppPage {
                 delegate: Rectangle {
                     id: chip
                     required property var modelData
-                    implicitWidth: chipRow.implicitWidth + 16
-                    implicitHeight: chipRow.implicitHeight + 8
+                    // At most as wide as the card: a long window rule is cut
+                    // off with "…" (placed by hand: a layout rounds widths
+                    // down and would cut every text by a fraction).
+                    width: Math.min(Math.ceil(keysText.implicitWidth + whatText.implicitWidth) + 22, parent.width)
+                    implicitHeight: keysText.implicitHeight + 8
                     radius: 5
                     color: Style.surfaceAlt
                     border.color: Style.border
-                    RowLayout {
-                        id: chipRow
-                        anchors.centerIn: parent
-                        spacing: 6
-                        Controls.Label {
-                            text: chip.modelData.keys
-                            color: Style.text
-                            font.weight: Font.DemiBold
-                        }
-                        Controls.Label {
-                            text: chip.modelData.what
-                            color: Style.muted
-                        }
+                    Controls.Label {
+                        id: keysText
+                        x: 8
+                        width: Math.min(implicitWidth, chip.width - 22 - whatText.implicitWidth)
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: chip.modelData.keys
+                        color: Style.text
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideRight
+                    }
+                    Controls.Label {
+                        id: whatText
+                        x: keysText.x + keysText.width + 6
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: chip.modelData.what
+                        color: Style.muted
                     }
                 }
             }

@@ -26,6 +26,9 @@ Canvas {
     onLineChanged: requestPaint()
     onAccelChanged: requestPaint()
     onWidthChanged: requestPaint()
+    onHeightChanged: requestPaint()
+    onLabelChanged: requestPaint()
+    onAxisChanged: requestPaint()
 
     onPaint: {
         const ctx = getContext("2d");
@@ -44,8 +47,8 @@ Canvas {
         ctx.stroke();
 
         ctx.fillStyle = plot.label;
-        ctx.font = "11px sans-serif";
-        ctx.fillText("speed", w - 40, h - 8);
+        ctx.font = (Style.fontSize * 0.85).toFixed(1) + "pt sans-serif";  // the app's size, not fixed pixels
+        ctx.fillText("speed", w - 4 - ctx.measureText("speed").width, h - 8);
         ctx.fillText("× " + top.toFixed(1), 2, 12);
         ctx.fillText("1×", 6, y(1) + 4);
 

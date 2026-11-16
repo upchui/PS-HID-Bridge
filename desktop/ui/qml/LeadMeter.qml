@@ -25,6 +25,7 @@ ColumnLayout {
         }
         Rectangle {
             anchors.verticalCenter: parent.verticalCenter
+            visible: meter.lead > 0  // a lead of 0 shows no fill
             width: Math.max(8, Math.min(1, meter.lead / meter.frame) * track.width)
             height: 8
             radius: 4
@@ -43,17 +44,20 @@ ColumnLayout {
             hoverEnabled: true
         }
         Controls.ToolTip.visible: hover.containsMouse
-        Controls.ToolTip.text: `Armed ${meter.lead} µs before the poll, at least ${meter.floor} µs (of a 1000 µs frame)`
+        Controls.ToolTip.text: `Armed ${Style.us(meter.lead)} before the poll, at least ${Style.us(meter.floor)} (of a 1 ms frame)`
     }
     RowLayout {
         Layout.fillWidth: true
+        spacing: 12
         Controls.Label {
-            text: `armed ${meter.lead} µs before the poll · at least ${meter.floor} µs (mark)`
-            color: Style.muted
             Layout.fillWidth: true
+            text: `armed ${Style.us(meter.lead)} before the poll · at least ${Style.us(meter.floor)} (mark)`
+            color: Style.muted
+            wrapMode: Text.WordWrap
         }
         Controls.Label {
-            text: "1 ms frame"
+            Layout.alignment: Qt.AlignTop
+            text: "1\u00a0ms frame"
             color: Style.muted
         }
     }

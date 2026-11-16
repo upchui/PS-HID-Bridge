@@ -29,7 +29,7 @@ AppPage {
                       + "the app can no longer read keyboard and mouse until it is set up again (administrator password)."
             }
             AppButton {
-                text: AppController.accessBusy ? "Working …" : "Remove access"
+                text: AppController.accessBusy ? "Removing …" : "Remove access"
                 flat: true
                 enabled: !AppController.accessBusy && !AppController.active && !AppController.pending
                 onClicked: AppController.removeAccess()

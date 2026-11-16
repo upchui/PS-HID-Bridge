@@ -3,13 +3,15 @@ import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import PSHIDBridge
 
-// A small coloured label: state ("ok", "warn", "bad", "accent", or muted).
+// A small coloured label: state ("ok", "warn", "bad", "accent", or muted),
+// with a "?" inside if `help` explains it.
 Rectangle {
     id: pill
 
     property string text
     property string level: ""
     property string icon: ""
+    property string help: ""
     readonly property color tone: Style.stateColor(level)
 
     implicitWidth: row.implicitWidth + 16
@@ -33,6 +35,12 @@ Rectangle {
             color: pill.tone
             font.weight: Font.DemiBold
             font.pointSize: Style.fontSize * 0.9
+        }
+        HelpHint {
+            visible: pill.help !== ""
+            text: pill.help
+            implicitWidth: 14
+            implicitHeight: 14
         }
     }
 }
