@@ -6,6 +6,9 @@ cmake_minimum_required(VERSION 3.13...3.31)
 set(PSHB_LIB ${CMAKE_CURRENT_LIST_DIR}/lib)
 set(PICO_SDK_PATH ${PSHB_LIB}/pico-sdk)
 set(PICO_TINYUSB_PATH ${PSHB_LIB}/tinyusb)
+# USB host on GPIO pins (controller-mode test images); TinyUSB's rp2040
+# family support builds the target tinyusb_pico_pio_usb from it.
+set(PICO_PIO_USB_PATH ${PSHB_LIB}/pico-pio-usb)
 list(APPEND PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/boards)
 set(PICO_BOARD wiznet_w5500_evb_pico2)
 set(PICO_PLATFORM rp2350-arm-s)
@@ -132,7 +135,7 @@ add_custom_target(partition_table ALL DEPENDS ${CMAKE_BINARY_DIR}/ps-hid-bridge-
 pshb_add_firmware(ps-hid-bridge-plain OTA DEFINES PSHB_PLAINTEXT_DEBUG=1)
 pshb_add_firmware(ps-hid-bridge-rollbacktest OTA DEFINES PSHB_OTA_NO_CONFIRM=1)
 # Measurements (docs/latency.md): the normal firmware plus measuring pins
-# (GP2, GP3), a summary on the debug UART and the upload sink for load tests.
+# (GP6, GP7), a summary on the debug UART and the upload sink for load tests.
 pshb_add_firmware(ps-hid-bridge-timing OTA DEFINES PSHB_TIMING_GPIO=1 PSHB_TIMING_UART=1 PSHB_BENCH=1)
 
 # Recovery: erase everything (RAM-only image).
@@ -143,10 +146,57 @@ pico_add_extra_outputs(ps-hid-bridge-nuke)
 pshb_add_firmware(ps-hid-bridge-hidtest DEFINES PSHB_TEST_PATTERN=1)
 pshb_add_firmware(ps-hid-bridge-hidtest-mouse8 DEFINES PSHB_TEST_PATTERN=1 PSHB_MOUSE_8BIT=1)
 
+# Controller-mode test images (README, "Controller mode"): the USB host port
+# (Pico-PIO-USB on core 1, D+ GP2, D- GP3) and a log over the network
+# (src/pico/netlog.c, tools/boardlog.py); no input from the app.
+set(PSHB_USBHOST_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/src/core/crc32.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/core/logbuf.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/core/settings.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/pico/clock.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/pico/flash_store.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/pico/netlog.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/pico/w5500_port.c
+)
+function(pshb_add_usbhost_image name)
+    cmake_parse_arguments(ARG "" "" "SOURCES;DEFINES;LIBS" ${ARGN})
+    add_executable(${name} ${PSHB_USBHOST_SOURCES} ${ARG_SOURCES})
+    target_include_directories(${name} PRIVATE
+        ${PSHB_CORE_INCLUDES}
+        ${CMAKE_CURRENT_LIST_DIR}/src/pico
+    )
+    target_compile_definitions(${name} PRIVATE ${ARG_DEFINES})
+    target_compile_options(${name} PRIVATE -Wall -Wextra)
+    target_link_libraries(${name} PRIVATE
+        pico_stdlib
+        pico_multicore
+        pico_unique_id
+        hardware_adc
+        hardware_dma
+        hardware_flash
+        hardware_spi
+        hardware_vreg
+        hardware_watchdog
+        tinyusb_host
+        tinyusb_pico_pio_usb
+        iolibrary
+        ${ARG_LIBS}
+    )
+    pico_set_binary_type(${name} copy_to_ram)
+    # The log is its own stdio driver (netlog.c), which also feeds UART0.
+    pico_enable_stdio_uart(${name} 0)
+    pico_enable_stdio_usb(${name} 0)
+    pico_add_extra_outputs(${name})
+endfunction()
+pshb_add_usbhost_image(ps-hid-bridge-usbhosttest
+    SOURCES ${CMAKE_CURRENT_LIST_DIR}/src/pico/usbhost_test.c
+    DEFINES PSHB_USBHOST_TEST=1)
+
 # The images of this build: the Makefile copies exactly these to out/ (not
 # leftovers of renamed or removed targets in the build directory).
 set(PSHB_IMAGES ps-hid-bridge ps-hid-bridge-pt ps-hid-bridge-plain ps-hid-bridge-rollbacktest
-    ps-hid-bridge-timing ps-hid-bridge-nuke ps-hid-bridge-hidtest ps-hid-bridge-hidtest-mouse8)
+    ps-hid-bridge-timing ps-hid-bridge-nuke ps-hid-bridge-hidtest ps-hid-bridge-hidtest-mouse8
+    ps-hid-bridge-usbhosttest)
 list(TRANSFORM PSHB_IMAGES APPEND ".uf2")
 list(JOIN PSHB_IMAGES "\n" PSHB_IMAGES_TEXT)
 file(CONFIGURE OUTPUT ${CMAKE_BINARY_DIR}/images.txt CONTENT "${PSHB_IMAGES_TEXT}\n")
