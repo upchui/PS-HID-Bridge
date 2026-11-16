@@ -46,6 +46,11 @@ const TOS_EF: libc::c_int = 0xB8;
 const SOCKET_PRIORITY: libc::c_int = 6;
 /// A PONG must answer a ping sent at most this long ago.
 const PONG_MAX_AGE_US: u64 = 2_000_000;
+/// The board said it answers PING_TIMED, but nothing came back for this
+/// long (other firmware at the address drops PING_TIMED): plain PINGs again
+/// until a PONG says otherwise. Shorter than the 3 s after which the link
+/// counts as lost, so a downgrade shows no gap.
+const TIMED_PING_TRUST_US: u64 = 2_000_000;
 /// Earliest next ping after a session hint (hints come per input packet).
 const HINT_PING_GAP: Duration = Duration::from_millis(5);
 
@@ -168,6 +173,8 @@ struct Shared {
     timer_realtime: AtomicBool,
     /// The board answers PING_TIMED: ping with it (learned from its PONGs).
     timed_ping: AtomicBool,
+    /// When the last PONG arrived (ping clock, 0 = never).
+    last_pong_us: AtomicU64,
     /// When the current session was learned (ping clock): answers to pings
     /// sent before waited for the network to be set up (address
     /// resolution) and stay out of the statistics.
@@ -296,6 +303,7 @@ impl Link {
             latency_cache: Mutex::new(None),
             timer_realtime: AtomicBool::new(false),
             timed_ping: AtomicBool::new(false),
+            last_pong_us: AtomicU64::new(0),
             session_since_us: AtomicU64::new(0),
             oneway: Mutex::new(OneWay::default()),
         });
@@ -505,6 +513,7 @@ fn receiver(sock: Arc<UdpSocket>, key: PacketKey, shared: Arc<Shared>) {
             shared.status.lock().unwrap().stale_replies += 1;
             continue;
         }
+        shared.last_pong_us.store(now_us, Ordering::Relaxed);
         shared
             .timed_ping
             .store(pong.status & STATUS_TIMED_PING != 0, Ordering::Relaxed);
@@ -744,9 +753,12 @@ impl Tx {
                 self.send(shared, PacketType::Heartbeat, &payload.encode(), now);
             }
         } else {
-            // Without a session the board would drop motion anyway.
+            // Without a session the board would drop motion anyway. Key
+            // changes from before it are not replayed either: the first
+            // packet of the session carries the current state.
             self.motion = Motion::default();
             self.motion_ts = None;
+            self.queue.clear();
         }
 
         if now >= self.next_ping {
@@ -755,8 +767,13 @@ impl Tx {
                 t_app_us: shared.micros().max(1),
                 seq: self.ping_seq,
             };
-            // Boards that can, answer with their time stamps (one-way time).
-            let ptype = if shared.timed_ping.load(Ordering::Relaxed) {
+            // Boards that can, answer with their time stamps (one-way time);
+            // if such answers stopped, ask plainly (TIMED_PING_TRUST_US).
+            let answered = ping
+                .t_app_us
+                .saturating_sub(shared.last_pong_us.load(Ordering::Relaxed))
+                < TIMED_PING_TRUST_US;
+            let ptype = if shared.timed_ping.load(Ordering::Relaxed) && answered {
                 PacketType::PingTimed
             } else {
                 PacketType::Ping
@@ -807,6 +824,8 @@ mod tests {
         fake_t_app_us: Option<u64>,
         /// Answer PING_TIMED (and say so in every PONG); board clock origin.
         timed: Option<Instant>,
+        /// Without `timed`: drop PING_TIMED silently, like firmware before it.
+        ignore_timed: bool,
     }
 
     impl FakeBoard {
@@ -820,6 +839,7 @@ mod tests {
                 session: SESSION,
                 fake_t_app_us: None,
                 timed: None,
+                ignore_timed: false,
             }
         }
 
@@ -888,6 +908,7 @@ mod tests {
                                     from,
                                 );
                             }
+                            (PacketType::PingTimed, None, _) if self.ignore_timed => {}
                             (PacketType::PingTimed, ..) => {
                                 panic!("PING_TIMED to a board that never offered it")
                             }
@@ -928,6 +949,26 @@ mod tests {
         // Over loopback: well below the round trip, below a few ms.
         assert!(ow.p50_us < 5_000.0, "{ow:?}");
         assert!(ow.p50_us <= st.rtt.unwrap().as_micros() as f64 + 1.0);
+    }
+
+    #[test]
+    fn plain_pings_again_when_timed_pings_go_unanswered() {
+        // The board offered PING_TIMED, then firmware without it took its
+        // place (it drops PING_TIMED): the link pings plainly again before
+        // it would count as lost.
+        let mut board = FakeBoard::new();
+        board.timed = Some(Instant::now());
+        let mut cfg = LinkConfig::new(board.addr(), KEY);
+        cfg.ping_interval = Duration::from_millis(50);
+        let link = Link::start(cfg).unwrap();
+        board.run_for(Duration::from_millis(300));
+        assert!(link.status().is_connected());
+        board.timed = None;
+        board.ignore_timed = true;
+        board.run_for(Duration::from_micros(TIMED_PING_TRUST_US) + Duration::from_millis(500));
+        let st = link.status();
+        assert!(st.is_connected());
+        assert!(st.last_pong.unwrap().elapsed() < Duration::from_millis(300));
     }
 
     #[test]
