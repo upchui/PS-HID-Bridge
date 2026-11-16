@@ -139,6 +139,11 @@ bool w5500_port_init(void) {
     recursive_mutex_init(&s_mutex);
 
     s_spi_hz = spi_init(W5500_SPI, PSHB_W5500_SPI_HZ);
+    // SPI mode 3 (the W5500 takes modes 0 and 3): in mode 0 the PL022 pulls
+    // its frame signal up between bytes and leaves the clock idle for about
+    // 1.5 bit times after each one; with CPHA = 1 the bytes follow back to
+    // back.
+    spi_set_format(W5500_SPI, 8, SPI_CPOL_1, SPI_CPHA_1, SPI_MSB_FIRST);
     gpio_set_function(W5500_PIN_SCK, GPIO_FUNC_SPI);
     gpio_set_function(W5500_PIN_MOSI, GPIO_FUNC_SPI);
     gpio_set_function(W5500_PIN_MISO, GPIO_FUNC_SPI);
