@@ -185,13 +185,19 @@ fn run_as_root(script: &str, stdin: &str, what: &str) -> Result<(), String> {
         .write_all(stdin.as_bytes())
         .map_err(|e| e.to_string())?;
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr = stderr.trim();
     match out.status.code() {
         Some(0) => Ok(()),
-        Some(126) | Some(127) => Err("Cancelled or not authorized (polkit).".into()),
-        _ => Err(format!(
-            "{what} failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )),
+        // pkexec: 126 = the dialog was dismissed, 127 = not authorized. A
+        // command missing in the script exits with 127 as well: pkexec's
+        // own refusal says "Not authorized" (or nothing), the script's
+        // failure has its message.
+        Some(126) => Err("Cancelled (polkit).".into()),
+        Some(127) if stderr.is_empty() || stderr.contains("Not authorized") => {
+            Err("Not authorized (polkit).".into())
+        }
+        _ => Err(format!("{what} failed: {stderr}")),
     }
 }
 

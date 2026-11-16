@@ -10,7 +10,9 @@
 //! * Deactivation is immediate: release everything, ungrab.
 //! * The emergency combination (Ctrl+Alt+Shift+Esc) always deactivates and
 //!   cannot be configured away.
-//! * The key that fires a trigger is never forwarded to the PlayStation.
+//! * The key that fires a combination trigger is never forwarded to the
+//!   PlayStation. A double tap is recognised only on its second release, so
+//!   both taps have reached the PlayStation by then (with the bridge on).
 //! * Keyboards that are not selected are only watched ([`Event::TriggerKey`]):
 //!   their keys count for triggers and the emergency stop, but never reach
 //!   the PlayStation and never delay an activation (they are not grabbed).

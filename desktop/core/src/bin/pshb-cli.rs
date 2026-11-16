@@ -9,6 +9,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// After a device came or went, look at the device list again this much
+/// later (like the service: udev has set up the new node by then).
+const HOTPLUG_SETTLE: Duration = Duration::from_millis(200);
+
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use pshb_core::config::{self, Config};
 use pshb_core::controller::{Controller, Watchdog};
@@ -210,7 +214,7 @@ enum ConfigCmd {
         /// Replace the device list (can be repeated)
         #[arg(long = "device")]
         devices: Vec<String>,
-        /// Replace the toggle combination, e.g. "Ctrl+Alt+P"
+        /// Replace all triggers with one toggle combination, e.g. "Ctrl+Alt+P"
         #[arg(long)]
         hotkey: Option<String>,
         /// Window rule on or off (desktop app, KDE Plasma): forward while the
@@ -471,6 +475,9 @@ fn cmd_run(
         );
     }
     adapter.set_adapter(adapter_info);
+    // From here on Ctrl+C must end the run in order (the adapter is put
+    // back on the way out), also during the setup below.
+    install_signal_handlers();
     adapter.set_active(true);
     if link.wait_connected(Duration::from_secs(2)) {
         if let Some(p) = link.status().board {
@@ -501,7 +508,6 @@ fn cmd_run(
     let grabbed = guard.clone();
     let watchdog = Watchdog::start(link.clone(), guard, Duration::from_secs(1));
     let mut ctl = Controller::new(Engine::new(ecfg), link.clone());
-    install_signal_handlers();
     let realtime = rt::make_current_thread_realtime(rt::PRIORITY);
 
     println!(
@@ -572,10 +578,14 @@ fn cmd_run(
     let mut next_stats = Instant::now() + Duration::from_secs(5);
     let mut stats_total = 0;
     let mut resyncs = 0;
+    // A device came or went: look at the device list again shortly after
+    // (like the app's service), so one that comes back (a keyboard waking
+    // from Bluetooth sleep) is grabbed and watched again.
+    let mut rescan_at: Option<Instant> = None;
     while !STOP.load(Ordering::Acquire) {
         watchdog.feed();
         inputs.wait(Duration::from_millis(100), &mut msgs);
-        for m in msgs.drain(..) {
+        for m in std::mem::take(&mut msgs) {
             match m {
                 InputMsg::Event { event, ts_us, .. } => {
                     for n in ctl.handle(event, Instant::now(), ts_us) {
@@ -586,11 +596,30 @@ fn cmd_run(
                 // Its keys were released just before (InputSet sends key-ups).
                 InputMsg::Gone { path, error } => {
                     eprintln!("Device {} disconnected: {error}", path.display());
+                    rescan_at = Some(Instant::now() + HOTPLUG_SETTLE);
                 }
-                InputMsg::GrabFailed { .. }
-                | InputMsg::ReleaseFailed { .. }
-                | InputMsg::OpenFailed { .. }
-                | InputMsg::Hotplug => {}
+                InputMsg::Hotplug => {
+                    rescan_at.get_or_insert(Instant::now() + HOTPLUG_SETTLE);
+                }
+                InputMsg::OpenFailed { path, error } => {
+                    eprintln!("Opening {}: {error}", path.display());
+                }
+                InputMsg::GrabFailed { .. } | InputMsg::ReleaseFailed { .. } => {}
+            }
+        }
+        if rescan_at.is_some_and(|t| Instant::now() >= t) {
+            rescan_at = None;
+            if let Ok(list) = input::list_devices() {
+                let selected = input::select(&list.devices, &specs);
+                let watch = input::watch_keyboards(&list.devices, &selected);
+                let before = inputs.len();
+                // Key-ups of closed devices and failures come back as
+                // messages: handled with the next batch.
+                inputs.update(&selected, &watch, &mut msgs);
+                if inputs.len() > before {
+                    println!("Device back: {} open.", inputs.len());
+                }
+                apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu);
             }
         }
         if inputs.resyncs() != resyncs {
@@ -599,7 +628,7 @@ fn cmd_run(
                 "Input events were lost (reader fell behind) and corrected from the key state ({resyncs} so far)."
             );
         }
-        if inputs.is_empty() {
+        if inputs.is_empty() && rescan_at.is_none() {
             result = Err("All devices disconnected.".into());
             break;
         }
@@ -801,7 +830,7 @@ fn cmd_update(
             None => println!("pshb-cli {}: development build", pshb_core::VERSION),
         }
         if board_addr(ctx, board).is_ok() {
-            match board_firmware(ctx, board) {
+            match board_firmware_http(ctx, board, http_port) {
                 Ok(v) if latest.version > v => {
                     println!("Board firmware {v}: update available (pshb-cli update --firmware)")
                 }
@@ -825,8 +854,8 @@ fn cmd_update(
     Ok(())
 }
 
-/// Install firmware on the board (newest release or a file), then wait until
-/// it runs the new version.
+/// The board's input-path latency, status and clock speeds; or set the
+/// clock speeds, or start the latency statistics over.
 fn cmd_board(
     ctx: &Ctx,
     board: &BoardArgs,
@@ -929,6 +958,27 @@ fn board_firmware_http(ctx: &Ctx, board: &BoardArgs, http_port: u16) -> Result<V
     }
 }
 
+/// The board's firmware version and how long it has been running (None:
+/// firmware before 1.0.25, asked over UDP).
+fn board_running(ctx: &Ctx, board: &BoardArgs, http_port: u16) -> Result<(Version, Option<u64>), String> {
+    let addr = board_addr(ctx, board)?;
+    let api = update::BoardApi::new(&addr.ip().to_string(), http_port, &load_key(board)?);
+    match api.status() {
+        Ok(st) => {
+            let v = st
+                .get("firmware")
+                .and_then(|v| v.as_str())
+                .and_then(Version::parse)
+                .ok_or("The board did not say its firmware version.")?;
+            Ok((v, st.get("uptime_ms").and_then(|u| u.as_u64())))
+        }
+        Err(e) if e.contains("too old") => Ok((board_firmware(ctx, board)?, None)),
+        Err(e) => Err(e),
+    }
+}
+
+/// Install firmware on the board (newest release or a file), then wait until
+/// it runs the new version.
 fn update_firmware(ctx: &Ctx, board: &BoardArgs, file: Option<&Path>, http_port: u16) -> Result<(), String> {
     let addr = board_addr(ctx, board)?;
     let key = load_key(board)?;
@@ -957,24 +1007,37 @@ fn update_firmware(ctx: &Ctx, board: &BoardArgs, file: Option<&Path>, http_port:
     };
     println!("Installing on the board ({} KiB) …", image.len() / 1024);
     update::board_ota(&addr.ip().to_string(), http_port, &key, &image)?;
+    let uploaded = Instant::now();
     println!("Written and checked; the board restarts into the new firmware …");
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = uploaded + Duration::from_secs(60);
     thread::sleep(Duration::from_secs(2));
     loop {
         let late = Instant::now() > deadline;
-        match board_firmware_http(ctx, board, http_port) {
-            Ok(v) if expected.is_none_or(|e| v == e) => {
-                println!("The board runs firmware {v}.");
-                return Ok(());
-            }
-            Ok(v) if late => {
-                return Err(format!(
-                    "The board runs {v}: it went back to the previous version."
-                ));
+        match board_running(ctx, board, http_port) {
+            Ok((v, uptime_ms)) => {
+                // A file has no version to wait for: the board must have
+                // started since the upload (or, without an uptime, run
+                // another version than before).
+                let restarted = match uptime_ms {
+                    Some(ms) => Duration::from_millis(ms) < uploaded.elapsed(),
+                    None => before != Some(v),
+                };
+                if expected.map_or(restarted, |e| v == e) {
+                    println!("The board runs firmware {v}.");
+                    return Ok(());
+                }
+                if late {
+                    return Err(if expected.is_some() {
+                        format!("The board runs {v}: it went back to the previous version.")
+                    } else {
+                        format!("The board still runs {v}: it did not start the new firmware.")
+                    });
+                }
             }
             Err(e) if late => return Err(format!("The board did not come back: {e}")),
-            _ => thread::sleep(Duration::from_secs(1)),
+            Err(_) => {}
         }
+        thread::sleep(Duration::from_secs(1));
     }
 }
 
