@@ -16,8 +16,12 @@
 #include "hid_desc.h"
 
 #define PSHB_MOUSE_BUTTON_MASK 0x1F
-// Accumulators saturate here so a stalled host cannot overflow them.
-#define PSHB_MOTION_ACC_LIMIT (1L << 24)
+// Accumulators saturate here: a host that stops fetching mouse reports
+// while it stays mounted would otherwise get all the motion piled up
+// meanwhile at once when it goes on (with 1 << 24, half a second of full
+// sweeps). Four full 16-bit reports' worth; the app never sends more
+// between two fetches.
+#define PSHB_MOTION_ACC_LIMIT (4L * 32767)
 // Pending key/button states; when full, the newest entry is overwritten.
 #define PSHB_STATE_QUEUE_LEN 8
 
