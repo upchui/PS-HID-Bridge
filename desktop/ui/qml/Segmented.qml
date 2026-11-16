@@ -3,7 +3,8 @@ import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import PSHIDBridge
 
-// A row of mutually exclusive choices: model [{value, text, icon?}].
+// A row of mutually exclusive choices: model [{value, text?, icon?, tip?}]
+// (tip: a tooltip, e.g. for an option with only an icon).
 Rectangle {
     id: seg
 
@@ -33,13 +34,28 @@ Rectangle {
                 implicitWidth: implicitContentWidth + leftPadding + rightPadding
                 implicitHeight: implicitContentHeight + topPadding + bottomPadding
                 hoverEnabled: true
-                Accessible.name: modelData.text !== undefined ? modelData.text : modelData.value
+                Accessible.name: modelData.tip ?? modelData.text ?? modelData.value
                 onClicked: if (!selected) seg.activated(modelData.value)
+                Controls.ToolTip.visible: hovered && modelData.tip !== undefined
+                Controls.ToolTip.text: modelData.tip ?? ""
+                Controls.ToolTip.delay: 500
 
                 background: Rectangle {
                     radius: Style.radius - 2
-                    color: option.selected ? Style.surface : option.hovered ? Style.tint(Style.text, 0.05) : "transparent"
+                    color: option.selected ? Style.surface
+                         : option.pressed ? Style.tint(Style.text, 0.1)
+                         : option.hovered ? Style.tint(Style.text, 0.05) : "transparent"
                     border.color: option.selected ? Style.border : "transparent"
+        // Keyboard focus.
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: -3
+            radius: parent.radius + 3
+            color: "transparent"
+            border.color: Style.accent
+            border.width: 2
+            visible: option.visualFocus
+        }
                 }
                 contentItem: RowLayout {
                     id: content

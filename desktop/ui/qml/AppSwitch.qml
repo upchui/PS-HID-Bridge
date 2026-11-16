@@ -21,7 +21,17 @@ Controls.Switch {
         color: !control.enabled ? Style.tint(Style.text, 0.08)
              : control.checked ? (control.hovered ? Qt.lighter(Style.accent, 1.08) : Style.accent)
              : control.hovered ? Style.tint(Style.text, 0.24) : Style.tint(Style.text, 0.18)
-        border.color: control.visualFocus ? Style.accent : "transparent"
+        // Keyboard focus: a ring around the track (a border on it would
+        // vanish on the accent colour when on).
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: -3
+            radius: height / 2
+            color: "transparent"
+            border.color: Style.accent
+            border.width: 2
+            visible: control.visualFocus
+        }
 
         Rectangle {
             readonly property int inset: 3

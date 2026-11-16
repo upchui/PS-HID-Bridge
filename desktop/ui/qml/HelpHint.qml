@@ -2,11 +2,13 @@ import QtQuick
 import QtQuick.Controls as Controls
 import PSHIDBridge
 
-// A small "?" that explains something on hover (or click).
+// A small "?" that explains something on hover; a click keeps the
+// explanation open until the next click.
 AppIcon {
     id: hint
 
     property string text
+    property bool pinned: false
 
     name: "help"
     color: hover.hovered || tip.visible ? Style.accent : Style.muted
@@ -18,14 +20,19 @@ AppIcon {
         cursorShape: Qt.WhatsThisCursor
     }
     TapHandler {
-        onTapped: tip.visible = !tip.visible
+        onTapped: hint.pinned = !hint.pinned
     }
     Controls.ToolTip {
         id: tip
-        visible: hover.hovered
-        delay: 300
+        visible: hover.hovered || hint.pinned
+        onVisibleChanged: if (!visible) hint.pinned = false  // closed from outside (click elsewhere, Esc)
+        delay: hint.pinned ? 0 : 300
         text: hint.text
         width: Math.min(implicitWidth, 360)
+        // Centred over the "?" by its real width: the style centres by the
+        // unwrapped text width, which puts a long text at the window's edge.
+        x: (hint.width - width) / 2
+        y: -height - 3
         contentItem: Controls.Label {
             text: tip.text
             wrapMode: Text.WordWrap

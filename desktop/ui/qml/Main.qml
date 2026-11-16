@@ -133,6 +133,7 @@ Controls.ApplicationWindow {
                         }
                     }
                     ColumnLayout {
+                        Layout.fillWidth: true
                         spacing: 0
                         Controls.Label {
                             text: "PS HID Bridge"
@@ -145,10 +146,17 @@ Controls.ApplicationWindow {
                                 implicitWidth: 8
                                 implicitHeight: 8
                                 radius: 4
-                                color: AppController.active ? Style.ok : AppController.connected ? Style.accent : Style.muted
+                                color: AppController.active ? Style.ok
+                                     : AppController.pending || AppController.paused ? Style.warn
+                                     : AppController.connected ? Style.accent : Style.muted
                             }
                             Controls.Label {
-                                text: AppController.active ? "Bridge on" : AppController.connected ? "Ready" : "Not connected"
+                                // The same words as the Status page (also "Paused",
+                                // "Please release all keys …", "Connecting …").
+                                Layout.fillWidth: true
+                                text: AppController.statusText !== "" ? AppController.statusText
+                                      : AppController.active ? "Bridge on" : AppController.connected ? "Ready" : "Not connected"
+                                elide: Text.ElideRight
                                 color: Style.muted
                                 font.pointSize: Style.fontSize * 0.9
                             }
@@ -179,9 +187,9 @@ Controls.ApplicationWindow {
                     Layout.topMargin: 6
                     value: AppController.appearance
                     model: [
-                        { value: "light", icon: "sun" },
-                        { value: "system", text: "Auto" },
-                        { value: "dark", icon: "moon" }
+                        { value: "light", icon: "sun", tip: "Light" },
+                        { value: "system", text: "Auto", tip: "Like the desktop" },
+                        { value: "dark", icon: "moon", tip: "Dark" }
                     ]
                     onActivated: v => AppController.chooseAppearance(v)
                 }

@@ -17,7 +17,18 @@ Controls.AbstractButton {
     background: Rectangle {
         radius: Style.radius
         color: item.current ? Style.tint(Style.accent, 0.16)
+             : item.pressed ? Style.tint(Style.text, 0.1)
              : item.hovered ? Style.tint(Style.text, 0.06) : "transparent"
+        // Keyboard focus.
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: -1
+            radius: parent.radius + 1
+            color: "transparent"
+            border.color: Style.accent
+            border.width: 2
+            visible: item.visualFocus
+        }
     }
     contentItem: RowLayout {
         id: row
