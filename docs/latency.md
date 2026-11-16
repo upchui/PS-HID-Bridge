@@ -43,8 +43,8 @@ input path" in the web interface, on the app's Latency page and in
   points, a UART summary and the upload sink).
 - Setup: board 10.14.0.21 at a running PlayStation 5 (USB host polling every
   millisecond), packets from a PC over **WLAN**.
-- No logic analyzer: the GPIO measuring points (GP2: INTn noticed → applied,
-  GP3: toggles on every mouse report fetched, `PSHB_TIMING_GPIO`) are in the
+- No logic analyzer: the GPIO measuring points (GP6: INTn noticed → applied,
+  GP7: toggles on every mouse report fetched, `PSHB_TIMING_GPIO`) are in the
   timing image but were not used for these numbers.
 
 WLAN matters: at some times it delivers packets evenly (1.02–1.05 datagrams

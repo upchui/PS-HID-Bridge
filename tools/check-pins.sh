@@ -36,6 +36,7 @@ check firmware/lib/pico-sdk         "$PICO_SDK_TAG"
 check firmware/lib/tinyusb          "$TINYUSB_TAG"
 check firmware/lib/ioLibrary_Driver "$IOLIBRARY_TAG"
 check firmware/lib/monocypher       "$MONOCYPHER_TAG"
+check firmware/lib/pico-pio-usb     "$PICO_PIO_USB_TAG"
 
 # rustup reads desktop/rust-toolchain.toml; the images install RUST_VERSION.
 # If they differ, cargo tries to install another toolchain into the

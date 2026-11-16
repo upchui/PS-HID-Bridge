@@ -232,7 +232,7 @@ The app and `pshb-cli flash` can put the firmware, the HID test images and the e
 | `ps-hid-bridge-hidtest-mouse8.uf2` | the same with 8-bit mouse axes, in case a host dislikes the 16-bit descriptor |
 | `ps-hid-bridge-plain.uf2` | **bring-up only:** also accepts unencrypted packets |
 | `ps-hid-bridge-rollbacktest.uf2` | **testing only:** never confirms itself after an update, the board must return to the previous version |
-| `ps-hid-bridge-timing.uf2` | **measuring only:** normal firmware plus measuring pins GP2/GP3, a latency summary on the UART every 10 s and an upload sink for load tests (`tools/fw_bench.py`, see [docs/latency.md](docs/latency.md)) |
+| `ps-hid-bridge-timing.uf2` | **measuring only:** normal firmware plus measuring pins GP6/GP7, a latency summary on the UART every 10 s and an upload sink for load tests (`tools/fw_bench.py`, see [docs/latency.md](docs/latency.md)) |
 | `ps-hid-bridge-nuke.uf2` | erases the whole flash |
 
 Console: UART0 (GP0/GP1, 115200 baud). The USB ID `1209:0001` is the pid.codes test PID and meant for private use only.

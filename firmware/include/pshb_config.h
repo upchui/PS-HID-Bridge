@@ -25,16 +25,17 @@
 #define PSHB_W5500_SPI_FAST_HZ (37500 * 1000)
 
 // Measuring points (docs/latency.md), all off in the normal image:
-// PSHB_TIMING_GPIO: GP2 is high from "INTn noticed" until the input is
-//   applied, GP3 toggles on every mouse report the host fetches;
+// PSHB_TIMING_GPIO: GP6 is high from "INTn noticed" until the input is
+//   applied, GP7 toggles on every mouse report the host fetches (GP2/GP3
+//   belong to the USB host port, see PSHB_USBHOST_PIN_DP);
 // PSHB_TIMING_UART: a latency summary on the debug UART every 10 s;
 // PSHB_BENCH: POST /api/bench/sink takes uploads and throws them away
 //   (network load like a firmware update, without flash writes).
 #ifndef PSHB_TIMING_GPIO
 #define PSHB_TIMING_GPIO 0
 #endif
-#define PSHB_TIMING_PIN_RX    2
-#define PSHB_TIMING_PIN_FETCH 3
+#define PSHB_TIMING_PIN_RX    6
+#define PSHB_TIMING_PIN_FETCH 7
 #ifndef PSHB_TIMING_UART
 #define PSHB_TIMING_UART 0
 #endif
@@ -64,6 +65,21 @@
 // Build the slow "mouse draws a square" test image (no network needed).
 #ifndef PSHB_TEST_PATTERN
 #define PSHB_TEST_PATTERN 0
+#endif
+
+// USB host port for a real DualSense (controller mode, see README): a USB-A
+// socket with D+ on GP2 and D- on GP3, driven by Pico-PIO-USB on core 1.
+// VBUS of the socket is the board's VBUS (pin 40).
+#define PSHB_USBHOST_PIN_DP 2
+// Test images of the controller mode (no input from the app):
+// PSHB_USBHOST_TEST: the host port alone, logs what is plugged in;
+// PSHB_DS_PASSTHROUGH: a DualSense on the host port is passed through to
+// the PlayStation (its authentication included).
+#ifndef PSHB_USBHOST_TEST
+#define PSHB_USBHOST_TEST 0
+#endif
+#ifndef PSHB_DS_PASSTHROUGH
+#define PSHB_DS_PASSTHROUGH 0
 #endif
 
 #endif
