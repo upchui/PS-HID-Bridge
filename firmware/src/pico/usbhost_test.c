@@ -43,10 +43,27 @@
 #include "settings.h"
 #include "w5500_port.h"
 
-#define ORIENT_SCRATCH 1
-#define ORIENT_SWAPPED 0x50415753u  // "SWAP"
-#define MODE_SCRATCH   2
-#define MODE_WATCH     0x48435457u  // "WTCH"
+// "swap" and "watch" last until the next reset: kept in RAM that survives
+// the test image starting again (the boot ROM clears the watchdog scratch
+// registers on that reboot).
+#define MODE_MAGIC 0x45444F4Du  // "MODE"
+#define MODE_SWAP  1u
+#define MODE_WATCH 2u
+typedef struct {
+    uint32_t magic;
+    uint32_t flags;
+} mode_keep_t;
+static mode_keep_t __uninitialized_ram(s_mode);
+
+static uint32_t mode_flags(void) {
+    return s_mode.magic == MODE_MAGIC ? s_mode.flags : 0;
+}
+
+static void set_mode_flag(uint32_t flag, bool on) {
+    uint32_t f = mode_flags();
+    s_mode.flags = on ? f | flag : f & ~flag;
+    s_mode.magic = MODE_MAGIC;
+}
 #define VSYS_ADC_PIN   29
 #define VSYS_ADC_INPUT 3
 #define VBUS_SENSE_PIN 24
@@ -257,16 +274,17 @@ static void back_to_firmware(void) {
 
 static void on_command(const char *cmd) {
     if (strcmp(cmd, "swap") == 0) {
-        watchdog_hw->scratch[ORIENT_SCRATCH] = s_swapped ? 0 : ORIENT_SWAPPED;
+        set_mode_flag(MODE_SWAP, !s_swapped);
         printf("starting again with D+ on GP%u and D- on GP%u\n", s_pin_dm, s_pin_dp);
         restart_test_image();
     } else if (strcmp(cmd, "watch") == 0 || strcmp(cmd, "host") == 0) {
-        watchdog_hw->scratch[MODE_SCRATCH] = cmd[0] == 'w' ? MODE_WATCH : 0;
+        set_mode_flag(MODE_WATCH, cmd[0] == 'w');
         printf("starting again %s\n", cmd[0] == 'w' ? "without the USB host, watching D+ and D-" : "with the USB host");
         restart_test_image();
     } else if (strcmp(cmd, "restart") == 0) {
         restart_test_image();
     } else if (strcmp(cmd, "back") == 0) {
+        s_mode.magic = 0;
         back_to_firmware();
     } else if (strcmp(cmd, "status") == 0) {
         printf("status: device %u, %lu reports, D+ GP%u, D- GP%u%s\n", s_dev_addr, (unsigned long)s_reports,
@@ -449,8 +467,8 @@ int main(void) {
     bool stored = settings_load(&g_settings_flash, &settings);
     bool by_watchdog = watchdog_caused_reboot();
     netlog_init();
-    s_swapped = watchdog_hw->scratch[ORIENT_SCRATCH] == ORIENT_SWAPPED;
-    s_watch = watchdog_hw->scratch[MODE_SCRATCH] == MODE_WATCH;
+    s_swapped = mode_flags() & MODE_SWAP;
+    s_watch = mode_flags() & MODE_WATCH;
     s_pin_dp = s_swapped ? PSHB_USBHOST_PIN_DP + 1 : PSHB_USBHOST_PIN_DP;
     s_pin_dm = s_swapped ? PSHB_USBHOST_PIN_DP : PSHB_USBHOST_PIN_DP + 1;
 
