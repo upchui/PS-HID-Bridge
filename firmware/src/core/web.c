@@ -92,6 +92,18 @@ static void sender_filter_str(const pshb_settings_t *s, char out[WEB_CIDR_STR_LE
     }
 }
 
+static uint32_t ip_u32(const uint8_t a[4]) {
+    return ((uint32_t)a[0] << 24) | ((uint32_t)a[1] << 16) | ((uint32_t)a[2] << 8) | a[3];
+}
+
+bool web_host_ip_valid(const uint8_t ip[4], const uint8_t mask[4]) {
+    if (ip[0] == 0 || ip[0] == 127 || ip[0] >= 224) return false;
+    uint32_t hostmask = ~ip_u32(mask);
+    uint32_t host = ip_u32(ip) & hostmask;
+    // /31 and /32 have no network and broadcast address.
+    return hostmask <= 1 || (host != 0 && host != hostmask);
+}
+
 static bool mask_valid(const uint8_t m[4]) {
     uint32_t v = ((uint32_t)m[0] << 24) | ((uint32_t)m[1] << 16) | ((uint32_t)m[2] << 8) | m[3];
     uint32_t inv = ~v;
@@ -597,11 +609,22 @@ static void h_network(web_app_t *app, web_conn_t *c) {
             respond_error(c, 400, "Invalid subnet mask");
             return;
         }
+        // An address nobody could reach would need a factory reset.
+        if (!web_host_ip_valid(s.ip, s.mask)) {
+            respond_error(c, 400, "This IP address cannot be used by a device in this subnet");
+            return;
+        }
         if (!jr_str(b, bl, "gateway", gw, sizeof(gw)) || !(gw[0] == '\0' || web_parse_ip(gw, s.gw))) {
             respond_error(c, 400, "Invalid gateway");
             return;
         }
         if (gw[0] == '\0') memset(s.gw, 0, 4);
+        uint32_t m = ip_u32(s.mask);
+        if (!ip_zero(s.gw) && (!web_host_ip_valid(s.gw, s.mask) || (ip_u32(s.gw) & m) != (ip_u32(s.ip) & m) ||
+                               ip_u32(s.gw) == ip_u32(s.ip))) {
+            respond_error(c, 400, "The gateway must be another address in the same subnet");
+            return;
+        }
         if (!jr_str(b, bl, "dns", dns, sizeof(dns)) || !(dns[0] == '\0' || web_parse_ip(dns, s.dns))) {
             respond_error(c, 400, "Invalid DNS server");
             return;

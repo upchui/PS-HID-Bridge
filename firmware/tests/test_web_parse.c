@@ -31,8 +31,22 @@ TEST(subnets) {
     CHECK(!web_parse_cidr(" 10.0.0.1/8", ip, &prefix));
 }
 
+TEST(static_addresses) {
+    const uint8_t m24[4] = {255, 255, 255, 0}, m31[4] = {255, 255, 255, 254};
+    CHECK(web_host_ip_valid((const uint8_t[]){192, 168, 1, 20}, m24));
+    CHECK(web_host_ip_valid((const uint8_t[]){10, 14, 0, 21}, m24));
+    CHECK(!web_host_ip_valid((const uint8_t[]){192, 168, 1, 0}, m24));    // network
+    CHECK(!web_host_ip_valid((const uint8_t[]){192, 168, 1, 255}, m24));  // broadcast
+    CHECK(!web_host_ip_valid((const uint8_t[]){127, 0, 0, 1}, m24));
+    CHECK(!web_host_ip_valid((const uint8_t[]){0, 1, 2, 3}, m24));
+    CHECK(!web_host_ip_valid((const uint8_t[]){224, 0, 0, 1}, m24));
+    CHECK(!web_host_ip_valid((const uint8_t[]){255, 255, 255, 255}, m24));
+    CHECK(web_host_ip_valid((const uint8_t[]){10, 0, 0, 0}, m31));  // /31: both usable
+}
+
 int main(void) {
     RUN(ip_addresses);
     RUN(subnets);
+    RUN(static_addresses);
     return TEST_SUMMARY();
 }

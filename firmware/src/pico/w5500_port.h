@@ -77,7 +77,8 @@ void w5500_unlock(void);
 // w5500_udp_commit(): once per round, after the input has been applied.
 // `early` (may be NULL) is called while the datagram is still being read,
 // once its first `early_len` payload bytes are in: with the payload so far
-// and the payload's length (e.g. to start on its decryption).
+// and the payload's length (e.g. to start on its decryption). `ip` already
+// holds the sender then.
 typedef void (*w5500_early_fn)(void *ctx, const uint8_t *payload, uint16_t len);
 int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16_t *port, uint16_t *left,
                    w5500_early_fn early, uint16_t early_len, void *ctx);

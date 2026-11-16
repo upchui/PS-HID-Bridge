@@ -489,7 +489,10 @@ int w5500_udp_recv(uint8_t sn, uint8_t *buf, uint16_t cap, uint8_t ip[4], uint16
         dma_read_wait(n_first, (uint16_t)(8 + early_len));
         const uint8_t *h = s_dma_rxbuf + SPI_HDR;
         uint16_t udp_len = (uint16_t)((h[6] << 8) | h[7]);
-        if (udp_len <= cap && 8u + udp_len <= avail) early(ctx, h + 8, udp_len);
+        if (udp_len <= cap && 8u + udp_len <= avail) {
+            memcpy(ip, h, 4);  // the sender, for `early`'s checks
+            early(ctx, h + 8, udp_len);
+        }
     }
     dma_read_finish();
     uint8_t *first = s_dma_rxbuf + SPI_HDR;

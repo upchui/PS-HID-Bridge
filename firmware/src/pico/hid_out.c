@@ -219,11 +219,12 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_t
         input_state_peek_kbd_report(s_state, buffer);
         return PSHB_KBD_REPORT_LEN;
     }
-    if (instance == ITF_MOUSE && reqlen >= PSHB_MOUSE_REPORT_LEN) {
+    uint16_t mouse_len = s_mouse_boot ? PSHB_MOUSE_BOOT_REPORT_LEN : PSHB_MOUSE_REPORT_LEN;
+    if (instance == ITF_MOUSE && reqlen >= mouse_len) {
         // Buttons only; motion is never reported twice.
-        for (int i = 0; i < PSHB_MOUSE_REPORT_LEN; i++) buffer[i] = 0;
+        for (int i = 0; i < mouse_len; i++) buffer[i] = 0;
         buffer[0] = s_state->buttons;
-        return s_mouse_boot ? PSHB_MOUSE_BOOT_REPORT_LEN : PSHB_MOUSE_REPORT_LEN;
+        return mouse_len;
     }
     return 0;
 }

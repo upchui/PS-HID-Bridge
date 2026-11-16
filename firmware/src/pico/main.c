@@ -169,9 +169,16 @@ static uint64_t bridge_clock_us(void) {
 // while the DMA still brings in the rest (w5500_udp_recv's `early`).
 static pshb_aead_pre_t s_pre;
 
+// `ctx`: the sender's address (filled in before the call). The cheap checks
+// of bridge_handle_packet come first (SPEC: sender filter and replay before
+// any crypto): a datagram that fails them costs no ChaCha20 work.
 static void rx_early(void *ctx, const uint8_t *payload, uint16_t len) {
-    (void)ctx;
-    if (g_bridge.key_set) proto_prepare(&s_pre, g_bridge.key, PSHB_DIR_APP_TO_BOARD, payload, len);
+    if (!g_bridge.key_set || payload[0] != PSHB_PROTO_VERSION) return;
+    if (!bridge_sender_allowed(&g_bridge, ip_to_u32((const uint8_t *)ctx))) return;
+    pshb_header_t h;
+    pshb_header_decode(payload, &h);
+    if (h.counter <= g_bridge.last_rx_counter) return;
+    proto_prepare(&s_pre, g_bridge.key, PSHB_DIR_APP_TO_BOARD, payload, len);
 }
 
 // Datagrams per receive round. In between, the main loop serves USB (arms
@@ -248,7 +255,7 @@ static void net_service(void) {
         uint64_t t0 = time_us_64();
         s_pre.valid = false;
         int n = w5500_udp_recv(W5500_SOCK_UDP, pkt, sizeof(pkt), ip, &port, &left, rx_early, PSHB_HDR_LEN,
-                               NULL);
+                               ip);
         if (n == W5500_RX_EMPTY) break;
         if (n == W5500_RX_AGAIN) {
             s_rx_more = true;  // look again in a new round, right away

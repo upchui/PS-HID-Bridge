@@ -199,6 +199,11 @@ void web_conn_close(web_app_t *app, web_conn_t *c);
 // Parse "a.b.c.d"; false on anything else.
 bool web_parse_ip(const char *s, uint8_t out[4]);
 
+// A static address other devices can reach in the subnet `mask`: not 0.x,
+// loopback, multicast or reserved, not the subnet's network or broadcast
+// address (masks up to /30).
+bool web_host_ip_valid(const uint8_t ip[4], const uint8_t mask[4]);
+
 // Parse "a.b.c.d" (prefix 32) or "a.b.c.d/N" with N = 0..32. Host bits are
 // cleared, so "192.168.1.20/24" gives 192.168.1.0 and prefix 24.
 bool web_parse_cidr(const char *s, uint8_t ip[4], uint8_t *prefix);
