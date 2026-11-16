@@ -1,5 +1,6 @@
 #include "w5500_port.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "hardware/gpio.h"
@@ -95,6 +96,38 @@ static void int_edge(uint gpio, uint32_t events) {
     if (!s_int_us) s_int_us = time_us_64();
 }
 
+#if PSHB_W5500_SPI_FAST
+// Faster SPI clock (PSHB_W5500_SPI_FAST): above the 33.3 MHz the datasheet
+// guarantees, so it has to prove itself first. Patterns through the TX
+// buffer of the unused socket 7 (1 KiB) and one of its registers, read back
+// at the new clock; any difference means back to the safe clock.
+static bool spi_selftest(void) {
+    for (int i = 0; i < 4; i++) {
+        if (getVERSIONR() != 0x04) return false;
+    }
+    uint8_t out[256], in[256];
+    uint32_t x = 0x9E3779B9u;
+    for (int round = 0; round < 16; round++) {
+        for (size_t i = 0; i < sizeof(out); i++) {
+            x = x * 1664525u + 1013904223u;  // any pattern; also 0x00/0xFF runs below
+            out[i] = (uint8_t)(round == 0 ? 0x00 : round == 1 ? 0xFF : round == 2 ? (i & 1 ? 0x55 : 0xAA)
+                                                                                   : (x >> 24));
+        }
+        uint32_t addr = ((uint32_t)((round * 256) & 0x3FF) << 8) + (WIZCHIP_TXBUF_BLOCK(7) << 3);
+        WIZCHIP_WRITE_BUF(addr, out, sizeof(out));
+        memset(in, 0, sizeof(in));
+        WIZCHIP_READ_BUF(addr, in, sizeof(in));
+        if (memcmp(in, out, sizeof(in)) != 0) return false;
+    }
+    for (uint16_t v = 1; v; v = (uint16_t)(v << 1)) {
+        setSn_PORT(7, v);
+        if (getSn_PORT(7) != v) return false;
+    }
+    setSn_PORT(7, 0);
+    return true;
+}
+#endif
+
 static void make_mac(uint8_t mac[6]) {
     pico_unique_board_id_t id;
     pico_get_unique_board_id(&id);
@@ -136,6 +169,16 @@ bool w5500_port_init(void) {
         if (time_reached(deadline)) return false;
         sleep_ms(5);
     }
+
+#if PSHB_W5500_SPI_FAST
+    s_spi_hz = spi_set_baudrate(W5500_SPI, PSHB_W5500_SPI_FAST_HZ);
+    if (spi_selftest()) {
+        printf("w5500: SPI at %lu Hz\n", (unsigned long)s_spi_hz);
+    } else {
+        s_spi_hz = spi_set_baudrate(W5500_SPI, PSHB_W5500_SPI_HZ);
+        printf("w5500: SPI self-test failed at the fast clock, back to %lu Hz\n", (unsigned long)s_spi_hz);
+    }
+#endif
 
     // Socket buffers in KB (16 KB each direction in total):
     // 0 DHCP, 1 input UDP, 2-3 HTTP, 4-7 unused.

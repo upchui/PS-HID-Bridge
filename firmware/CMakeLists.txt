@@ -105,6 +105,16 @@ else()
     add_compile_definitions(PSHB_W5500_FAST_RX=0)
 endif()
 
+# W5500 SPI clock: 25 MHz (ON: 37.5 MHz after a self-test at start, above
+# the 33.3 MHz the datasheet guarantees; falls back to 25 MHz if the test
+# fails), e.g. make firmware FW_CMAKE_ARGS=-DPSHB_W5500_SPI_FAST=ON
+option(PSHB_W5500_SPI_FAST "SPI clock 37.5 MHz after a self-test (else 25 MHz)" OFF)
+if(PSHB_W5500_SPI_FAST)
+    add_compile_definitions(PSHB_W5500_SPI_FAST=1)
+else()
+    add_compile_definitions(PSHB_W5500_SPI_FAST=0)
+endif()
+
 # Development PSK until settings exist: make firmware DEV_PSK=<64 hex digits>
 set(PSHB_DEV_PSK "" CACHE STRING "Development pre-shared key (64 hex digits)")
 if(PSHB_DEV_PSK)

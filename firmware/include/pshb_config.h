@@ -14,10 +14,18 @@
 // exist (step 6). Without it the board rejects every encrypted packet.
 // #define PSHB_DEV_PSK "00112233..."
 
-// W5500 SPI clock. clk_peri is 150 MHz, so 25 MHz and 37.5 MHz are exact.
+// W5500 SPI clock. clk_peri is 150 MHz and the divider even: 25 MHz (/6)
+// and 37.5 MHz (/4) are possible, 33 MHz is not. The datasheet guarantees
+// 33.3 MHz, so 25 MHz is the default; PSHB_W5500_SPI_FAST (cmake option)
+// switches to 37.5 MHz after a self-test at start (back to 25 MHz if it
+// fails, see w5500_port.c).
 #ifndef PSHB_W5500_SPI_HZ
 #define PSHB_W5500_SPI_HZ (25 * 1000 * 1000)
 #endif
+#ifndef PSHB_W5500_SPI_FAST
+#define PSHB_W5500_SPI_FAST 0
+#endif
+#define PSHB_W5500_SPI_FAST_HZ (37500 * 1000)
 
 // Measuring points (docs/latency.md), all off in the normal image:
 // PSHB_TIMING_GPIO: GP2 is high from "INTn noticed" until the input is

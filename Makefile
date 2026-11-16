@@ -140,7 +140,8 @@ print-release-tag:
 # ---------------------------------------------------------------- firmware
 firmware: image-firmware check-pins dirs
 	$(FW_RUN) bash -c 'cmake -S firmware -B $(FW_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=Release \
-		-DPSHB_DEV_PSK=$(DEV_PSK) -DPSHB_W5500_FAST_RX=ON $(FW_CMAKE_ARGS) \
+		-DPSHB_DEV_PSK=$(DEV_PSK) -DPSHB_W5500_FAST_RX=ON -DPSHB_MOUSE_LATE_ARM=ON -DPSHB_W5500_SPI_FAST=OFF \
+		$(FW_CMAKE_ARGS) \
 		&& cmake --build $(FW_BUILD) --parallel $(JOBS)'
 	@# Exactly the images of this build (images.txt), no leftovers in out/.
 	rm -f out/*.uf2 out/*.elf
