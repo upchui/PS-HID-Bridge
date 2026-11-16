@@ -232,7 +232,7 @@ The app and `pshb-cli flash` can put the firmware, the HID test images and the e
 | `ps-hid-bridge-hidtest-mouse8.uf2` | the same with 8-bit mouse axes, in case a host dislikes the 16-bit descriptor |
 | `ps-hid-bridge-plain.uf2` | **bring-up only:** also accepts unencrypted packets |
 | `ps-hid-bridge-rollbacktest.uf2` | **testing only:** never confirms itself after an update, the board must return to the previous version |
-| `ps-hid-bridge-timing.uf2` | **measuring only:** normal firmware plus measuring pins GP2/GP3, a latency summary on the UART every 10 s and an upload sink for load tests (`tools/fw_bench.py`, see [docs/latency.md](docs/latency.md)) |
+| `ps-hid-bridge-timing.uf2` | **measuring only:** normal firmware plus measuring pins GP2/GP3 (not with a USB socket soldered there, see [docs/usb-host-port.md](docs/usb-host-port.md)), a latency summary on the UART every 10 s and an upload sink for load tests (`tools/fw_bench.py`, see [docs/latency.md](docs/latency.md)) |
 | `ps-hid-bridge-nuke.uf2` | erases the whole flash |
 
 Console: UART0 (GP0/GP1, 115200 baud). The USB ID `1209:0001` is the pid.codes test PID and meant for private use only.
@@ -277,5 +277,6 @@ The board's side, stage by stage with measurements and clock speeds: [docs/laten
 | [docs/troubleshooting.md](docs/troubleshooting.md) | problems and where to look |
 | [docs/latency-pc.md](docs/latency-pc.md) | what the app does for a short input path on the PC and the network, how to undo it, how to measure |
 | [docs/latency.md](docs/latency.md) | the board's input path, stage by stage, with measurements |
+| [docs/usb-host-port.md](docs/usb-host-port.md) | how to solder a USB host port to two GPIOs (not used by the firmware), and what was tried with it |
 | [docs/development.md](docs/development.md) | test status, building, continuous integration, testing without a board, screenshots, checks on real hardware, directories |
 | [protocol/SPEC.md](protocol/SPEC.md) | the packet format |
