@@ -6,7 +6,8 @@ set -euo pipefail
 ROOT=/work
 APP_ID=io.github.thealhu.pshidbridge
 APPDIR=$ROOT/.cache/build/AppDir
-OUTPUT=$ROOT/out/PS-HID-Bridge-x86_64.AppImage
+# Named after the processor it runs on (x86_64 or aarch64).
+OUTPUT=$ROOT/out/PS-HID-Bridge-$(uname -m).AppImage
 TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/desktop/target}
 # Set by the Makefile: version (tools/version.sh) and commit date.
 : "${PSHB_VERSION:?PSHB_VERSION not set (build with make desktop)}"

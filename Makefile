@@ -13,32 +13,57 @@ JOBS ?= $(shell nproc)
 # Qt/qtdeclarative needs ~2 GB RAM per compile job; keep this moderate.
 QT_JOBS ?= 6
 
+# Processor of the desktop app and the CLI: x86_64 (default) or aarch64
+# (ARM64). On an x86 PC, aarch64 runs under QEMU (qemu-user-static with
+# binfmt, see docs/development.md). The firmware and its tests are the same
+# for every PC and always build as x86_64.
+ARCH ?= x86_64
+ifeq ($(ARCH),x86_64)
+PLATFORM    := linux/amd64
+ARCH_SUFFIX :=
+else ifeq ($(ARCH),aarch64)
+PLATFORM    := linux/arm64
+ARCH_SUFFIX := -aarch64
+else
+$(error ARCH must be x86_64 or aarch64, not "$(ARCH)")
+endif
+APPIMAGE := out/PS-HID-Bridge-$(ARCH).AppImage
+CLI      := out/pshb-cli$(ARCH_SUFFIX)
+# Under emulation everything takes several times longer.
+SELFTEST_TIMEOUT := $(if $(ARCH_SUFFIX),900,120)
+
 # Toolchain images. CI overrides the names with registry images and sets
 # PREBUILT=1, so the image targets only check that the pulled image exists.
 FW_IMAGE      ?= pshb-firmware
-RUST_IMAGE    ?= pshb-rust
-DESKTOP_IMAGE ?= pshb-desktop
-APPTEST_IMAGE ?= pshb-apptest
+RUST_IMAGE    ?= pshb-rust$(ARCH_SUFFIX)
+DESKTOP_IMAGE ?= pshb-desktop$(ARCH_SUFFIX)
+APPTEST_IMAGE ?= pshb-apptest$(ARCH_SUFFIX)
 PREBUILT      ?=
 # Extra CMake options for the firmware, e.g. -DPSHB_W5500_FAST_RX=OFF
 FW_CMAKE_ARGS ?=
 REPO_URL      ?= https://github.com/upchui/PS-HID-Bridge
 
 FW_ARGS      := UBUNTU_TAG PICO_SDK_TAG PICOTOOL_TAG ARM_TOOLCHAIN_VERSION ARM_TOOLCHAIN_SHA256
-RUST_ARGS    := ALMA_TAG CMAKE_VERSION CMAKE_SHA256 RUSTUP_VERSION RUSTUP_SHA256 RUST_VERSION
+RUST_ARGS    := ALMA_TAG CMAKE_VERSION CMAKE_SHA256 CMAKE_SHA256_AARCH64 \
+                RUSTUP_VERSION RUSTUP_SHA256 RUSTUP_SHA256_AARCH64 RUST_VERSION
 DESKTOP_ARGS := $(RUST_ARGS) QT_VERSION QTBASE_SHA256 QTSHADERTOOLS_SHA256 QTDECLARATIVE_SHA256 \
                 QTSVG_SHA256 KF_VERSION ECM_SHA256 KIRIGAMI_SHA256 \
-                LINUXDEPLOY_TAG LINUXDEPLOY_SHA256 LINUXDEPLOY_QT_TAG LINUXDEPLOY_QT_SHA256 \
-                LINUXDEPLOY_APPIMAGE_TAG LINUXDEPLOY_APPIMAGE_SHA256 APPIMAGE_RUNTIME_TAG APPIMAGE_RUNTIME_SHA256
+                LINUXDEPLOY_TAG LINUXDEPLOY_SHA256 LINUXDEPLOY_SHA256_AARCH64 \
+                LINUXDEPLOY_QT_TAG LINUXDEPLOY_QT_SHA256 LINUXDEPLOY_QT_SHA256_AARCH64 \
+                LINUXDEPLOY_APPIMAGE_TAG LINUXDEPLOY_APPIMAGE_SHA256 LINUXDEPLOY_APPIMAGE_SHA256_AARCH64 \
+                APPIMAGE_RUNTIME_TAG APPIMAGE_RUNTIME_SHA256 APPIMAGE_RUNTIME_SHA256_AARCH64
 
 build_args = $(foreach v,$(1),--build-arg $(v)=$($(v)))
 
-# $(call image,NAME,DOCKER BUILD ARGUMENTS)
+# $(call image,NAME,DOCKER BUILD ARGUMENTS[,PLATFORM]); the platform follows ARCH.
 ifeq ($(PREBUILT),1)
 image = docker image inspect $(1) >/dev/null || { echo "Image $(1) not found (PREBUILT=1)"; exit 1; }
 else
-image = docker build --label org.opencontainers.image.source=$(REPO_URL) $(2) -t $(1)
+image = docker build --platform $(or $(3),$(PLATFORM)) --label org.opencontainers.image.source=$(REPO_URL) $(2) -t $(1)
 endif
+
+# Firmware targets refuse ARCH=aarch64: their files are the same for every PC.
+x86_only = $(if $(ARCH_SUFFIX),$(error make $@ builds with ARCH=x86_64 only (the firmware is the same for every PC)))
 
 FW_BUILD   := .cache/build/firmware
 HOST_BUILD := .cache/build/host
@@ -49,19 +74,23 @@ PSHB_VERSION := $(shell tools/version.sh)
 PSHB_DATE    := $(shell git log -1 --format=%cs 2>/dev/null)
 
 # Fails (only when a container is started) if the version is unknown.
-DOCKER_RUN = $(if $(PSHB_VERSION),,$(error tools/version.sh failed, see above)) \
-             docker run --rm $(TTY) -u $(UID):$(GID) -v $(CURDIR):/work -w /work \
+# $(call docker_run,PLATFORM)
+docker_run = $(if $(PSHB_VERSION),,$(error tools/version.sh failed, see above)) \
+             docker run --rm --platform $(1) $(TTY) -u $(UID):$(GID) -v $(CURDIR):/work -w /work \
              -e HOME=/work/.cache/home -e JOBS=$(JOBS) \
              -e PSHB_VERSION=$(PSHB_VERSION) -e PSHB_DATE=$(PSHB_DATE) \
              $(if $(CARGO_INCREMENTAL),-e CARGO_INCREMENTAL=$(CARGO_INCREMENTAL)) $(DOCKER_EXTRA)
-# CLI, tests and AppImage share one target directory, so pshb-core and its
-# dependencies are built once. The same RUSTFLAGS everywhere is part of
-# that (lld for the GUI comes from desktop/ui/build.rs instead).
-CARGO_ENV   = -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR=/work/.cache/target/cargo \
-              -e CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=
+DOCKER_RUN    = $(call docker_run,$(PLATFORM))
+FW_DOCKER_RUN = $(call docker_run,linux/amd64)
+# CLI, tests and AppImage share one target directory per processor, so
+# pshb-core and its dependencies are built once. The same RUSTFLAGS
+# everywhere is part of that (lld for the GUI comes from desktop/ui/build.rs
+# instead).
+CARGO_ENV   = -e CARGO_HOME=/work/.cache/cargo -e CARGO_TARGET_DIR=/work/.cache/target/cargo$(ARCH_SUFFIX) \
+              -e CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS= -e CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=
 RUST_RUN    = $(DOCKER_RUN) $(CARGO_ENV) $(RUST_IMAGE)
 DESKTOP_RUN = $(DOCKER_RUN) $(CARGO_ENV) -e APPIMAGE_EXTRACT_AND_RUN=1 $(DESKTOP_IMAGE)
-FW_RUN      = $(DOCKER_RUN) $(FW_IMAGE)
+FW_RUN      = $(FW_DOCKER_RUN) $(FW_IMAGE)
 
 .PHONY: help all firmware desktop desktop-cli test test-firmware test-desktop test-appimage \
         test-sim test-protocol test-uf2 sim udp-test fmt submodules check-pins check-version check-icons images \
@@ -73,8 +102,8 @@ FW_RUN      = $(DOCKER_RUN) $(FW_IMAGE)
 help:
 	@echo "Targets:"
 	@echo "  make firmware      UF2 images            -> out/*.uf2"
-	@echo "  make desktop       AppImage (Qt build!)  -> out/PS-HID-Bridge-x86_64.AppImage"
-	@echo "  make desktop-cli   command line tool     -> out/pshb-cli"
+	@echo "  make desktop       AppImage (Qt build!)  -> $(APPIMAGE)"
+	@echo "  make desktop-cli   command line tool     -> $(CLI)"
 	@echo "  make test          unit tests, protocol vectors, simulator"
 	@echo "  make sim           board simulator: UDP $(SIM_PORT), web http://localhost:$(SIM_HTTP_PORT)"
 	@echo "  make udp-test IP=a.b.c.d ARGS='--plain ping'   test traffic to a board"
@@ -97,7 +126,8 @@ dirs:
 images: image-firmware image-rust image-desktop image-apptest
 
 image-firmware:
-	$(call image,$(FW_IMAGE),$(call build_args,$(FW_ARGS)) -f docker/firmware.Dockerfile docker)
+	@$(x86_only)
+	$(call image,$(FW_IMAGE),$(call build_args,$(FW_ARGS)) -f docker/firmware.Dockerfile docker,linux/amd64)
 
 image-rust:
 	$(call image,$(RUST_IMAGE),$(call build_args,$(RUST_ARGS)) --target rust-base \
@@ -153,7 +183,7 @@ firmware: image-firmware check-pins dirs
 # ---------------------------------------------------------------- desktop
 desktop-cli: image-rust dirs
 	$(RUST_RUN) bash -c 'cd desktop && cargo build --release --locked -p pshb-core --bin pshb-cli'
-	cp .cache/target/cargo/release/pshb-cli out/
+	cp .cache/target/cargo$(ARCH_SUFFIX)/release/pshb-cli $(CLI)
 
 desktop: image-desktop dirs
 	$(DESKTOP_RUN) bash desktop/packaging/build-appimage.sh
@@ -192,7 +222,7 @@ fmt: image-rust dirs
 # offscreen (warnings are fatal) and quits.
 test-appimage: desktop image-apptest dirs
 	$(DOCKER_RUN) -e APPIMAGE_EXTRACT_AND_RUN=1 -e TMPDIR=/tmp -e LANG=C.UTF-8 $(APPTEST_IMAGE) \
-		bash -c 'timeout 120 out/PS-HID-Bridge-x86_64.AppImage --self-test'
+		bash -c 'timeout $(SELFTEST_TIMEOUT) $(APPIMAGE) --self-test'
 
 # Screenshots of every page at several window widths, light and dark, with
 # the demo values of tools/ui_demo.qml (every pill, warning and banner at
@@ -208,7 +238,7 @@ ui-shots: desktop image-apptest dirs
 		bash -c 'set -e; export PSHB_STARTUP_QML="$$(cat tools/ui_demo.qml)"; \
 		for s in $(UI_STATES); do for w in $(UI_WIDTHS); do for t in $(UI_THEMES); do \
 			d=/work/out/ui-shots/$$s-$$w-$$t; mkdir -p $$d; \
-			timeout 120 out/PS-HID-Bridge-x86_64.AppImage --screenshot $$d --screenshot-height 2400 \
+			timeout $(SELFTEST_TIMEOUT) $(APPIMAGE) --screenshot $$d --screenshot-height 2400 \
 				--demo-width $$w --demo-theme $$t --demo-state $$s; \
 		done; done; done'
 
@@ -221,16 +251,16 @@ SIM_ARGS ?=
 # (settings persist in .cache/sim/flash.bin).
 sim: test-firmware
 	@mkdir -p .cache/sim
-	$(DOCKER_RUN) -i --network host $(FW_IMAGE) $(HOST_BUILD)/pshb-sim --bind 0.0.0.0 \
+	$(FW_DOCKER_RUN) -i --network host $(FW_IMAGE) $(HOST_BUILD)/pshb-sim --bind 0.0.0.0 \
 		--port $(SIM_PORT) --http-port $(SIM_HTTP_PORT) --settings .cache/sim/flash.bin $(SIM_ARGS)
 
 udp-test: image-firmware
 	@test -n "$(IP)" || (echo "usage: make udp-test IP=a.b.c.d ARGS='--plain ping'"; exit 2)
-	$(DOCKER_RUN) --network host $(FW_IMAGE) python3 tools/udp_test.py $(IP) $(ARGS)
+	$(FW_DOCKER_RUN) --network host $(FW_IMAGE) python3 tools/udp_test.py $(IP) $(ARGS)
 
 # ---------------------------------------------------------------- misc
 shell-fw: image-firmware dirs
-	$(DOCKER_RUN) -i $(FW_IMAGE) bash
+	$(FW_DOCKER_RUN) -i $(FW_IMAGE) bash
 
 shell-desktop: image-desktop dirs
 	$(DOCKER_RUN) -i $(CARGO_ENV) $(DESKTOP_IMAGE) bash

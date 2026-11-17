@@ -12,6 +12,10 @@
 # Rust lives in its own branch (rust-base) and is copied into the final stage,
 # so bumping the Rust version does not invalidate the Qt layers.
 # All version pins come from versions.env via --build-arg.
+#
+# Builds for x86_64 and aarch64 (`make ARCH=aarch64`, docker --platform
+# linux/arm64): the downloads follow `uname -m`, each with its own checksum
+# (*_SHA256 for x86_64, *_SHA256_AARCH64).
 
 # Default only silences a docker lint; the Makefile passes versions.env.
 ARG ALMA_TAG=9.8
@@ -21,6 +25,7 @@ FROM almalinux:${ALMA_TAG} AS base
 
 ARG CMAKE_VERSION
 ARG CMAKE_SHA256
+ARG CMAKE_SHA256_AARCH64
 
 RUN dnf -y install epel-release dnf-plugins-core \
  && dnf config-manager --set-enabled crb \
@@ -37,13 +42,16 @@ ENV PATH=/opt/rh/gcc-toolset-14/root/usr/bin:/usr/local/bin:/usr/bin:/bin \
     LD_LIBRARY_PATH=/opt/rh/gcc-toolset-14/root/usr/lib64:/opt/rh/gcc-toolset-14/root/usr/lib \
     CC=/opt/rh/gcc-toolset-14/root/usr/bin/gcc \
     CXX=/opt/rh/gcc-toolset-14/root/usr/bin/g++ \
-    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/opt/rh/gcc-toolset-14/root/usr/bin/gcc
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/opt/rh/gcc-toolset-14/root/usr/bin/gcc \
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/opt/rh/gcc-toolset-14/root/usr/bin/gcc
 
 COPY scripts/fetch-verify.sh /usr/local/bin/fetch-verify.sh
+# arch-sha.sh X86_64_SHA AARCH64_SHA: the one for this machine's processor.
+COPY scripts/arch-sha.sh /usr/local/bin/arch-sha.sh
 
 RUN fetch-verify.sh \
-        "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
-        "${CMAKE_SHA256}" /tmp/cmake.tar.gz \
+        "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-$(uname -m).tar.gz" \
+        "$(arch-sha.sh "${CMAKE_SHA256}" "${CMAKE_SHA256_AARCH64}")" /tmp/cmake.tar.gz \
  && tar -xzf /tmp/cmake.tar.gz -C /usr/local --strip-components=1 \
  && rm /tmp/cmake.tar.gz \
  && cmake --version
@@ -53,14 +61,15 @@ FROM base AS rust-base
 
 ARG RUSTUP_VERSION
 ARG RUSTUP_SHA256
+ARG RUSTUP_SHA256_AARCH64
 ARG RUST_VERSION
 
 ENV RUSTUP_HOME=/opt/rustup \
     PATH=/opt/cargo/bin:/opt/rh/gcc-toolset-14/root/usr/bin:/usr/local/bin:/usr/bin:/bin
 
 RUN fetch-verify.sh \
-        "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init" \
-        "${RUSTUP_SHA256}" /tmp/rustup-init \
+        "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/$(uname -m)-unknown-linux-gnu/rustup-init" \
+        "$(arch-sha.sh "${RUSTUP_SHA256}" "${RUSTUP_SHA256_AARCH64}")" /tmp/rustup-init \
  && chmod +x /tmp/rustup-init \
  && CARGO_HOME=/opt/cargo /tmp/rustup-init -y --no-modify-path --profile minimal \
         --default-toolchain "${RUST_VERSION}" -c clippy -c rustfmt \
@@ -160,18 +169,23 @@ FROM base AS appimage-tools
 
 ARG LINUXDEPLOY_TAG
 ARG LINUXDEPLOY_SHA256
+ARG LINUXDEPLOY_SHA256_AARCH64
 ARG LINUXDEPLOY_QT_TAG
 ARG LINUXDEPLOY_QT_SHA256
+ARG LINUXDEPLOY_QT_SHA256_AARCH64
 ARG LINUXDEPLOY_APPIMAGE_TAG
 ARG LINUXDEPLOY_APPIMAGE_SHA256
+ARG LINUXDEPLOY_APPIMAGE_SHA256_AARCH64
 ARG APPIMAGE_RUNTIME_TAG
 ARG APPIMAGE_RUNTIME_SHA256
+ARG APPIMAGE_RUNTIME_SHA256_AARCH64
 
 RUN set -eux; \
+    arch=$(uname -m); \
     mkdir -p /opt/appimage/bin; \
     get() { \
         name=$1; repo=$2; tag=$3; sha=$4; \
-        fetch-verify.sh "https://github.com/linuxdeploy/${repo}/releases/download/${tag}/${name}-x86_64.AppImage" \
+        fetch-verify.sh "https://github.com/linuxdeploy/${repo}/releases/download/${tag}/${name}-${arch}.AppImage" \
             "$sha" "/tmp/${name}.AppImage"; \
         chmod +x "/tmp/${name}.AppImage"; \
         cd /opt/appimage && "/tmp/${name}.AppImage" --appimage-extract >/dev/null; \
@@ -179,11 +193,14 @@ RUN set -eux; \
         ln -s "/opt/appimage/${name}/AppRun" "/opt/appimage/bin/${name}"; \
         rm "/tmp/${name}.AppImage"; \
     }; \
-    get linuxdeploy linuxdeploy "${LINUXDEPLOY_TAG}" "${LINUXDEPLOY_SHA256}"; \
-    get linuxdeploy-plugin-qt linuxdeploy-plugin-qt "${LINUXDEPLOY_QT_TAG}" "${LINUXDEPLOY_QT_SHA256}"; \
-    get linuxdeploy-plugin-appimage linuxdeploy-plugin-appimage "${LINUXDEPLOY_APPIMAGE_TAG}" "${LINUXDEPLOY_APPIMAGE_SHA256}"; \
-    fetch-verify.sh "https://github.com/AppImage/type2-runtime/releases/download/${APPIMAGE_RUNTIME_TAG}/runtime-x86_64" \
-        "${APPIMAGE_RUNTIME_SHA256}" /opt/appimage/runtime-x86_64; \
+    get linuxdeploy linuxdeploy "${LINUXDEPLOY_TAG}" \
+        "$(arch-sha.sh "${LINUXDEPLOY_SHA256}" "${LINUXDEPLOY_SHA256_AARCH64}")"; \
+    get linuxdeploy-plugin-qt linuxdeploy-plugin-qt "${LINUXDEPLOY_QT_TAG}" \
+        "$(arch-sha.sh "${LINUXDEPLOY_QT_SHA256}" "${LINUXDEPLOY_QT_SHA256_AARCH64}")"; \
+    get linuxdeploy-plugin-appimage linuxdeploy-plugin-appimage "${LINUXDEPLOY_APPIMAGE_TAG}" \
+        "$(arch-sha.sh "${LINUXDEPLOY_APPIMAGE_SHA256}" "${LINUXDEPLOY_APPIMAGE_SHA256_AARCH64}")"; \
+    fetch-verify.sh "https://github.com/AppImage/type2-runtime/releases/download/${APPIMAGE_RUNTIME_TAG}/runtime-${arch}" \
+        "$(arch-sha.sh "${APPIMAGE_RUNTIME_SHA256}" "${APPIMAGE_RUNTIME_SHA256_AARCH64}")" /opt/appimage/runtime; \
     chmod -R a+rX /opt/appimage
 
 ############################################################################
@@ -203,7 +220,8 @@ ENV RUSTUP_HOME=/opt/rustup \
     PATH=/opt/appimage/bin:/opt/cargo/bin:/opt/qt6/bin:/opt/rh/gcc-toolset-14/root/usr/bin:/usr/local/bin:/usr/bin:/bin \
     LD_LIBRARY_PATH=/opt/qt6/lib:/opt/rh/gcc-toolset-14/root/usr/lib64:/opt/rh/gcc-toolset-14/root/usr/lib \
     CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
-    LDAI_RUNTIME_FILE=/opt/appimage/runtime-x86_64
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
+    LDAI_RUNTIME_FILE=/opt/appimage/runtime
 
 ############################################################################
 # Plain desktop system without Qt: the AppImage must run here on its own.
