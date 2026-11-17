@@ -633,9 +633,11 @@ static void h_network(web_app_t *app, web_conn_t *c) {
         respond_error(c, 400, "Mode and UDP port are required");
         return;
     }
-    // 67/68: DHCP (the board's DHCP client listens on 68 and would get the input).
-    if (port < 1 || port > 65535 || port == 67 || port == 68) {
-        respond_error(c, 400, "UDP port must be between 1 and 65535 (not 67 or 68, used by DHCP)");
+    // 67/68: DHCP (the board's DHCP client listens on 68 and would get the
+    // input); the discovery port has its own socket.
+    if (port < 1 || port > 65535 || port == 67 || port == 68 || port == PSHB_DISCOVERY_PORT) {
+        respond_error(c, 400,
+                      "UDP port must be between 1 and 65535 (not 67 or 68, used by DHCP, nor 45046, used by the app's search)");
         return;
     }
     s.udp_port = (uint16_t)port;

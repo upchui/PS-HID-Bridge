@@ -17,6 +17,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use pshb_core::config::{self, Config};
 use pshb_core::controller::{Controller, Watchdog};
 use pshb_core::crypto::parse_key_hex;
+use pshb_core::discover::{self, FoundBoard};
 use pshb_core::engine::{Engine, Notice};
 use pshb_core::idle::IdleInhibitor;
 use pshb_core::input::{self, GrabGuard, InputMsg, InputSet, Waker};
@@ -78,6 +79,21 @@ enum Command {
         file: PathBuf,
         #[arg(long)]
         hotkey: Option<String>,
+    },
+    /// Find boards in the network (no key needed)
+    Discover {
+        /// Ask only this address instead of the whole network
+        #[arg(long)]
+        host: Option<std::net::Ipv4Addr>,
+        /// Discovery port
+        #[arg(long, default_value_t = protocol::DISCOVERY_PORT)]
+        port: u16,
+        /// How long to wait for answers
+        #[arg(long, default_value_t = 1200)]
+        timeout_ms: u64,
+        /// Print the boards as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Check the connection and show the board status
     Ping {
@@ -966,6 +982,61 @@ fn cmd_board(
     Ok(())
 }
 
+fn cmd_discover(
+    host: Option<std::net::Ipv4Addr>,
+    port: u16,
+    timeout: Duration,
+    json: bool,
+) -> Result<(), String> {
+    let found: Vec<FoundBoard> = match host {
+        Some(ip) => discover::probe(ip, port, timeout)
+            .map_err(|e| format!("Network: {e}"))?
+            .into_iter()
+            .collect(),
+        None => {
+            let targets = discover::targets(&discover::ipv4_networks());
+            discover::discover_at(&targets, port, timeout).map_err(|e| format!("Network: {e}"))?
+        }
+    };
+    if json {
+        let list: Vec<_> = found
+            .iter()
+            .map(|b| {
+                serde_json::json!({
+                    "name": b.name,
+                    "address": b.address(),
+                    "ip": b.ip.to_string(),
+                    "mac": b.mac_string(),
+                    "firmware": b.firmware().to_string(),
+                    "udp_port": b.udp_port,
+                    "key_set": b.key_set,
+                    "static_ip": b.static_ip,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&list).unwrap_or_default());
+        return Ok(());
+    }
+    if found.is_empty() {
+        println!(
+            "No board answered. Boards with older firmware do not answer the search: \
+             enter the address by hand (the router lists the board as ps-hid-bridge-...)."
+        );
+        return Ok(());
+    }
+    for b in &found {
+        println!(
+            "{:<22} {:<21} {}  firmware {:<8} {}",
+            b.name,
+            b.address(),
+            b.mac_string(),
+            b.firmware().to_string(),
+            if b.key_set { "key set" } else { "no key yet" }
+        );
+    }
+    Ok(())
+}
+
 /// The board's firmware version over its web API (signed with the key):
 /// needs no packet counter, so it also works while the app is running.
 /// Firmware before 1.0.25 (no signed requests): asked over UDP instead.
@@ -1199,6 +1270,12 @@ fn main() -> ExitCode {
             stats,
         } => cmd_run(&ctx, board, devices, hotkey.as_deref(), *stats),
         Command::Replay { board, file, hotkey } => cmd_replay(&ctx, board, file, hotkey.as_deref()),
+        Command::Discover {
+            host,
+            port,
+            timeout_ms,
+            json,
+        } => cmd_discover(*host, *port, Duration::from_millis(*timeout_ms), *json),
         Command::Ping {
             board,
             count,

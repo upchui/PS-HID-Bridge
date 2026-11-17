@@ -31,6 +31,12 @@ Main {
         C.active = true;
         C.statusText = "Please release all keys on the keyboard first";
         C.boardAddress = "192.168.178.123:45045";
+        C.foundBoardsJson = JSON.stringify([
+            { name: "ps-hid-bridge-96c33d", address: "192.168.178.123:45045", ip: "192.168.178.123",
+              mac: "02:68:9d:96:c3:3d", firmware: "1.0.123", key_set: true, current: true },
+            { name: "ps-hid-bridge-a1b2c3", address: "192.168.178.234:45099", ip: "192.168.178.234",
+              mac: "02:11:22:a1:b2:c3", firmware: "1.0.99", key_set: false, current: false }
+        ]);
         C.boardFirmware = "1.0.123";
         C.boardUsb = "PlayStation in rest mode";
         C.pskSet = true;

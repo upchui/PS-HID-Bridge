@@ -11,6 +11,7 @@ use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use pshb_core::config::{self, Config, TriggerConfig};
 use pshb_core::crypto::parse_key_hex;
+use pshb_core::discover::{self, FoundBoard, board_ipv4};
 use pshb_core::engine::Notice;
 use pshb_core::input::{self, DeviceInfo};
 use pshb_core::protocol::{self, Pong};
@@ -117,6 +118,11 @@ pub mod qobject {
         #[qproperty(QString, board_info_json)]
         #[qproperty(QString, board_info_error)]
         #[qproperty(bool, board_info_busy)]
+        /// Boards that answered the last search in the network (see
+        /// discover_boards), JSON [{name, address, ip, mac, firmware,
+        /// key_set, current}]; `current`: the board in the settings.
+        #[qproperty(QString, found_boards_json)]
+        #[qproperty(bool, discover_busy)]
         #[qproperty(bool, clock_busy)]
         #[qproperty(QString, clock_message)]
         #[qproperty(bool, usb_board_found)]
@@ -157,6 +163,10 @@ pub mod qobject {
         /// (Re)connect with the stored settings.
         #[qinvokable]
         fn reconnect(self: Pin<&mut AppController>);
+        /// Look for boards in the network (`discover_busy` meanwhile, the
+        /// result in `found_boards_json`).
+        #[qinvokable]
+        fn discover_boards(self: Pin<&mut AppController>);
 
         #[qinvokable]
         fn refresh_devices(self: Pin<&mut AppController>);
@@ -348,6 +358,15 @@ pub struct AppControllerRust {
     board_info_json: QString,
     board_info_error: QString,
     board_info_busy: bool,
+    found_boards_json: QString,
+    discover_busy: bool,
+    /// The last search's boards (`found_boards_json`).
+    found: Vec<FoundBoard>,
+    /// Service generation whose board was asked for its MAC address.
+    mac_checked: u64,
+    /// Wait before the next search for the board that moved (doubles while
+    /// it stays away).
+    follow_wait: Duration,
     clock_busy: bool,
     clock_message: QString,
     /// Newest release found by the last check.
@@ -403,6 +422,11 @@ const RETRY: Duration = Duration::from_secs(5);
 /// Board configured by name and not answering: look the name up again this
 /// often (it may have a new address from DHCP).
 const RENAME_CHECK: Duration = Duration::from_secs(10);
+/// Board configured by address (its MAC known) and not answering: look for
+/// it in the network after this long, then after twice as long each time up
+/// to FOLLOW_MAX (a board that is off is not looked for all the time).
+const FOLLOW_FIRST: Duration = Duration::from_secs(10);
+const FOLLOW_MAX: Duration = Duration::from_secs(300);
 
 impl Default for AppControllerRust {
     fn default() -> Self {
@@ -480,6 +504,11 @@ impl Default for AppControllerRust {
             board_info_json: QString::default(),
             board_info_error: QString::default(),
             board_info_busy: false,
+            found_boards_json: QString::from("[]"),
+            discover_busy: false,
+            found: Vec::new(),
+            mac_checked: 0,
+            follow_wait: FOLLOW_FIRST,
             clock_busy: false,
             clock_message: QString::default(),
             latest: None,
@@ -622,6 +651,38 @@ impl qobject::AppController {
         self.as_mut().set_appearance(QString::from(&c.appearance));
         self.as_mut().set_keep_cpu_awake(c.keep_cpu_awake);
         self.as_mut().publish_rules();
+        self.as_mut().publish_found();
+    }
+
+    /// The last search's boards for QML, marked against the settings.
+    fn publish_found(mut self: Pin<&mut Self>) {
+        #[derive(Serialize)]
+        struct Row {
+            name: String,
+            address: String,
+            ip: String,
+            mac: String,
+            firmware: String,
+            key_set: bool,
+            current: bool,
+        }
+        let current = board_ipv4(&self.config_ref().board);
+        let rows: Vec<Row> = self
+            .rust()
+            .found
+            .iter()
+            .map(|b| Row {
+                name: b.name.clone(),
+                address: b.address(),
+                ip: b.ip.to_string(),
+                mac: b.mac_string(),
+                firmware: b.firmware().to_string(),
+                key_set: b.key_set,
+                current: current == Some(b.ip),
+            })
+            .collect();
+        self.as_mut()
+            .set_found_boards_json(QString::from(&serde_json::to_string(&rows).unwrap_or_default()));
     }
 
     fn publish_rules(mut self: Pin<&mut Self>) {
@@ -752,7 +813,10 @@ impl qobject::AppController {
             .and_then(|b| b.strip_suffix(']'))
             .unwrap_or(&board);
         if board.parse::<std::net::SocketAddr>().is_ok() || bare.parse::<std::net::IpAddr>().is_ok() {
-            return; // an address: nothing to look up
+            // An address: nothing to look up, but the board may have got
+            // another one.
+            self.schedule_follow(generation);
+            return;
         }
         let qt = self.qt_thread();
         let _ = thread::Builder::new().name("pshb-name".into()).spawn(move || {
@@ -769,6 +833,86 @@ impl qobject::AppController {
         match found {
             Some(a) if self.rust().board_addr.is_some_and(|old| old != a) => self.restart_service(),
             _ => self.as_mut().schedule_name_check(generation),
+        }
+    }
+
+    /// While the board does not answer at its address: look for its MAC
+    /// address in the network (after `follow_wait`) and take its new address.
+    fn schedule_follow(mut self: Pin<&mut Self>, generation: u64) {
+        let mac = self.config_ref().board_mac.clone();
+        if mac.is_empty() {
+            return; // not known (yet): learned once it answers
+        }
+        let wait = self.rust().follow_wait;
+        self.as_mut().rust_mut().follow_wait = (wait * 2).min(FOLLOW_MAX);
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new().name("pshb-follow".into()).spawn(move || {
+            thread::sleep(wait);
+            let found = discover::discover(discover::DISCOVER_TIMEOUT)
+                .ok()
+                .and_then(|list| list.into_iter().find(|b| b.mac_string() == mac));
+            let _ = qt.queue(move |obj| obj.follow_checked(generation, found));
+        });
+    }
+
+    fn follow_checked(mut self: Pin<&mut Self>, generation: u64, found: Option<FoundBoard>) {
+        if !self.rust().slot.is_current(generation) || *self.connected() {
+            return;
+        }
+        let board = self.config_ref().board.clone();
+        let Some(b) = found.filter(|b| board_ipv4(&board) != Some(b.ip)) else {
+            self.schedule_follow(generation);
+            return;
+        };
+        let address = b.moved_from(&board);
+        self.as_mut().rust_mut().config.board = address.clone();
+        // Also when the file cannot be written: the board is here now
+        // (save_error tells).
+        self.as_mut().save_config();
+        self.as_mut().rust_mut().follow_wait = FOLLOW_FIRST;
+        self.as_mut().set_board_info_json(QString::default());
+        self.as_mut().set_board_info_error(QString::default());
+        notify::send(
+            "Board found again",
+            &format!("{} has a new address in the network: {address}.", b.name),
+        );
+        self.as_mut().publish_config();
+        self.restart_service();
+    }
+
+    /// Once per service start, when the board answers: its MAC address from
+    /// its discovery answer, so it can be found again under another address.
+    fn learn_board_mac(mut self: Pin<&mut Self>) {
+        let generation = self.rust().slot.generation.load(Ordering::SeqCst);
+        if self.rust().mac_checked == generation {
+            return;
+        }
+        self.as_mut().rust_mut().mac_checked = generation;
+        let Some(std::net::IpAddr::V4(ip)) = self.rust().board_addr.map(|a| a.ip()) else {
+            return;
+        };
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new()
+            .name("pshb-board-mac".into())
+            .spawn(move || {
+                let found = discover::probe(ip, protocol::DISCOVERY_PORT, discover::DISCOVER_TIMEOUT)
+                    .ok()
+                    .flatten();
+                let _ = qt.queue(move |obj| obj.board_mac_learned(generation, found));
+            });
+    }
+
+    fn board_mac_learned(mut self: Pin<&mut Self>, generation: u64, found: Option<FoundBoard>) {
+        // Older firmware does not answer: nothing to learn.
+        let Some(b) = found else { return };
+        if !self.rust().slot.is_current(generation) {
+            return;
+        }
+        // It answered with the key: this is the board, whatever was stored.
+        let mac = b.mac_string();
+        if self.config_ref().board_mac != mac {
+            self.as_mut().rust_mut().config.board_mac = mac;
+            self.as_mut().save_config();
         }
     }
 
@@ -808,6 +952,9 @@ impl qobject::AppController {
         if *self.connected() && !st.connected {
             let generation = self.rust().slot.generation.load(Ordering::SeqCst);
             self.as_mut().schedule_name_check(generation);
+        } else if !*self.connected() && st.connected {
+            self.as_mut().rust_mut().follow_wait = FOLLOW_FIRST;
+            self.as_mut().learn_board_mac();
         }
         self.as_mut().set_connected(st.connected);
         self.as_mut()
@@ -999,9 +1146,22 @@ impl qobject::AppController {
                 return QString::from(&e);
             }
         }
+        // The MAC address of a board picked from the search; else learned
+        // when it answers (learn_board_mac).
+        let found_mac = board_ipv4(&address)
+            .and_then(|ip| self.rust().found.iter().find(|b| b.ip == ip))
+            .map(FoundBoard::mac_string);
+        let old_mac = self.config_ref().board_mac.clone();
+        let new_mac = match found_mac {
+            Some(m) => m,
+            None if self.config_ref().board == address => old_mac.clone(),
+            None => String::new(),
+        };
         let old_board = std::mem::replace(&mut self.as_mut().rust_mut().config.board, address.clone());
+        self.as_mut().rust_mut().config.board_mac = new_mac;
         if !self.as_mut().save_config() {
             self.as_mut().rust_mut().config.board = old_board;
+            self.as_mut().rust_mut().config.board_mac = old_mac;
             if new_key.is_some() {
                 let _ = match &old_key {
                     Some(k) => config::save_psk(&key_path, k),
@@ -1024,6 +1184,28 @@ impl qobject::AppController {
 
     pub fn reconnect(self: Pin<&mut Self>) {
         self.restart_service();
+    }
+
+    pub fn discover_boards(mut self: Pin<&mut Self>) {
+        if *self.discover_busy() {
+            return;
+        }
+        self.as_mut().set_discover_busy(true);
+        let done = self.qt_thread();
+        let spawned = thread::Builder::new()
+            .name("pshb-discover".into())
+            .spawn(move || {
+                // No network at all: an empty list says the same.
+                let found = discover::discover(discover::DISCOVER_TIMEOUT).unwrap_or_default();
+                let _ = done.queue(move |mut obj| {
+                    obj.as_mut().set_discover_busy(false);
+                    obj.as_mut().rust_mut().found = found;
+                    obj.as_mut().publish_found();
+                });
+            });
+        if spawned.is_err() {
+            self.as_mut().set_discover_busy(false);
+        }
     }
 
     pub fn refresh_devices(mut self: Pin<&mut Self>) {

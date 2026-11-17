@@ -27,6 +27,7 @@
 #include <unistd.h>
 
 #include "bridge.h"
+#include "discovery.h"
 #include "hexutil.h"
 #include "input_state.h"
 #include "protocol.h"
@@ -162,13 +163,13 @@ static void boot(void) {
 
 // The board's name for this MAC address (see be_status), allowed as Host.
 #define SIM_HOSTNAME "ps-hid-bridge-514d00"
+static const uint8_t k_sim_mac[6] = {0x02, 0x00, 0x00, 0x51, 0x4D, 0x00};
 
 static void be_status(void *ctx, web_status_t *out) {
     (void)ctx;
     out->fw_version = S.bridge.fw_version;
     out->uptime_ms = (now_us() - S.boot_us) / 1000;
-    static const uint8_t mac[6] = {0x02, 0x00, 0x00, 0x51, 0x4D, 0x00};
-    memcpy(out->mac, mac, 6);
+    memcpy(out->mac, k_sim_mac, 6);
     static const uint8_t ip[4] = {127, 0, 0, 1}, mask[4] = {255, 0, 0, 0};
     memcpy(out->ip, S.settings.ip_mode == PSHB_IP_STATIC ? S.settings.ip : ip, 4);
     memcpy(out->mask, S.settings.ip_mode == PSHB_IP_STATIC ? S.settings.mask : mask, 4);
@@ -362,6 +363,8 @@ static void usage(const char *argv0) {
             "  --bind ADDR       listen address (default 127.0.0.1)\n"
             "  --port N          UDP port (default %d, 0 = any free port)\n"
             "  --http-port N     web interface port (default: off, 0 = any free port)\n"
+            "  --discovery-port N  answer discovery requests on this port (default: off,\n"
+            "                    0 = any free port; the board uses %d)\n"
             "  --settings FILE   keep the simulated settings flash in FILE\n"
             "  --plaintext       accept unencrypted debug packets (version 0)\n"
             "  --psk HEX         pre-shared key (overrides the settings)\n"
@@ -371,7 +374,7 @@ static void usage(const char *argv0) {
             "  --allow IP[/N]    only accept packets from this sender or subnet\n"
             "  --usb-unmounted   simulate a board that is not plugged in\n"
             "  --max-values      status and diagnostics report their largest values\n",
-            argv0, PSHB_UDP_PORT_DEFAULT);
+            argv0, PSHB_UDP_PORT_DEFAULT, PSHB_DISCOVERY_PORT);
 }
 
 static void usb_frame(void) {
@@ -385,6 +388,29 @@ static void usb_frame(void) {
         input_state_take_mouse_report(&S.input, r, false);
         printf("MOUSE buttons=%02x dx=%d dy=%d wheel=%d pan=%d\n", r[0], (int16_t)pshb_rd16(&r[1]),
                (int16_t)pshb_rd16(&r[3]), (int8_t)r[5], (int8_t)r[6]);
+    }
+}
+
+// Answers discovery requests like the board (core1.c discovery_service).
+static void discovery_service(int fd, int udp_port) {
+    static pshb_discovery_limit_t limit;
+    for (;;) {
+        uint8_t req[2048], answer[PSHB_DISCOVERY_LEN];
+        struct sockaddr_in src;
+        socklen_t slen = sizeof(src);
+        ssize_t n = recvfrom(fd, req, sizeof(req), 0, (struct sockaddr *)&src, &slen);
+        if (n < 0) break;
+        pshb_discovery_info_t info = {0};
+        memcpy(info.mac, k_sim_mac, 6);
+        snprintf(info.name, sizeof(info.name), "%s", SIM_HOSTNAME);
+        info.udp_port = (uint16_t)udp_port;
+        info.fw_version = S.bridge.fw_version;
+        if (S.settings.psk_set) info.flags |= PSHB_DISCOVERY_KEY_SET;
+        if (S.settings.ip_mode == PSHB_IP_STATIC) info.flags |= PSHB_DISCOVERY_STATIC_IP;
+        size_t len = pshb_discovery_answer(req, (size_t)n, &info, answer, sizeof(answer));
+        if (len && pshb_discovery_allow(&limit, now_us())) {
+            sendto(fd, answer, len, 0, (struct sockaddr *)&src, slen);
+        }
     }
 }
 
@@ -460,6 +486,7 @@ int main(int argc, char **argv) {
     const char *bind_addr = "127.0.0.1";
     int port = PSHB_UDP_PORT_DEFAULT;
     int http_port = -1;
+    int discovery_port = -1;
     S.usb_mounted = true;
     S.failsafe_ms = PSHB_FAILSAFE_US_DEFAULT / 1000;
 
@@ -467,6 +494,7 @@ int main(int argc, char **argv) {
         {"bind", required_argument, 0, 'b'},
         {"port", required_argument, 0, 'p'},
         {"http-port", required_argument, 0, 'w'},
+        {"discovery-port", required_argument, 0, 'D'},
         {"settings", required_argument, 0, 'S'},
         {"plaintext", no_argument, 0, 'P'},
         {"psk", required_argument, 0, 'k'},
@@ -485,6 +513,7 @@ int main(int argc, char **argv) {
         case 'b': bind_addr = optarg; break;
         case 'p': port = atoi(optarg); break;
         case 'w': http_port = atoi(optarg); break;
+        case 'D': discovery_port = atoi(optarg); break;
         case 'S': S.settings_file = optarg; break;
         case 'P': S.plaintext = true; break;
         case 'k':
@@ -563,15 +592,23 @@ int main(int argc, char **argv) {
     http_slot_t slots[MAX_CONNS];
     for (int i = 0; i < MAX_CONNS; i++) slots[i].fd = -1;
 
-    printf("READY %d HTTP %d\n", udp_port, bound_http);
+    int disc = -1, bound_disc = 0;
+    if (discovery_port >= 0) {
+        disc = bind_socket(SOCK_DGRAM, bind_addr, discovery_port, &bound_disc);
+        int one = 1;
+        setsockopt(disc, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
+    }
+
+    printf("READY %d HTTP %d DISCOVERY %d\n", udp_port, bound_http, bound_disc);
 
     uint64_t next_frame = now_us() + 1000;
     while (!s_stop) {
         uint64_t t = now_us();
         int timeout_ms = next_frame > t ? (int)((next_frame - t + 999) / 1000) : 0;
-        struct pollfd pfd[2 + MAX_CONNS];
+        struct pollfd pfd[3 + MAX_CONNS];
         int nfds = 0;
         pfd[nfds++] = (struct pollfd){.fd = udp, .events = POLLIN};
+        if (disc >= 0) pfd[nfds++] = (struct pollfd){.fd = disc, .events = POLLIN};
         if (listen_fd >= 0) pfd[nfds++] = (struct pollfd){.fd = listen_fd, .events = POLLIN};
         for (int i = 0; i < MAX_CONNS; i++) {
             if (slots[i].fd >= 0) pfd[nfds++] = (struct pollfd){.fd = slots[i].fd, .events = POLLIN | POLLOUT};
@@ -591,6 +628,7 @@ int main(int argc, char **argv) {
                                                reply, sizeof(reply));
             if (rlen) sendto(udp, reply, rlen, 0, (struct sockaddr *)&src, slen);
         }
+        if (disc >= 0) discovery_service(disc, udp_port);
         if (listen_fd >= 0) http_service(&app, slots, listen_fd, now_us());
 
         if (S.reboot_requested) {

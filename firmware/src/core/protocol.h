@@ -59,6 +59,28 @@ enum {
 
 #define PSHB_MAX_PACKET_LEN (PSHB_HDR_LEN + PSHB_PONG_TIMED_PAYLOAD_LEN + PSHB_TAG_LEN)
 
+// Discovery (protocol/SPEC.md "Discovery"): unencrypted, on its own port, so
+// the app finds boards without knowing their address or key.
+//   request (64 bytes): 0 "PSHBDISC" | 8 version u8 = 1 | 9 type u8 = 1 | 10.. zero
+//   answer  (64 bytes): 0 "PSHBDISC" | 8 version u8 = 1 | 9 type u8 = 2 | 10 flags u8
+//                       11 zero | 12 mac[6] | 18 udp_port u16 | 20 fw_version u32
+//                       24 name[32] (NUL-padded) | 56.. zero
+// Only requests of exactly 64 bytes are answered: the answer is never larger.
+#define PSHB_DISCOVERY_PORT     45046
+#define PSHB_DISCOVERY_LEN      64
+#define PSHB_DISCOVERY_MAGIC    "PSHBDISC"
+#define PSHB_DISCOVERY_VERSION  1
+#define PSHB_DISCOVERY_NAME_LEN 32
+enum {
+    PSHB_DISCOVERY_REQUEST = 1,
+    PSHB_DISCOVERY_ANSWER = 2,
+};
+enum {
+    PSHB_DISCOVERY_KEY_SET = 0x01,
+    PSHB_DISCOVERY_STATIC_IP = 0x02,
+    PSHB_DISCOVERY_NO_PARTITION_TABLE = 0x04,
+};
+
 static inline uint16_t pshb_rd16(const uint8_t *p) {
     return (uint16_t)(p[0] | (p[1] << 8));
 }

@@ -7,6 +7,7 @@ set(PSHB_CORE_SOURCES
     ${PSHB_FW_DIR}/src/core/aead.c
     ${PSHB_FW_DIR}/src/core/bridge.c
     ${PSHB_FW_DIR}/src/core/crc32.c
+    ${PSHB_FW_DIR}/src/core/discovery.c
     ${PSHB_FW_DIR}/src/core/hexutil.c
     ${PSHB_FW_DIR}/src/core/hid_desc.c
     ${PSHB_FW_DIR}/src/core/http.c

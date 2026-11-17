@@ -64,11 +64,12 @@ class Sim:
             self.proc.kill()
             raise RuntimeError("simulator did not start within 10 s")
         ready = self.proc.stdout.readline()
-        m = re.match(r"READY (\d+) HTTP (\d+)", ready)
+        m = re.match(r"READY (\d+) HTTP (\d+)(?: DISCOVERY (\d+))?", ready)
         if not m:
             raise RuntimeError(f"simulator did not start: {ready!r}")
         self.port = int(m.group(1))
         self.http_port = int(m.group(2))
+        self.discovery_port = int(m.group(3) or 0)
         self.reader = threading.Thread(target=self._reader, daemon=True)
         self.reader.start()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -383,6 +384,62 @@ class InteropTests(unittest.TestCase):
         self.assertIn("No answer", r.stderr)
 
 
+DISCOVERY_REQUEST = b"PSHBDISC\x01\x01" + bytes(54)
+
+
+class DiscoveryTests(unittest.TestCase):
+    """Discovery (protocol/SPEC.md "Discovery"): answered without the key."""
+
+    def setUp(self):
+        self.sim = Sim("--discovery-port", "0", key=KEY)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.settimeout(NO_ANSWER)
+
+    def tearDown(self):
+        self.sock.close()
+        self.sim.close()
+
+    def ask(self, data: bytes) -> bytes | None:
+        self.sock.sendto(data, ("127.0.0.1", self.sim.discovery_port))
+        try:
+            return self.sock.recvfrom(2048)[0]
+        except socket.timeout:
+            return None
+
+    def test_answer(self):
+        a = self.ask(DISCOVERY_REQUEST)
+        self.assertIsNotNone(a)
+        self.assertEqual(len(a), 64)
+        self.assertEqual(a[:10], b"PSHBDISC\x01\x02")
+        self.assertEqual(a[10], 0x01)  # key set
+        self.assertEqual(a[12:18], bytes([0x02, 0x00, 0x00, 0x51, 0x4D, 0x00]))
+        self.assertEqual(int.from_bytes(a[18:20], "little"), self.sim.port)
+        major, minor, patch = (int(x) for x in VERSION.split("."))
+        self.assertEqual(int.from_bytes(a[20:24], "little"), (major << 24) | (minor << 16) | patch)
+        self.assertEqual(a[24:56].rstrip(b"\0"), b"ps-hid-bridge-514d00")
+
+    def test_only_exact_requests(self):
+        self.assertIsNone(self.ask(DISCOVERY_REQUEST[:63]))
+        self.assertIsNone(self.ask(DISCOVERY_REQUEST + b"\0"))
+        self.assertIsNone(self.ask(b"PSHBDISC\x01\x02" + bytes(54)))  # an answer, no request
+
+    def test_cli_discover(self):
+        if not os.environ.get("PSHB_CLI"):
+            self.skipTest("no --cli given")
+        r = subprocess.run([os.environ["PSHB_CLI"], "discover", "--host", "127.0.0.1",
+                            "--port", str(self.sim.discovery_port), "--json"],
+                           capture_output=True, text=True, timeout=20)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        boards = json.loads(r.stdout)
+        self.assertEqual(len(boards), 1)
+        b = boards[0]
+        self.assertEqual(b["name"], "ps-hid-bridge-514d00")
+        self.assertEqual(b["address"], f"127.0.0.1:{self.sim.port}")
+        self.assertEqual(b["mac"], "02:00:00:51:4d:00")
+        self.assertEqual(b["firmware"], VERSION)
+        self.assertTrue(b["key_set"])
+
+
 class FilterTests(unittest.TestCase):
     def test_disallowed_sender_is_ignored(self):
         sim = Sim("--plaintext", "--allow", "10.9.9.9")
@@ -651,7 +708,7 @@ class WebTests(unittest.TestCase):
                "udp_port": 45045}
         self.assertEqual(self.web.req("POST", "/api/network", bad)[0], 400)
         self.assertEqual(self.web.req("POST", "/api/network", {**bad, "mask": "255.255.255.0", "udp_port": 0})[0], 400)
-        good = {**bad, "mask": "255.255.255.0", "gateway": "192.168.1.1", "udp_port": 45046}
+        good = {**bad, "mask": "255.255.255.0", "gateway": "192.168.1.1", "udp_port": 45050}
         status, r, _ = self.web.req("POST", "/api/network", good)
         self.assertEqual((status, r), (200, {"ok": True, "reboot": True}))
         self.assertTrue(self.sim.wait_line("REBOOT", timeout=2))
@@ -659,7 +716,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.web.req("GET", "/api/status")[0], 401)
         self.assertEqual(self.web.login(NEW_PW)[0], 200)
         st = self.web.req("GET", "/api/status")[1]
-        self.assertEqual((st["ip_mode"], st["static_ip"], st["udp_port"]), ("static", "192.168.1.50", 45046))
+        self.assertEqual((st["ip_mode"], st["static_ip"], st["udp_port"]), ("static", "192.168.1.50", 45050))
 
     def test_factory_reset(self):
         self.setup_password()
@@ -806,6 +863,8 @@ class WebTests(unittest.TestCase):
         body = {"mode": "dhcp", "udp_port": 68}
         self.assertEqual(self.web.req("POST", "/api/network", body)[0], 400)
         body["udp_port"] = 67
+        self.assertEqual(self.web.req("POST", "/api/network", body)[0], 400)
+        body["udp_port"] = 45046  # the discovery port
         self.assertEqual(self.web.req("POST", "/api/network", body)[0], 400)
         # "12abc" is not 12
         import urllib.error

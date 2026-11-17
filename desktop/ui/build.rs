@@ -38,6 +38,7 @@ fn main() {
             "qml/AppButton.qml",
             "qml/AppSwitch.qml",
             "qml/AppIcon.qml",
+            "qml/BoardFinder.qml",
             "qml/DeviceList.qml",
             "qml/TriggerEditor.qml",
             "qml/CurvePlot.qml",

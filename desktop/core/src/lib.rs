@@ -10,6 +10,7 @@ pub mod config;
 pub mod controller;
 pub mod counter;
 pub mod crypto;
+pub mod discover;
 pub mod engine;
 pub mod idle;
 pub mod input;

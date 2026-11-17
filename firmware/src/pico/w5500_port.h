@@ -30,6 +30,9 @@
 #define W5500_SOCK_UDP  1
 #define W5500_SOCK_HTTP0 2
 #define W5500_SOCK_HTTP1 3
+// Discovery answers (core 1 only, polled: no interrupt, INTn stays with
+// the input socket).
+#define W5500_SOCK_DISCOVERY 4
 
 #define W5500_RX_EMPTY    (-1)
 #define W5500_RX_OVERSIZE (-2)

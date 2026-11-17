@@ -7,6 +7,8 @@ pub const TAG_LEN: usize = 16;
 pub const NONCE_LEN: usize = 12;
 pub const KEY_LEN: usize = 32;
 pub const UDP_PORT_DEFAULT: u16 = 45045;
+/// Discovery requests and answers (unencrypted, see [`crate::discover`]).
+pub const DISCOVERY_PORT: u16 = 45046;
 
 pub const INPUT_LEN: usize = 23;
 pub const PING_LEN: usize = 12;

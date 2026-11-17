@@ -54,7 +54,7 @@ sequenceDiagram
 
 ## Connecting
 
-- **Finding the board.** The app knows only the board's address and the key. It sends a PING every 250 ms until a PONG comes back.
+- **Finding the board.** The app knows the board's address and the key. It sends a PING every 250 ms until a PONG comes back. To learn the address in the first place, it asks the network on UDP port 45046: every board answers with its name, MAC address, firmware version and input port, unencrypted and without the key ([SPEC.md](../protocol/SPEC.md#discovery)). The app keeps the MAC address of its board and asks again when the board stops answering, so it follows a board that got another address.
 - **The session.** The PONG carries the board's **session id**, a random number the board picks at every start. Every INPUT and HEARTBEAT names it; the board refuses input with another session. So nothing recorded before a board restart can be played back afterwards.
 - **"Connected"** means a valid PONG within the last 3 seconds. Without one, the app shows "Board not reachable" and keeps pinging.
 - **Which answers count.** A PONG counts only if it opens with the key and answers a ping the app sent within the last 2 seconds (it echoes that ping's send time). Other answers are counted and ignored.
@@ -122,10 +122,10 @@ How this shows in the app: [latency-pc.md](latency-pc.md#measuring).
 
 ## Network
 
-- **Port.** The board listens on UDP port 45045. You can change it in the web interface under "Network" ("UDP port for input"); saving restarts the board. In the app and `pshb-cli`, add the port to the board's address, e.g. `192.168.1.50:45046`.
+- **Port.** The board listens on UDP port 45045. You can change it in the web interface under "Network" ("UDP port for input"); saving restarts the board. In the app and `pshb-cli`, add the port to the board's address, e.g. `192.168.1.50:45050`. Port 45046 is taken by the search (below).
 - **Answers come back by themselves.** The app sends from a port the system picks, and the board answers to exactly the address and port the ping came from. A firewall on the PC that lets answers to outgoing traffic through, as firewalls usually do, needs no rule for it. Nothing needs to be opened on the router: the traffic stays in your local network.
 - **Priority.** Both sides mark their packets DSCP "Expedited Forwarding" (TOS byte 0xB8), and on Linux the app also gives its socket priority 6, so network devices that honour it send the packets first (see [latency-pc.md](latency-pc.md#network)).
-- **IPv4 only.** The board speaks IPv4 only, and its input port takes direct packets only: broadcasts are blocked.
+- **IPv4 only.** The board speaks IPv4 only, and its input port takes direct packets only: broadcasts are blocked. Only the search port 45046 takes broadcasts.
 - **Sender filter.** In the web interface (Security) you can let only one address or subnet send input, e.g. `192.168.1.20` or `192.168.1.0/24`. By default any sender may. It is an extra layer: addresses in a local network can be faked, and it is the key that protects.
 - **Never fragmented.** No packet is longer than 91 bytes, so none is ever split up on the way.
 
@@ -182,9 +182,11 @@ The nonce for this packet is `01 00 00 00` (direction app → board) followed by
 | App: sending, pings, sessions | [desktop/core/src/transport.rs](../desktop/core/src/transport.rs) |
 | App: the counter across restarts | [desktop/core/src/counter.rs](../desktop/core/src/counter.rs) |
 | App: one-way time | [desktop/core/src/oneway.rs](../desktop/core/src/oneway.rs) |
+| App: finding boards | [desktop/core/src/discover.rs](../desktop/core/src/discover.rs) |
 | Board: packet format, encryption | [firmware/src/core/protocol.h](../firmware/src/core/protocol.h), [packet.c](../firmware/src/core/packet.c), [proto.c](../firmware/src/core/proto.c), [aead.c](../firmware/src/core/aead.c) |
 | Board: checks, session, failsafe | [firmware/src/core/bridge.c](../firmware/src/core/bridge.c) |
 | Board: from changes to USB reports | [firmware/src/core/input_state.c](../firmware/src/core/input_state.c) |
+| Board: answering the search | [firmware/src/core/discovery.c](../firmware/src/core/discovery.c), [firmware/src/pico/core1.c](../firmware/src/pico/core1.c) (`discovery_service`) |
 | Board: receiving from the network chip | [firmware/src/pico/main.c](../firmware/src/pico/main.c) (`net_service`), [w5500_port.c](../firmware/src/pico/w5500_port.c) |
 | Python reference | [protocol/tools/pshb_proto.py](../protocol/tools/pshb_proto.py) |
 | Test vectors | [protocol/vectors/v1.json](../protocol/vectors/v1.json), made by [gen_vectors.py](../protocol/tools/gen_vectors.py) |

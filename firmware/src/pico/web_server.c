@@ -4,6 +4,7 @@
 
 #include "pico/time.h"
 
+#include "discovery.h"
 #include "pshb_config.h"
 #include "guard.h"
 
@@ -48,7 +49,7 @@ void web_server_init(const web_backend_t *be, pshb_settings_t *settings) {
     uint8_t mac[6];
     char name[WEB_HOSTNAME_MAX];
     w5500_get_mac(mac);
-    snprintf(name, sizeof(name), "ps-hid-bridge-%02x%02x%02x", mac[3], mac[4], mac[5]);
+    pshb_board_name(mac, name, sizeof(name));
     web_app_set_hostname(&s_app, name);
 }
 

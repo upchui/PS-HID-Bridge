@@ -69,7 +69,7 @@ Station by station, as in [How it works](#how-it-works).
 1. **Get the files:** download them from the [latest release](https://github.com/upchui/PS-HID-Bridge/releases/latest), or build them yourself with `make submodules && make all` (see [Building](docs/development.md#building); the first run takes long because of Qt).
 2. **Flash the board:** hold BOOTSEL and plug the board into the PC via USB; the drive `RP2350` appears. First copy `ps-hid-bridge-pt.uf2` onto it (the board comes back as a drive afterwards), then `ps-hid-bridge.uf2`. Or let the app do it (setup wizard or "Firmware & updates" → "Install via USB").
    The first file is the partition table: it divides the board's memory into two places for the firmware and one for your settings. An update over the network then goes into the free place, and if the new firmware does not start properly, the board returns to the previous one. Without it, every update overwrites the running firmware.
-3. **Connect the board:** network cable, USB to the PlayStation. Look up the IP in your router (`ps-hid-bridge-XXXXXX`) and open it in the browser.
+3. **Connect the board:** network cable, USB to the PlayStation. Find its address with `pshb-cli discover` or in the app (setup wizard or "Board" → "Search"), or look it up in your router (`ps-hid-bridge-XXXXXX`), and open it in the browser.
 4. **Web interface:** log in with `ps-hid-bridge`, set your own password, generate a key under "Security".
 
 **Station 1, the PC:**
@@ -86,11 +86,11 @@ Every commit on `main` becomes a release on the [releases page](https://github.c
 
 The AppImage runs on current Linux systems under Wayland and X11. It follows the desktop's light or dark mode; the switch at the bottom of the sidebar picks light, automatic or dark. Changes are saved as soon as they are valid; only the board's address and key wait for "Save and connect" (in the wizard: "Next").
 
-- **Wizard** on first start: welcome (with the firmware install over USB for a new board) → board (address, key, connection test) → devices and keyboard type → trigger → live test that shows what reaches the PlayStation. "Run setup again" in the sidebar starts it again.
+- **Wizard** on first start: welcome (with the firmware install over USB for a new board) → board (the boards found in the network to pick from, address, key, connection test) → devices and keyboard type → trigger → live test that shows what reaches the PlayStation. "Run setup again" in the sidebar starts it again.
 - **Status:** bridge on/off, the keys that currently go to the PlayStation, the board and the PlayStation (connected or in rest mode), the network latency to the board and how long the PC takes with your input. The tile "Input → PlayStation" adds up the whole way from your input to the PlayStation fetching it. Plus "Release all keys", "Pause" and "Reconnect".
 - **Input:** keyboards, mice, touchpads and touchscreens, grouped per device, selected ones first; "Identify" marks the device you are typing on. The keyboard type (ISO or ANSI), mouse sensitivity and acceleration with a curve preview (the default is the raw values), and the touchpad settings.
 - **Triggers:** how you switch between desktop and PlayStation: a key combination, a mouse button (`Mouse4`, `Mouse5`), *Hold* (bridge on only while pressed) or *Double tap* (while the bridge is on, both taps also reach the PlayStation); each with the action Toggle, Switch on, Switch off, Pause or Release all (lets go of everything on the PlayStation, also a button the mouse still reports held). "Record" takes over the combination you press. Also the window rule (see below).
-- **Board:** address and key, connection state, "Open web interface".
+- **Board:** the boards in the network ("Search"; a tap takes one's address), address and key, connection state, "Open web interface". If the board gets another address from the router, the app finds it again by its MAC address and switches over by itself.
 - **Latency:** what the board measures on its way from the network to the PlayStation (see [docs/latency.md](docs/latency.md)), and its clock speed; "Start over" resets the statistics.
 - **Firmware & updates:** installed and newest version of app and board firmware, and "Install via USB".
 - **Tray icon:** grey = board not reachable, blue = ready, green = bridge on. A click toggles; its menu has "Bridge on/off", "Show window", "Release all keys" and "Quit". A notification appears when the bridge switches.
@@ -189,6 +189,7 @@ The board's side, stage by stage with measurements and clock speeds: [docs/laten
 - [The status page says "normal priority"](docs/troubleshooting.md#the-status-page-says-normal-priority)
 - [The status page warns about the network adapter](docs/troubleshooting.md#the-status-page-warns-about-the-network-adapter)
 - [The board went back to the previous firmware after an update](docs/troubleshooting.md#the-board-went-back-to-the-previous-firmware-after-an-update)
+- [The search finds no board](docs/troubleshooting.md#the-search-finds-no-board)
 - **Forgot the web password:** hold the board's BOOTSEL button for 5 seconds while it runs, then let go. It restarts with factory settings (password, key and network settings are erased); set it up again from step 4 of the [Quick start](#quick-start).
 
 ## More documentation

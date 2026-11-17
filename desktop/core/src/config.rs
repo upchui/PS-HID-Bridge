@@ -159,6 +159,10 @@ impl Default for TouchpadConfig {
 pub struct Config {
     /// Board address, "192.168.1.50" or "192.168.1.50:45045".
     pub board: String,
+    /// MAC address of the board at `board` ("02:68:9d:96:c3:3d"; empty =
+    /// not known yet), learned from its discovery answer: the app finds the
+    /// board again when it got another address (crate::discover).
+    pub board_mac: String,
     /// Device selectors (path, "vvvv:pppp" or part of the name).
     pub devices: Vec<String>,
     pub triggers: Vec<TriggerConfig>,
@@ -189,6 +193,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             board: String::new(),
+            board_mac: String::new(),
             devices: Vec::new(),
             triggers: vec![TriggerConfig {
                 keys: "Ctrl+Alt+P".into(),
@@ -477,6 +482,7 @@ mod tests {
         let path = dir.join("config.toml");
         let mut c = Config {
             board: "192.168.1.50".into(),
+            board_mac: "02:68:9d:96:c3:3d".into(),
             devices: vec!["K400".into()],
             ..Default::default()
         };

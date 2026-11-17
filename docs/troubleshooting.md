@@ -35,3 +35,10 @@ A USB network adapter with the `cdc_ncm` driver holds every outgoing packet back
 ## The board went back to the previous firmware after an update
 
 A new firmware starts "on trial" and is only accepted once it has started by itself and reaches the network chip; otherwise the board returns to the previous version after a restart, and the app says so. A board without the partition table from the first installation cannot fall back. See [Firmware update over the network](advanced-setup.md#firmware-update-over-the-network).
+
+## The search finds no board
+
+- **Older firmware** does not answer the search. Enter the address by hand once (your router lists the board as `ps-hid-bridge-XXXXXX`) and update the firmware ("Firmware & updates"); from then on it answers.
+- **Another network:** PC and board must be in the same network (the search does not cross routers). A guest Wi-Fi or a separate VLAN often keeps devices apart.
+- **A firewall on the PC** (ufw, firewalld) drops answers to a broadcast. The app also asks every address of its network once, which gets through, but only in networks of up to 512 addresses (a /23). In a larger network allow UDP from port 45046 (`sudo ufw allow proto udp from any port 45046`) or enter the address by hand.
+- **Test** from a terminal: `pshb-cli discover` lists every board that answers; `pshb-cli discover --host 192.168.1.50` asks one address.

@@ -13,6 +13,7 @@
 #include "bootsel.h"
 #include "dhcp.h"
 #include "diag.h"
+#include "discovery.h"
 #include "flash_store.h"
 #include "net_shared.h"
 #include "ota.h"
@@ -36,6 +37,8 @@
 #define DHCP_POLL_US        10000
 #define WEB_IDLE_POLL_US    1000
 #define UDP_TOS_EF          0xB8  // DSCP Expedited Forwarding, like the app's packets
+// Discovery requests wait this long at most: the app listens for a second.
+#define DISCOVERY_POLL_US   20000
 #define BOOTSEL_POLL_MS     100
 #define FACTORY_RESET_HOLD_MS 5000
 // A firmware on trial is confirmed after core 1 ran this long (core1_main),
@@ -55,6 +58,7 @@ static uint8_t s_dhcp_buf[W5500_DHCP_RX_KB * 1024 + 260] __attribute__((aligned(
 static volatile bool s_dhcp_assigned;
 static volatile bool s_dhcp_conflict;
 static bool s_udp_open;
+static bool s_disc_open;  // the discovery socket (W5500_SOCK_DISCOVERY)
 static c1_state_t s_state = C1_NO_LINK;
 // The DHCP lease in use. Its address stays until the lease ends, also while
 // the server does not answer a renewal or the cable was out for a moment:
@@ -193,6 +197,7 @@ static void chip_check(void) {
     while (atomic_load(&g_net.udp_active) && !time_reached(until)) tight_loop_contents();
     if (!w5500_chip_setup()) return;  // tried again at the next check
     s_udp_open = false;
+    s_disc_open = false;
     s_lease = false;  // the address is gone with the reset
     atomic_store(&g_net.ip, 0);
     set_state(C1_NO_LINK);
@@ -268,6 +273,53 @@ static void network_service(void) {
             DHCP_init(W5500_SOCK_DHCP, s_dhcp_buf);  // clears the address
             set_state(C1_DHCP);
         }
+    }
+}
+
+// ---------------------------------------------------------------- discovery
+
+// Answers an app looking for boards (protocol/SPEC.md "Discovery") on its
+// own socket, polled here: no interrupt, so INTn and core 0's input path
+// stay as they are. Broadcasts are welcome on this socket.
+static void discovery_service(void) {
+    static absolute_time_t next_poll, next_open;
+    static pshb_discovery_limit_t limit;
+    // A datagram never exceeds the socket's 1 KB receive buffer: read in
+    // one piece, whatever its size.
+    static uint8_t req[1024];
+    // An input port set to the discovery port by older firmware (the web
+    // interface refuses it now) keeps it: no discovery then.
+    if (s_state != C1_READY || g_settings.udp_port == PSHB_DISCOVERY_PORT || !time_reached(next_poll)) return;
+    next_poll = make_timeout_time_us(DISCOVERY_POLL_US);
+    if (!s_disc_open) {
+        if (!time_reached(next_open)) return;
+        next_open = make_timeout_time_ms(UDP_REOPEN_MS);
+        if (socket(W5500_SOCK_DISCOVERY, Sn_MR_UDP, PSHB_DISCOVERY_PORT, SF_IO_NONBLOCK) != W5500_SOCK_DISCOVERY) {
+            printf("net: cannot open the discovery socket\n");
+            return;
+        }
+        s_disc_open = true;
+    }
+    if (getSn_RX_RSR(W5500_SOCK_DISCOVERY) == 0) return;
+    uint8_t ip[4];
+    uint16_t port;
+    int32_t n = recvfrom(W5500_SOCK_DISCOVERY, req, sizeof(req), ip, &port);
+    if (n <= 0) return;
+
+    pshb_discovery_info_t info = {0};
+    w5500_get_mac(info.mac);
+    pshb_board_name(info.mac, info.name, sizeof(info.name));
+    info.udp_port = g_settings.udp_port;
+    info.fw_version = PSHB_FW_VERSION;
+    if (g_settings.psk_set) info.flags |= PSHB_DISCOVERY_KEY_SET;
+    if (s_ip_mode == PSHB_IP_STATIC) info.flags |= PSHB_DISCOVERY_STATIC_IP;
+    if (g_bridge.no_partition_table) info.flags |= PSHB_DISCOVERY_NO_PARTITION_TABLE;
+    uint8_t answer[PSHB_DISCOVERY_LEN];
+    size_t len = pshb_discovery_answer(req, (size_t)n, &info, answer, sizeof(answer));
+    if (len && port != 0 && pshb_discovery_allow(&limit, time_us_64())) {
+        // Waits for the chip's ARP to the asker (fresh: it just sent this),
+        // at most the retry time (w5500_chip_setup).
+        sendto(W5500_SOCK_DISCOVERY, answer, (uint16_t)len, ip, port);
     }
 }
 
@@ -557,6 +609,7 @@ void core1_main(void) {
             if (ota_confirm_if_trial()) guard_confirmed();
         }
         network_service();
+        discovery_service();
         if (s_state == C1_READY && (web_server_busy() || time_reached(next_web))) {
             next_web = make_timeout_time_us(WEB_IDLE_POLL_US);
             web_server_service();
