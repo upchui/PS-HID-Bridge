@@ -54,6 +54,12 @@ DESKTOP_ARGS := $(RUST_ARGS) QT_VERSION QTBASE_SHA256 QTSHADERTOOLS_SHA256 QTDEC
                 APPIMAGE_RUNTIME_TAG APPIMAGE_RUNTIME_SHA256 APPIMAGE_RUNTIME_SHA256_AARCH64
 
 build_args = $(foreach v,$(1),--build-arg $(v)=$($(v)))
+# The versions.env keys each toolchain image is built with (see image-*
+# below; tools/image-inputs.sh asks for them with `make print-image-args`).
+IMAGE_ARGS_firmware := $(FW_ARGS)
+IMAGE_ARGS_rust     := $(RUST_ARGS)
+IMAGE_ARGS_desktop  := $(DESKTOP_ARGS)
+IMAGE_ARGS_apptest  := ALMA_TAG
 
 # $(call image,NAME,DOCKER BUILD ARGUMENTS[,PLATFORM]); the platform follows ARCH.
 ifeq ($(PREBUILT),1)
@@ -96,7 +102,7 @@ FW_RUN      = $(FW_DOCKER_RUN) $(FW_IMAGE)
         test-sim test-protocol test-uf2 sim udp-test fmt submodules check-pins check-version check-icons images \
         ui-shots \
         image-firmware image-rust image-desktop image-apptest print-version print-release-tag \
-        print-toolchain-tag \
+        print-toolchain-tag print-image-args \
         shell-fw shell-desktop clean distclean dirs
 
 help:
@@ -159,6 +165,9 @@ check-version:
 
 print-version:
 	@tools/version.sh
+
+print-image-args:
+	@echo $(IMAGE_ARGS_$(IMAGE))
 
 # desktop/ui/qml/Icons.qml and the web interface's icon sprite are generated
 # from desktop/ui/icons/*.svg by tools/gen_icons.py.

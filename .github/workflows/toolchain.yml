@@ -39,6 +39,8 @@ jobs:
           - { image: apptest, var: APPTEST_IMAGE, arch: aarch64, runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # earlier tags (reuse of unchanged images, below)
 
       # The Qt build needs about 20 GB; the runner image ships SDKs we do not use.
       - name: Free disk space
@@ -62,7 +64,27 @@ jobs:
           tag=${INPUT_TAG:-$(tools/toolchain-tag.sh)}
           suffix=""
           [ "$ARCH" = x86_64 ] || suffix="-$ARCH"
-          ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pshb-$IMAGE:$tag$suffix"
+          prefix="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pshb-$IMAGE"
+          ref="$prefix:$tag$suffix"
+          # There already (e.g. a run after another image failed): done.
+          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "$ref exists"
+            exit 0
+          fi
+          # Built from the same inputs under an earlier tag: the very same
+          # image, so it gets this tag too, without a rebuild or a single
+          # download (all images keep one tag; tools/image-inputs.sh).
+          want=$(tools/image-inputs.sh "$IMAGE" "$ARCH")
+          for commit in $(git log --format=%H -n 50 -- docker versions.env); do
+            [ "$(tools/image-inputs.sh "$IMAGE" "$ARCH" "$commit")" = "$want" ] || continue
+            old="$prefix:$(tools/toolchain-tag.sh "$commit")$suffix"
+            [ "$old" != "$ref" ] || continue
+            if docker buildx imagetools inspect "$old" >/dev/null 2>&1; then
+              docker buildx imagetools create --tag "$ref" "$old"
+              echo "::notice::$IMAGE ($ARCH): same inputs as $old, tagged $ref without a rebuild"
+              exit 0
+            fi
+          done
           # The source label links the package to this repository.
           make "image-$IMAGE" "$VAR=$ref" ARCH="$ARCH" QT_JOBS=4 REPO_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
           docker push "$ref"
