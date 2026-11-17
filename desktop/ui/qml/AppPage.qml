@@ -53,6 +53,19 @@ Item {
             }
         }
 
+        // Settings that could not be written: on every page, so it shows
+        // where the change was made. It goes once a save works again.
+        Banner {
+            Layout.maximumWidth: Style.maxWidth
+            Layout.alignment: Qt.AlignHCenter
+            Layout.leftMargin: Style.pad
+            Layout.rightMargin: Style.pad
+            Layout.bottomMargin: Style.gap
+            kind: "error"
+            visible: AppController.saveError !== ""
+            text: AppController.saveError
+        }
+
         Controls.ScrollView {
             id: scroll
             Layout.fillWidth: true

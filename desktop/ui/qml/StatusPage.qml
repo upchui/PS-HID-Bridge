@@ -109,6 +109,13 @@ AppPage {
         }
     }
     Banner {
+        kind: "warn"
+        visible: AppController.counterError !== ""
+        text: "The packet counter cannot be saved (" + AppController.counterError + "). Input still works; "
+              + "free up disk space or fix the folder's permissions, the app keeps trying. Until then, a restart "
+              + "with the computer's clock set back could reuse values that protect your input."
+    }
+    Banner {
         // Green for the offer and progress, yellow when something failed.
         kind: AppController.updateStatus !== "" && AppController.updateLevel === "warn" ? "warn" : "ok"
         visible: AppController.appUpdateAvailable || AppController.boardUpdateAvailable
@@ -198,7 +205,9 @@ AppPage {
                         Layout.fillWidth: true
                         color: Style.muted
                         wrapMode: Text.WordWrap
-                        text: AppController.active ? "Mouse and keyboard go to the PlayStation."
+                        text: AppController.active && AppController.devicesOpen === 0
+                              ? "No keyboard or mouse selected: nothing goes to the PlayStation (Input page)."
+                              : AppController.active ? "Mouse and keyboard go to the PlayStation."
                               : AppController.connected ? "Mouse and keyboard belong to the desktop."
                               : AppController.boardAddress === "" ? "Set up the board first."
                               : "Waiting for the board …"

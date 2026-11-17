@@ -92,6 +92,10 @@ pub mod qobject {
         #[qproperty(QString, live_text)]
         #[qproperty(QString, live_device)]
         #[qproperty(QString, last_error)]
+        /// Settings that could not be written; stays until a save works.
+        #[qproperty(QString, save_error)]
+        /// The packet counter cannot be saved (from the service status).
+        #[qproperty(QString, counter_error)]
         #[qproperty(bool, access_busy)]
         #[qproperty(QString, access_message)]
         #[qproperty(QString, version)]
@@ -310,6 +314,8 @@ pub struct AppControllerRust {
     live_text: QString,
     live_device: QString,
     last_error: QString,
+    save_error: QString,
+    counter_error: QString,
     access_busy: bool,
     access_message: QString,
     version: QString,
@@ -446,6 +452,8 @@ impl Default for AppControllerRust {
             live_text: QString::default(),
             live_device: QString::default(),
             last_error: QString::default(),
+            save_error: QString::default(),
+            counter_error: QString::default(),
             access_busy: false,
             access_message: QString::default(),
             version: QString::from(pshb_core::VERSION),
@@ -573,12 +581,21 @@ fn usb_text(p: &Pong) -> &'static str {
 }
 
 impl qobject::AppController {
-    fn save_config(mut self: Pin<&mut Self>) {
+    /// Write the settings; false if that failed. The failure stays shown
+    /// (`save_error`, on every page) until a save works: `last_error` is
+    /// cleared by every service start, and a lost change must not look
+    /// saved.
+    fn save_config(mut self: Pin<&mut Self>) -> bool {
         let path = config::config_path();
-        if let Err(e) = self.config_ref().save(&path) {
-            self.as_mut()
-                .set_last_error(QString::from(&format!("Settings: {e}")));
-        }
+        let result = self.config_ref().save(&path);
+        let text = match &result {
+            Ok(()) => QString::default(),
+            Err(e) => QString::from(&format!(
+                "Settings could not be saved: {e}. Changes apply only until the app closes."
+            )),
+        };
+        self.as_mut().set_save_error(text);
+        result.is_ok()
     }
 
     fn config_ref(&self) -> &Config {
@@ -640,6 +657,10 @@ impl qobject::AppController {
             stop_service(slot);
             return;
         }
+        // The old service is let go on the start thread: from now on nothing
+        // is on or connected until the new one says so (a host name lookup
+        // can take seconds).
+        self.as_mut().apply_status(ServiceStatus::default());
         self.as_mut().set_status_text(QString::from("Connecting …"));
         let events = self.qt_thread();
         let done = self.qt_thread();
@@ -656,7 +677,7 @@ impl qobject::AppController {
                 .and_then(|(key, board)| {
                     addr = Some(board);
                     let sink = Box::new(move |ev: ServiceEvent| {
-                        let _ = events.queue(move |obj| obj.on_service_event(ev));
+                        let _ = events.queue(move |obj| obj.on_service_event(generation, ev));
                     });
                     let sc = ServiceConfig {
                         config: cfg,
@@ -789,6 +810,8 @@ impl qobject::AppController {
             self.as_mut().schedule_name_check(generation);
         }
         self.as_mut().set_connected(st.connected);
+        self.as_mut()
+            .set_counter_error(QString::from(st.counter_error.as_deref().unwrap_or("")));
         self.as_mut().set_active(st.active);
         self.as_mut().set_pending(st.pending);
         self.as_mut().set_paused(st.paused);
@@ -889,7 +912,12 @@ impl qobject::AppController {
         }
     }
 
-    fn on_service_event(mut self: Pin<&mut Self>, ev: ServiceEvent) {
+    fn on_service_event(mut self: Pin<&mut Self>, generation: u64, ev: ServiceEvent) {
+        // From a service already replaced or stopped (still queued, or sent
+        // while it was let go): it would show its state as the current one.
+        if !self.rust().slot.is_current(generation) {
+            return;
+        }
         match ev {
             ServiceEvent::Status(st) => self.as_mut().apply_status(*st),
             ServiceEvent::Notice(n) => {
@@ -951,27 +979,44 @@ impl qobject::AppController {
             return QString::from(&e);
         }
         let psk = String::from(psk);
-        if !psk.trim().is_empty() {
+        let key_path = config::psk_path();
+        let new_key = if !psk.trim().is_empty() {
             match parse_key_hex(&psk) {
-                Ok(k) => {
-                    if let Err(e) = config::save_psk(&config::psk_path(), &k) {
-                        return QString::from(&e);
-                    }
-                }
+                Ok(k) => Some(k),
                 Err(e) => return QString::from(&e),
             }
-        } else if !config::psk_path().exists() {
+        } else if !key_path.exists() {
             return QString::from("Please paste the key from the board's web interface.");
+        } else {
+            None
+        };
+        // Address and key are saved together or not at all: a new key with
+        // the old address (or the other way round) would not connect at the
+        // next start.
+        let old_key = new_key.and_then(|_| config::load_psk(&key_path).ok());
+        if let Some(k) = &new_key {
+            if let Err(e) = config::save_psk(&key_path, k) {
+                return QString::from(&e);
+            }
+        }
+        let old_board = std::mem::replace(&mut self.as_mut().rust_mut().config.board, address.clone());
+        if !self.as_mut().save_config() {
+            self.as_mut().rust_mut().config.board = old_board;
+            if new_key.is_some() {
+                let _ = match &old_key {
+                    Some(k) => config::save_psk(&key_path, k),
+                    None => std::fs::remove_file(&key_path).map_err(|e| e.to_string()),
+                };
+            }
+            return self.save_error().clone();
         }
         // An error of the old settings would read as the new ones' result.
         self.as_mut().set_last_error(QString::default());
-        if self.config_ref().board != address {
+        if old_board != address {
             // The latency page shows the new board's figures only.
             self.as_mut().set_board_info_json(QString::default());
             self.as_mut().set_board_info_error(QString::default());
         }
-        self.as_mut().rust_mut().config.board = address;
-        self.as_mut().save_config();
         self.as_mut().publish_config();
         self.as_mut().restart_service();
         QString::default()
@@ -1215,8 +1260,12 @@ impl qobject::AppController {
                 return QString::from(&e);
             }
         }
-        self.as_mut().rust_mut().config.triggers = triggers;
-        self.as_mut().save_config();
+        let old = std::mem::replace(&mut self.as_mut().rust_mut().config.triggers, triggers);
+        if !self.as_mut().save_config() {
+            // Not saved, not used: the page keeps the edit and shows why.
+            self.as_mut().rust_mut().config.triggers = old;
+            return self.save_error().clone();
+        }
         self.as_mut().publish_config();
         self.as_mut().restart_service();
         QString::default()
@@ -1247,9 +1296,12 @@ impl qobject::AppController {
 
     pub fn set_mouse(mut self: Pin<&mut Self>, sensitivity: f64, accel: f64) {
         {
+            // On the sliders' steps: "1.00x" is exactly 1 (raw input), not
+            // 1.0000000000000002 from the slider's arithmetic.
+            let (s, a) = (config::SENSITIVITY_RANGE, config::ACCEL_RANGE);
             let m = &mut self.as_mut().rust_mut().config.mouse;
-            m.sensitivity = sensitivity.clamp(0.1, 8.0);
-            m.accel = accel.clamp(0.0, 1.0);
+            m.sensitivity = round_to(sensitivity, 0.05).clamp(s.0, s.1);
+            m.accel = round_to(accel, 0.01).clamp(a.0, a.1);
         }
         self.as_mut().save_config();
         self.as_mut().publish_config();
@@ -1260,7 +1312,8 @@ impl qobject::AppController {
     pub fn set_touchpad(mut self: Pin<&mut Self>, speed: f64, tap: bool, natural: bool) {
         {
             let t = &mut self.as_mut().rust_mut().config.touchpad;
-            t.speed = speed.clamp(0.1, 8.0);
+            let r = config::TOUCH_SPEED_RANGE;
+            t.speed = round_to(speed, 0.05).clamp(r.0, r.1);
             t.tap_to_click = tap;
             t.natural_scroll = natural;
         }
@@ -1796,7 +1849,10 @@ impl cxx_qt::Initialize for qobject::AppController {
             let handle = tray::spawn(self.qt_thread());
             self.as_mut().rust_mut().tray = handle;
             self.as_mut().restart_focus_watcher();
-            if self.config_ref().setup_done {
+            // Also with a board set but the setup not finished (set with
+            // pshb-cli, or the wizard closed early): the wizard's board step
+            // shows whether it answers, as after "Connect".
+            if self.config_ref().setup_done || !self.config_ref().board.is_empty() {
                 self.as_mut().restart_service();
             }
             self.as_mut().set_can_update_app(appimage_path().is_some());
@@ -1897,6 +1953,13 @@ fn stop_service(slot: Arc<ServiceSlot>) {
         let service = slot.service.lock().unwrap().take();
         drop(service);
     });
+}
+
+/// `v` on a grid of `step` (a slider's), without the float residue of the
+/// slider's own arithmetic.
+fn round_to(v: f64, step: f64) -> f64 {
+    let steps = 1.0 / step;
+    (v * steps).round() / steps
 }
 
 /// Form of a board address: IP, IP:port, host name or host name:port.

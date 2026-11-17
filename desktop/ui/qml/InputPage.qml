@@ -10,6 +10,13 @@ AppPage {
     subtitle: "Selected devices go to the PlayStation while the bridge is on; all others stay with the desktop."
 
     Component.onCompleted: AppController.refreshDevices()
+    // A slider let go just before leaving the page: still saved.
+    Component.onDestruction: {
+        if (applyMouse.running)
+            applyMouse.triggered();
+        if (applyTouch.running)
+            applyTouch.triggered();
+    }
 
     Card {
         title: "Devices"
@@ -81,6 +88,7 @@ AppPage {
                 from: 0.1
                 to: 8
                 stepSize: 0.05
+                snapMode: Controls.Slider.SnapAlways  // exactly 1.00x again: raw input
                 value: AppController.sensitivity
                 onMoved: applyMouse.restart()
             }
@@ -100,6 +108,7 @@ AppPage {
                 from: 0
                 to: 1
                 stepSize: 0.01
+                snapMode: Controls.Slider.SnapAlways
                 value: AppController.accel
                 onMoved: applyMouse.restart()
             }
@@ -156,6 +165,7 @@ AppPage {
                 from: 0.1
                 to: 8
                 stepSize: 0.05
+                snapMode: Controls.Slider.SnapAlways
                 value: AppController.touchpadSpeed
                 onMoved: applyTouch.restart()
             }

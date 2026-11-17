@@ -59,6 +59,8 @@ Main {
         C.adapterMode = "delaying";
         C.adapterDelayMs = 0.4;
         C.lastError = "Window rule not available: the KWin script could not be loaded (org.kde.KWin.Scripting: no such object)";
+        C.saveError = "Settings could not be saved: /home/someone/.config/ps-hid-bridge/config.toml: No space left on device (os error 28). Changes apply only until the app closes.";
+        C.counterError = "No space left on device (os error 28)";
         C.latestVersion = "1.10.123";
         C.appUpdateAvailable = true;
         C.boardUpdateAvailable = true;

@@ -12,6 +12,7 @@ AppPage {
     property int step: 0
     readonly property var titles: ["Welcome", "Board", "Devices", "Trigger", "Test"]
     property string boardError: ""
+    property string devicesError: ""
 
     onStepChanged: {
         // A recording on the trigger step must not take the keys of the
@@ -54,6 +55,14 @@ AppPage {
                     if (page.boardError !== "")
                         return;
                     psk.text = "";
+                } else if (page.step === 1 && AppController.boardAddress === "") {
+                    // Without a board nothing could reach the PlayStation.
+                    page.boardError = "Please enter the board's address and key.";
+                    return;
+                }
+                if (page.step === 2 && deviceList.selectedCount === 0) {
+                    page.devicesError = "Please select at least one keyboard or mouse: only selected devices go to the PlayStation.";
+                    return;
                 }
                 if (page.step === 3 && !triggers.save())
                     return;
@@ -252,7 +261,14 @@ AppPage {
                 icon: "input"
                 subtitle: "Select what should go to the PlayStation."
                 DeviceList {
+                    id: deviceList
                     Layout.fillWidth: true
+                    onSelectedCountChanged: page.devicesError = ""
+                }
+                Banner {
+                    kind: "error"
+                    visible: page.devicesError !== ""
+                    text: page.devicesError
                 }
             }
             Card {
