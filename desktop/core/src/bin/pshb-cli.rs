@@ -477,8 +477,8 @@ fn cmd_run(
         eprintln!(
             "Note: the network adapter {iface} holds every packet back up to about {ms:.1} ms before \
              sending it (USB adapter, cdc_ncm). Set up once (as root) so that the app may switch \
-             that off while it runs: the app's Latency page (\"Set up\"), or see the README \
-             (section \"Latency\").",
+             that off while it runs: the app's Latency page (\"Set up\"), or by hand, see \
+             docs/latency-pc.md (section \"USB network adapters\").",
             iface = d.iface,
             ms = 3.0 * d.timer_us as f64 / 1000.0,
         );

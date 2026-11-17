@@ -120,6 +120,17 @@ rated for.
 Decrypting one packet takes 24.8 µs there (33 µs at 150 MHz). With that
 setting both latency targets are met.
 
+What that is worth to the player: the PlayStation fetches every millisecond,
+so an input waits half a millisecond on average for its fetch. Inputs arrive
+at random times within that millisecond, so the 12–16 µs saved (median) move
+that average by the same 12–16 µs, about 1.5 % of a frame: an input that would
+have just missed a fetch now makes it. A missed fetch does not double the
+time, the input takes the next one, and that is already in the average.
+Missed polls (a report not ready in time) are 0 at 150 MHz too. The clock
+speed is worth setting once the PC's side is in order: a cable, the network
+adapter (up to 3 × 400 µs) and real-time priority (README, "What helps how
+much") weigh far more.
+
 The median of "packet → fetched" (500–800 µs) depends on where the test
 sender's packets fall within the PlayStation's frame (both run at 1 kHz); for
 input at random times the average is half a frame plus the lead, now about

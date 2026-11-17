@@ -16,15 +16,20 @@ Remote Play only carries controller input: a game that supports mouse and keyboa
 So the input adds next to nothing to what you see. The app's status page shows the time measured on your setup live (tile "Input → PlayStation", see [Latency](#latency)).
 
 - **Safe, also in a shared network:** in a student hall, a shared flat or at a LAN party, any device in the network could otherwise send key presses to your PlayStation or read what you type on it (including passwords). The input travels encrypted with a key that only your PC and your board know: nobody else can control your PlayStation, read your input or replay it. What this covers and what not: [docs/security.md](docs/security.md).
-- **Fails safe:** if no valid input arrives for 250 ms, the board lets go of every key. `Ctrl+Alt+Shift+Esc` always gives mouse and keyboard back to the PC and lets go of everything on the PlayStation.
+- **Fails safe:** if no valid input arrives for 250 ms, the board lets go of every key, so a dropped network never leaves your character running. `Ctrl+Alt+Shift+Esc` always gives mouse and keyboard back to the PC and lets go of everything on the PlayStation. What happens when the network, the app or the board fails: [When something goes wrong](docs/security.md#when-something-goes-wrong).
 - **Status:** version 1.0 works on real hardware (WIZnet W5500-EVB-Pico2 on a PlayStation 5, desktop app on Linux), and every part is tested automatically on each commit ([docs/development.md](docs/development.md)).
 
 ## How it works
 
-1. The desktop app takes over the selected mouse and keyboard, so the desktop no longer reacts to them while the bridge is on.
-2. It encrypts the input with your key and sends it over your network to the board.
-3. The board checks and decrypts it and passes it on to the PlayStation through USB.
-4. The PlayStation sees an ordinary keyboard and mouse. The controller keeps working through Remote Play.
+Your input travels through three stations:
+
+| Station | Hardware | What happens to your input | What you set up there |
+|---|---|---|---|
+| **1. The PC** (sender) | your Linux PC with mouse and keyboard | the app takes over the selected mouse and keyboard (the desktop no longer reacts to them while the bridge is on), encrypts every input with your key and sends it over your network | the app and its setup wizard |
+| **2. The board** (bridge) | the W5500-EVB-Pico2: network cable to your router, USB cable to the PlayStation | it checks that the packet comes from your PC, decrypts it and turns it into what a USB keyboard and mouse send | the firmware once, then in its web interface your password and the key |
+| **3. The PlayStation** (receiver) | its USB port | it fetches the keyboard and mouse state from the board once per millisecond, as from any USB keyboard and mouse | keyboard language, USB power in rest mode |
+
+The controller keeps working through Remote Play.
 
 ## What you need
 
@@ -57,12 +62,23 @@ Optional:
 
 ## Quick start
 
+Station by station, as in [How it works](#how-it-works).
+
+**Station 2, the board** (first, the other two need it):
+
 1. **Get the files:** download them from the [latest release](https://github.com/upchui/PS-HID-Bridge/releases/latest), or build them yourself with `make submodules && make all` (see [Building](docs/development.md#building); the first run takes long because of Qt).
-2. **Flash the board:** hold BOOTSEL and plug the board into the PC via USB; the drive `RP2350` appears. First copy `ps-hid-bridge-pt.uf2` onto it (partition table; the board comes back as a drive afterwards), then `ps-hid-bridge.uf2`. Or let the app do it (setup wizard or "Firmware & updates" → "Install via USB").
+2. **Flash the board:** hold BOOTSEL and plug the board into the PC via USB; the drive `RP2350` appears. First copy `ps-hid-bridge-pt.uf2` onto it (the board comes back as a drive afterwards), then `ps-hid-bridge.uf2`. Or let the app do it (setup wizard or "Firmware & updates" → "Install via USB").
+   The first file is the partition table: it divides the board's memory into two places for the firmware and one for your settings. An update over the network then goes into the free place, and if the new firmware does not start properly, the board returns to the previous one. Without it, every update overwrites the running firmware.
 3. **Connect the board:** network cable, USB to the PlayStation. Look up the IP in your router (`ps-hid-bridge-XXXXXX`) and open it in the browser.
 4. **Web interface:** log in with `ps-hid-bridge`, set your own password, generate a key under "Security".
+
+**Station 1, the PC:**
+
 5. **App:** start `PS-HID-Bridge-x86_64.AppImage`. The wizard asks for the board address and key, the devices, the keyboard type and the trigger.
-6. **PlayStation:** set the keyboard language to the layout of your keyboard (see [Keyboard layout](#keyboard-layout)) and switch on USB power in rest mode in the power saving settings.
+
+**Station 3, the PlayStation:**
+
+6. **Settings:** set the keyboard language to the layout of your keyboard (see [Keyboard layout](#keyboard-layout)) and switch on USB power in rest mode in the power saving settings.
 
 Every commit on `main` becomes a release on the [releases page](https://github.com/upchui/PS-HID-Bridge/releases) with the AppImage, the command line tool and the firmware.
 
@@ -143,13 +159,24 @@ The input path takes about 1–2 ms from a key press or mouse movement to the Pl
 
 The tile "Input → PlayStation" on the status page adds up the medians measured on your setup. Not included: the time until the PC fetches the input from the mouse or keyboard (their own USB polling).
 
-What the app does by itself (details, how to do it by hand and how to measure: [docs/latency-pc.md](docs/latency-pc.md)):
+### The PlayStation's poll
 
-- **Real-time priority** for the part of the app that reads the devices and sends the packets: through rtkit, which desktops with PipeWire usually have, or directly if the user may use real-time scheduling, e.g. via a `realtime` group. If neither works, the status page says "normal priority".
-- **Processor sleep:** while the bridge is on, idle cores stay out of the deep sleep states that take long to wake up from (switch it off on the Latency page, "This PC"). Where the system does not allow that, "Set up" on the Latency page does once (administrator password).
-- **Network:** packets are marked as urgent, so Wi-Fi sends them first. A cable is still better: connect the PC and the PlayStation by cable and the board to the same switch.
-- **USB network adapters** (many USB-C docks and USB Ethernet adapters) hold every outgoing packet back by up to about a millisecond. The app switches that off while it runs and back when it is closed; "Set up" on the status page allows it once (administrator password).
-- **Undo:** "Undo" on the Latency page ("This PC", administrator password) removes these system settings again.
+The PlayStation fetches the board's report once per millisecond. An input that is ready waits for the next fetch: half a millisecond on average, anything from nothing to a full millisecond depending on when it arrives. Every microsecond saved before that moves the average by one microsecond, because some inputs now catch an earlier fetch; nothing doubles when an input just misses one, it simply takes the next. What you feel more than single microseconds is a delay that comes and goes: then the same movement sometimes makes a fetch and sometimes not, and aiming feels uneven. So steady matters more than fast.
+
+### What helps how much
+
+Largest effect first. The app does most of it by itself; details, how to do it by hand and how to measure: [docs/latency-pc.md](docs/latency-pc.md).
+
+| What | Effect | Where |
+|---|---|---|
+| **PC on a cable** instead of Wi-Fi | PC → board 0.1–0.2 ms, and steady; Wi-Fi varies with everything else on the air (the app marks its packets as urgent, which helps but does not make it a cable) | connect the PC and the PlayStation by cable, the board to the same switch |
+| **USB network adapter** (many USB-C docks and USB Ethernet adapters) | they hold every packet back to bundle it, up to 3 × 400 µs; the app switches that off while it runs | "Set up" when the status page warns about it (administrator password, once) |
+| **Real-time priority** | input → network stays at about 0.1 ms (99 % below 0.3 ms) also when every core is busy | automatic through rtkit; the status page says "normal priority" if it is missing, see [troubleshooting](docs/troubleshooting.md#the-status-page-says-normal-priority) |
+| **Processor kept awake** while the bridge is on | the slowest wake-up of a core drops from about 290 to 45 µs | on by default; Latency page, "This PC" ("Set up" once where the system does not allow it) |
+| **Mouse at 1000 Hz** | the mouse's own part is 0.5 ms on average; higher rates gain little here and can lose motion, see [Compatibility and limits](#compatibility-and-limits) | the mouse's own software |
+| **Board at 200 MHz with fast SPI** | the board's part drops from 52–56 to 40 µs (median) and from about 106 to 78 µs for 99 % of the packets; beyond the processor's rating, if a board does not run stably it goes back to 150 MHz by itself | Latency page, "Clock speed" (the board restarts; not while the bridge is on) |
+
+**For competitive play:** PC on a cable; no warning about the network adapter on the status page (or "Set up" done); "real-time priority" and "CPU kept awake" on the status page; the mouse at 1000 Hz; then, if you like, the board's clock. "Undo" on the Latency page ("This PC", administrator password) removes the system settings the app made.
 
 The board's side, stage by stage with measurements and clock speeds: [docs/latency.md](docs/latency.md).
 
