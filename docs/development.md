@@ -54,7 +54,7 @@ GitHub Actions builds on GitHub-hosted runners with the same Makefile:
 
 ## Testing without a board
 
-`make sim` starts a board simulator: input on UDP port 45045, web interface at http://localhost:8080. It uses the same core as the firmware and prints text lines instead of USB reports (`KBD …`, `MOUSE …`); its settings are kept in `.cache/sim/flash.bin`. Connect the app or `pshb-cli` with the address `127.0.0.1`.
+`make sim` starts a board simulator: input on UDP port 45045, web interface at http://localhost:8080. It uses the same core as the firmware and prints text lines instead of USB reports (`KBD …`, `MOUSE …`); its settings are kept in `.cache/sim/flash.bin`. Connect the app or `pshb-cli` with the address `127.0.0.1`. The app reaches the input side only: its board pages (Latency, clock, board update) use port 80, so against the simulator use `pshb-cli … --http-port 8080` for those.
 
 Test traffic to a board or to the simulator:
 

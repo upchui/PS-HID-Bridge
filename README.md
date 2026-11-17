@@ -84,9 +84,9 @@ Every commit on `main` becomes a release on the [releases page](https://github.c
 
 ## Using the app
 
-The AppImage runs on current Linux systems under Wayland and X11. It follows the desktop's light or dark mode; the switch at the bottom of the sidebar picks light, automatic or dark. Changes are saved as soon as they are valid, there is no "Save" button.
+The AppImage runs on current Linux systems under Wayland and X11. It follows the desktop's light or dark mode; the switch at the bottom of the sidebar picks light, automatic or dark. Changes are saved as soon as they are valid; only the board's address and key wait for "Save and connect" (in the wizard: "Next").
 
-- **Wizard** on first start: board (address, key, connection test; or first install the firmware over USB) → devices and keyboard type → trigger → live test that shows what reaches the PlayStation. "Run setup again" in the sidebar starts it again.
+- **Wizard** on first start: welcome (with the firmware install over USB for a new board) → board (address, key, connection test) → devices and keyboard type → trigger → live test that shows what reaches the PlayStation. "Run setup again" in the sidebar starts it again.
 - **Status:** bridge on/off, the keys that currently go to the PlayStation, the board and the PlayStation (connected or in rest mode), the network latency to the board and how long the PC takes with your input. The tile "Input → PlayStation" adds up the whole way from your input to the PlayStation fetching it. Plus "Release all keys", "Pause" and "Reconnect".
 - **Input:** keyboards, mice, touchpads and touchscreens, grouped per device, selected ones first; "Identify" marks the device you are typing on. The keyboard type (ISO or ANSI), mouse sensitivity and acceleration with a curve preview (the default is the raw values), and the touchpad settings.
 - **Triggers:** how you switch between desktop and PlayStation: a key combination, a mouse button (`Mouse4`, `Mouse5`), *Hold* (bridge on only while pressed) or *Double tap* (while the bridge is on, both taps also reach the PlayStation); each with the action Toggle, Switch on, Switch off, Pause or Release all (lets go of everything on the PlayStation, also a button the mouse still reports held). "Record" takes over the combination you press. Also the window rule (see below).
