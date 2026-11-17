@@ -100,6 +100,8 @@ pub struct ServiceStatus {
     pub cpu_wake: CpuWakeState,
     /// The network adapter towards the board, if it can bundle packets.
     pub adapter: Option<AdapterStatus>,
+    /// The packet counter cannot be saved (disk full, read-only).
+    pub counter_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -519,6 +521,7 @@ impl Runner {
             input_resyncs: self.inputs.resyncs(),
             cpu_wake: self.cpu.state(),
             adapter: self.adapter.status(),
+            counter_error: self.link.counter_error(),
         };
         if status != self.last_status {
             self.last_status = status.clone();

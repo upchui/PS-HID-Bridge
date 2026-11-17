@@ -63,7 +63,25 @@ struct DiskState {
     attempted: u64,
     /// Floor known to be on disk.
     stored: u64,
+    /// Why the last write failed (cleared by the next one that works).
+    error: Option<String>,
     stop: bool,
+}
+
+/// A failed write is tried again this often, not only at the next floor.
+const RETRY_FAILED: Duration = Duration::from_secs(1);
+
+/// Whether the counter's floor reaches the disk (see [`TxCounter::health`]):
+/// readable from another thread than the one sending.
+#[derive(Clone)]
+pub struct CounterHealth(Arc<DiskShared>);
+
+impl CounterHealth {
+    /// Why the floor could not be saved, while that lasts. Meanwhile a
+    /// restart with the clock gone back could repeat counter values.
+    pub fn error(&self) -> Option<String> {
+        self.0.state.lock().unwrap().error.clone()
+    }
 }
 
 pub fn unix_us() -> u64 {
@@ -83,7 +101,7 @@ fn persist(path: &Path, floor: u64) -> io::Result<()> {
     Ok(())
 }
 
-fn warn(e: io::Error) {
+fn warn(e: &io::Error) {
     // Not fatal: the clock-based counter keeps working; only a clock going
     // backwards across restarts is no longer covered.
     eprintln!("Warning: could not save the packet counter: {e}");
@@ -99,13 +117,7 @@ const LOCK_RETRY: Duration = Duration::from_millis(500);
 /// tried again for a short while before another program is blamed.
 fn lock(path: &Path) -> io::Result<File> {
     let lock_path = path.with_extension("lock");
-    let until = Instant::now() + LOCK_RETRY;
-    let mut result = lockfile::exclusive(&lock_path);
-    while matches!(&result, Err(e) if e.kind() == io::ErrorKind::WouldBlock) && Instant::now() < until {
-        thread::sleep(Duration::from_millis(10));
-        result = lockfile::exclusive(&lock_path);
-    }
-    result.map_err(|e| {
+    retry_taken(|| lockfile::exclusive(&lock_path)).map_err(|e| {
         if e.kind() == io::ErrorKind::WouldBlock {
             io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -114,6 +126,35 @@ fn lock(path: &Path) -> io::Result<File> {
                      ({} is locked); close it first",
                     lock_path.display()
                 ),
+            )
+        } else {
+            e
+        }
+    })
+}
+
+/// `take` again for [`LOCK_RETRY`] while it finds the lock taken.
+fn retry_taken<T>(mut take: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    let until = Instant::now() + LOCK_RETRY;
+    let mut result = take();
+    while matches!(&result, Err(e) if e.kind() == io::ErrorKind::WouldBlock) && Instant::now() < until {
+        thread::sleep(Duration::from_millis(10));
+        result = take();
+    }
+    result
+}
+
+/// The counter is clock-based: two programs sending with the same key at
+/// the same time could pick the same value, i.e. the same nonce. The lock
+/// file above covers programs of one user; this covers the whole computer
+/// (another user, or `sudo pshb-cli` with the app's key file).
+pub fn lock_key(key: &[u8]) -> io::Result<std::os::unix::net::UnixDatagram> {
+    retry_taken(|| lockfile::key_lock(key)).map_err(|e| {
+        if e.kind() == io::ErrorKind::WouldBlock {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "another PS HID Bridge program on this computer (perhaps of another user) is already \
+                 sending with this key; close it first",
             )
         } else {
             e
@@ -153,6 +194,7 @@ impl Disk {
                 want: floor,
                 attempted: floor,
                 stored: floor,
+                error: None,
                 stop: false,
             }),
             cond: Condvar::new(),
@@ -192,7 +234,17 @@ impl DiskShared {
         let mut st = self.state.lock().unwrap();
         loop {
             while st.want <= st.attempted && !st.stop {
-                st = self.cond.wait(st).unwrap();
+                if st.error.is_none() {
+                    st = self.cond.wait(st).unwrap();
+                    continue;
+                }
+                // The last write failed: try again soon (disk full, file
+                // system read-only), not only when a new floor is due.
+                let (s, timeout) = self.cond.wait_timeout(st, RETRY_FAILED).unwrap();
+                st = s;
+                if timeout.timed_out() && st.error.is_some() && st.want > st.stored {
+                    st.attempted = st.stored;
+                }
             }
             if st.want <= st.attempted {
                 return; // stop requested and nothing left to write
@@ -203,8 +255,16 @@ impl DiskShared {
             st = self.state.lock().unwrap();
             st.attempted = floor;
             match result {
-                Ok(()) => st.stored = st.stored.max(floor),
-                Err(e) => warn(e),
+                Ok(()) => {
+                    st.stored = st.stored.max(floor);
+                    st.error = None;
+                }
+                Err(e) => {
+                    if st.error.is_none() {
+                        warn(&e); // once, not at every retry
+                    }
+                    st.error = Some(e.to_string());
+                }
             }
             self.cond.notify_all();
         }
@@ -239,6 +299,12 @@ impl TxCounter {
             floor,
             disk,
         })
+    }
+
+    /// For the status: whether the floor reaches the disk (None without a
+    /// counter file).
+    pub fn health(&self) -> Option<CounterHealth> {
+        self.disk.as_ref().map(|d| CounterHealth(d.shared.clone()))
     }
 
     pub fn next_value(&mut self) -> u64 {

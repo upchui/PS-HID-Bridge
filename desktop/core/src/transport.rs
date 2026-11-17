@@ -25,7 +25,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::clock;
-use crate::counter::TxCounter;
+use crate::counter::{CounterHealth, TxCounter};
 use crate::crypto::PacketKey;
 use crate::oneway::{OneWay, OneWayStats};
 use crate::protocol::{
@@ -180,6 +180,8 @@ struct Shared {
     /// resolution) and stay out of the statistics.
     session_since_us: AtomicU64,
     oneway: Mutex<OneWay>,
+    /// Whether the packet counter's floor reaches the disk.
+    counter_health: Option<CounterHealth>,
 }
 
 impl Shared {
@@ -207,6 +209,8 @@ impl Shared {
 pub struct Link {
     shared: Arc<Shared>,
     threads: Vec<JoinHandle<()>>,
+    /// Held while this link sends with its key (see counter::lock_key).
+    _key_lock: Option<std::os::unix::net::UnixDatagram>,
 }
 
 fn set_int_opt(
@@ -289,12 +293,20 @@ impl Link {
         sock.set_read_timeout(Some(Duration::from_secs(1)))?;
         let sock = Arc::new(sock);
         let now = Instant::now();
+        // Programs that keep a counter file are the real senders (tests run
+        // links side by side with one key and none).
+        let key_lock = match cfg.counter_store {
+            Some(_) => Some(crate::counter::lock_key(&cfg.key)?),
+            None => None,
+        };
+        let counter = TxCounter::new(cfg.counter_store.clone())?;
+        let counter_health = counter.health();
         let tx = Tx {
             sock: sock.clone(),
             board: cfg.board,
             last_reconnect: now,
             key: PacketKey::new(&cfg.key),
-            counter: TxCounter::new(cfg.counter_store.clone())?,
+            counter,
             heartbeat: cfg.heartbeat,
             interval: cfg.min_send_interval,
             current: KeyState::default(),
@@ -328,6 +340,7 @@ impl Link {
             latency: Mutex::new(VecDeque::new()),
             latency_total: AtomicU64::new(0),
             latency_cache: Mutex::new(None),
+            counter_health,
             timer_realtime: AtomicBool::new(false),
             timed_ping: AtomicBool::new(false),
             last_pong_us: AtomicU64::new(0),
@@ -356,6 +369,7 @@ impl Link {
         Ok(Self {
             shared,
             threads: vec![timer_thread, rx_thread],
+            _key_lock: key_lock,
         })
     }
 
@@ -441,6 +455,11 @@ impl Link {
     }
 
     /// Input latency over the most recent packets (None: no samples yet).
+    /// Why the packet counter cannot be saved, while that lasts.
+    pub fn counter_error(&self) -> Option<String> {
+        self.shared.counter_health.as_ref().and_then(|h| h.error())
+    }
+
     pub fn input_latency(&self) -> Option<LatencyStats> {
         let total = self.shared.latency_total.load(Ordering::Acquire);
         let mut cache = self.shared.latency_cache.lock().unwrap();
