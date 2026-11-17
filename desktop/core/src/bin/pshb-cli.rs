@@ -858,7 +858,7 @@ fn cmd_update(
         return Ok(());
     }
     let exe = std::env::current_exe().map_err(|e| format!("Own path: {e}"))?;
-    let data = update::download_verified(&latest, update::CLI_ASSET, &mut progress_printer("Download"))?;
+    let data = update::download_verified(&latest, &update::cli_asset(), &mut progress_printer("Download"))?;
     update::replace_file(&exe, &data).map_err(|e| format!("{}: {e}", exe.display()))?;
     println!("Updated {} from {v} to {}.", exe.display(), latest.version);
     Ok(())

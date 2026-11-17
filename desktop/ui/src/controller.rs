@@ -1435,7 +1435,7 @@ impl qobject::AppController {
             .spawn(move || {
                 let mut shown = 0;
                 let result =
-                    update::download_verified(&release, update::APPIMAGE_ASSET, &mut |got, total| {
+                    update::download_verified(&release, &update::appimage_asset(), &mut |got, total| {
                         let pct = (got * 100).checked_div(total).unwrap_or(0);
                         if pct >= shown + 5 {
                             shown = pct;

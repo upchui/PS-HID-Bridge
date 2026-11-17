@@ -1188,8 +1188,11 @@ mod tests {
             );
         }
         let got = board.run_for(Duration::from_millis(30));
+        // INPUT packets only: a slow machine (e.g. emulated ARM) may also
+        // see a heartbeat repeating the last state within the window.
         let keys: Vec<u8> = got
             .iter()
+            .filter(|(t, ..)| *t == PacketType::Input)
             .map(|(_, p, _)| p.keys[0])
             .filter(|k| *k != 0)
             .collect();

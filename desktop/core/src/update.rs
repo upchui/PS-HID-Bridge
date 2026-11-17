@@ -20,8 +20,26 @@ use blake2::digest::{FixedOutput, Update};
 use sha2::{Digest, Sha256};
 
 pub const REPO: &str = "upchui/PS-HID-Bridge";
-pub const APPIMAGE_ASSET: &str = "PS-HID-Bridge-x86_64.AppImage";
-pub const CLI_ASSET: &str = "pshb-cli-x86_64-linux";
+
+/// The app's release file for this processor: an update stays on the same
+/// one ("PS-HID-Bridge-x86_64.AppImage", "PS-HID-Bridge-aarch64.AppImage").
+pub fn appimage_asset() -> String {
+    appimage_asset_for(std::env::consts::ARCH)
+}
+
+pub fn appimage_asset_for(arch: &str) -> String {
+    format!("PS-HID-Bridge-{arch}.AppImage")
+}
+
+/// The command line tool's release file for this processor
+/// ("pshb-cli-x86_64-linux", "pshb-cli-aarch64-linux").
+pub fn cli_asset() -> String {
+    cli_asset_for(std::env::consts::ARCH)
+}
+
+pub fn cli_asset_for(arch: &str) -> String {
+    format!("pshb-cli-{arch}-linux")
+}
 pub const FIRMWARE_ASSET: &str = "ps-hid-bridge.uf2";
 const SUMS_ASSET: &str = "SHA256SUMS";
 
@@ -554,6 +572,17 @@ pub fn board_ota(host: &str, http_port: u16, psk: &[u8; 32], image: &[u8]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_files_follow_the_processor() {
+        // x86_64 keeps the names every release had so far.
+        assert_eq!(appimage_asset_for("x86_64"), "PS-HID-Bridge-x86_64.AppImage");
+        assert_eq!(cli_asset_for("x86_64"), "pshb-cli-x86_64-linux");
+        assert_eq!(appimage_asset_for("aarch64"), "PS-HID-Bridge-aarch64.AppImage");
+        assert_eq!(cli_asset_for("aarch64"), "pshb-cli-aarch64-linux");
+        assert_eq!(appimage_asset(), appimage_asset_for(std::env::consts::ARCH));
+        assert_eq!(cli_asset(), cli_asset_for(std::env::consts::ARCH));
+    }
 
     #[test]
     fn versions() {

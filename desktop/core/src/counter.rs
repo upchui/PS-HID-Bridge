@@ -89,10 +89,23 @@ fn warn(e: io::Error) {
     eprintln!("Warning: could not save the packet counter: {e}");
 }
 
-/// Exclusive lock next to the counter file.
+/// How long a lock that seems taken is tried again (see [`lock`]).
+const LOCK_RETRY: Duration = Duration::from_millis(500);
+
+/// Exclusive lock next to the counter file. A lock let go a moment ago (a
+/// counter just dropped, e.g. when the service restarts) can still be held
+/// for an instant by a child process another thread is starting: it keeps a
+/// copy of the descriptor until it executes its program. So a taken lock is
+/// tried again for a short while before another program is blamed.
 fn lock(path: &Path) -> io::Result<File> {
     let lock_path = path.with_extension("lock");
-    lockfile::exclusive(&lock_path).map_err(|e| {
+    let until = Instant::now() + LOCK_RETRY;
+    let mut result = lockfile::exclusive(&lock_path);
+    while matches!(&result, Err(e) if e.kind() == io::ErrorKind::WouldBlock) && Instant::now() < until {
+        thread::sleep(Duration::from_millis(10));
+        result = lockfile::exclusive(&lock_path);
+    }
+    result.map_err(|e| {
         if e.kind() == io::ErrorKind::WouldBlock {
             io::Error::new(
                 io::ErrorKind::WouldBlock,
