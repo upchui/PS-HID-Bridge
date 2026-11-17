@@ -354,25 +354,41 @@ impl From<&str> for Failure {
     }
 }
 
+/// A request to the board that did not get through. A refused connection
+/// never reached the board's web server, so trying again is safe.
 fn ureq_failure(e: ureq::Error) -> Failure {
-    let again = matches!(&e, ureq::Error::Io(err) if err.kind() == io::ErrorKind::ConnectionRefused);
-    Failure {
-        msg: http_error(e),
-        again,
-    }
+    let refused = matches!(&e, ureq::Error::Io(err) if err.kind() == io::ErrorKind::ConnectionRefused);
+    let msg = if refused {
+        "The board refused the connection: it is restarting, or its web server is busy \
+         (it takes two connections at a time, an open web interface uses them too). \
+         Try again in a moment."
+            .to_string()
+    } else {
+        http_error(e)
+    };
+    Failure { msg, again: refused }
 }
 
-/// Runs `f` up to three times while the board was only busy. Two programs
-/// asking at once (two app windows, the app and pshb-cli) can find both of
-/// the board's HTTP sockets in use or take each other's challenge.
-fn retry<T>(mut f: impl FnMut() -> Result<T, Failure>) -> Result<T, String> {
+/// Tries per request while the board is only busy.
+const BOARD_TRIES: u32 = 6;
+
+/// Runs `f` up to `BOARD_TRIES` times (about 2 s) while the board was only
+/// busy. The board serves two HTTP connections at a time: the app's status
+/// requests, an open web interface and pshb-cli can find both in use, or two
+/// programs take each other's challenge.
+fn retry<T>(f: impl FnMut() -> Result<T, Failure>) -> Result<T, String> {
+    retry_pausing(
+        |attempt| std::thread::sleep(Duration::from_millis(150 * u64::from(attempt))),
+        f,
+    )
+}
+
+fn retry_pausing<T>(pause: impl Fn(u32), mut f: impl FnMut() -> Result<T, Failure>) -> Result<T, String> {
     let mut attempt = 0;
     loop {
         attempt += 1;
         match f() {
-            Err(fail) if fail.again && attempt < 3 => {
-                std::thread::sleep(Duration::from_millis(150 * attempt))
-            }
+            Err(fail) if fail.again && attempt < BOARD_TRIES => pause(attempt),
             result => return result.map_err(|fail| fail.msg),
         }
     }
@@ -514,17 +530,21 @@ pub fn board_ota(host: &str, http_port: u16, psk: &[u8; 32], image: &[u8]) -> Re
     let base = board_base(host, http_port);
     let agent = agent(Duration::from_secs(120), true);
     let nonce = retry(|| board_challenge(&agent, &base))?;
-    let mut resp = agent
-        .post(format!("{base}/api/ota"))
-        .header("Content-Type", "application/octet-stream")
-        .header("X-PSHB-CRC32", format!("{:x}", crc32(image)))
-        .header("X-PSHB-OTA-Hash", hex(&ota_hash(image)))
-        .header("X-PSHB-OTA-Auth2", hex(&ota_mac2(psk, &nonce, image)))
-        // For boards with firmware before 1.0.9; newer ones ignore it.
-        .header("X-PSHB-OTA-Auth", hex(&ota_mac(psk, &nonce, image)))
-        .header("X-PSHB-Nonce", hex(&nonce))
-        .send(image)
-        .map_err(http_error)?;
+    // A refused upload never reached the board: its challenge is still
+    // unused, and the same signed upload may go again.
+    let mut resp = retry(|| {
+        agent
+            .post(format!("{base}/api/ota"))
+            .header("Content-Type", "application/octet-stream")
+            .header("X-PSHB-CRC32", format!("{:x}", crc32(image)))
+            .header("X-PSHB-OTA-Hash", hex(&ota_hash(image)))
+            .header("X-PSHB-OTA-Auth2", hex(&ota_mac2(psk, &nonce, image)))
+            // For boards with firmware before 1.0.9; newer ones ignore it.
+            .header("X-PSHB-OTA-Auth", hex(&ota_mac(psk, &nonce, image)))
+            .header("X-PSHB-Nonce", hex(&nonce))
+            .send(image)
+            .map_err(ureq_failure)
+    })?;
     if resp.status() != 200 {
         return Err(board_error(&mut resp));
     }
@@ -612,27 +632,34 @@ mod tests {
             msg: "busy".into(),
             again: true,
         };
+        let pauses = std::cell::RefCell::new(Vec::new());
+        let pause = |attempt: u32| pauses.borrow_mut().push(attempt);
         let mut calls = 0;
-        let r = retry(|| {
+        let r = retry_pausing(pause, || {
             calls += 1;
             if calls < 3 { Err(busy()) } else { Ok(calls) }
         });
         assert_eq!(r, Ok(3));
+        assert_eq!(*pauses.borrow(), [1, 2]);
 
+        pauses.borrow_mut().clear();
         calls = 0;
-        let r: Result<(), _> = retry(|| {
+        let r: Result<(), _> = retry_pausing(pause, || {
             calls += 1;
             Err(busy())
         });
-        assert_eq!((r, calls), (Err("busy".to_string()), 3));
+        assert_eq!((r, calls), (Err("busy".to_string()), BOARD_TRIES));
+        assert_eq!(pauses.borrow().len() as u32, BOARD_TRIES - 1);
 
+        pauses.borrow_mut().clear();
         calls = 0;
-        let r: Result<(), _> = retry(|| {
+        let r: Result<(), _> = retry_pausing(pause, || {
             calls += 1;
             Err("Board answered 403 Forbidden: Signature does not match".into())
         });
         assert!(r.is_err());
         assert_eq!(calls, 1);
+        assert!(pauses.borrow().is_empty());
     }
 
     #[test]

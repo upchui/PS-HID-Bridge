@@ -14,6 +14,10 @@
 #define HTTP_PORT 80
 #define CHUNK 1024  // bounds the time core 0 may wait for the SPI bus
 #define CONN_TIMEOUT_US 60000000u  // generous: a firmware upload takes a few seconds
+// A connection that brings no request: browsers open some in advance and may
+// leave them unused, and with two sockets one such connection would halve
+// what the app and the web interface can reach for a minute.
+#define FIRST_BYTE_TIMEOUT_US 5000000u
 #define CLOSE_TIMEOUT_US 5000000u  // a close the peer does not complete
 
 // The sockets are non-blocking: in blocking mode ioLibrary's send() waits
@@ -24,6 +28,7 @@ static web_app_t s_app;
 static web_conn_t s_conn[2];
 static bool s_open[2];
 static bool s_closing[2];  // disconnect() issued, the chip completes the close
+static bool s_rx_any[2];   // the open connection has sent something
 static uint64_t s_closing_since[2];
 static uint8_t s_rx[CHUNK];
 
@@ -64,16 +69,21 @@ static void serve(int i, uint8_t sn) {
         setSn_IR(sn, Sn_IR_CON);
         conn_start(c, sn, now);
         s_open[i] = true;
+        s_rx_any[i] = false;
     }
     if (!s_open[i]) {
         conn_start(c, sn, now);
         s_open[i] = true;
+        s_rx_any[i] = false;
     }
 
     uint16_t avail = getSn_RX_RSR(sn);
     if (avail) {
         int32_t n = recv(sn, s_rx, avail < CHUNK ? avail : CHUNK);
-        if (n > 0) web_conn_input(&s_app, c, s_rx, (size_t)n);
+        if (n > 0) {
+            s_rx_any[i] = true;
+            web_conn_input(&s_app, c, s_rx, (size_t)n);
+        }
     }
 
     const uint8_t *out;
@@ -85,7 +95,10 @@ static void serve(int i, uint8_t sn) {
         if (n > 0) web_conn_sent(&s_app, c, (size_t)n);
     }
 
-    if (web_conn_done(c) || now - c->started_us > CONN_TIMEOUT_US) end_conn(i, sn);
+    uint64_t age = now - c->started_us;
+    if (web_conn_done(c) || age > CONN_TIMEOUT_US || (!s_rx_any[i] && age > FIRST_BYTE_TIMEOUT_US)) {
+        end_conn(i, sn);
+    }
 }
 
 bool web_server_busy(void) {

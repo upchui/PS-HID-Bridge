@@ -1503,7 +1503,10 @@ impl qobject::AppController {
     }
 
     pub fn refresh_board_info(mut self: Pin<&mut Self>) {
-        if *self.board_info_busy() {
+        // Not while the board restarts into new firmware: it refuses or does
+        // not answer until it is back, which its UDP answers show
+        // (board_expected).
+        if *self.board_info_busy() || self.rust().board_expected.is_some() {
             return;
         }
         let board = self.config_ref().board.clone();
@@ -1532,6 +1535,8 @@ impl qobject::AppController {
                             obj.as_mut().set_board_info_json(QString::from(&json));
                             obj.as_mut().set_board_info_error(QString::default());
                         }
+                        // Waited for an update and ran into the restart.
+                        Err(_) if obj.rust().board_expected.is_some() => {}
                         Err(e) => obj.as_mut().set_board_info_error(QString::from(&e)),
                     }
                 });
@@ -1616,6 +1621,9 @@ impl qobject::AppController {
                         let addr = resolve(&board)?;
                         let text = "Installing on the board …".to_string();
                         let _ = progress.queue(move |obj| obj.update_progress(text));
+                        // The app's status requests wait meanwhile: the board
+                        // serves two connections at a time.
+                        let _one_at_a_time = BOARD_API.lock().unwrap_or_else(|e| e.into_inner());
                         update::board_ota(&addr.ip().to_string(), BOARD_HTTP_PORT, &key, &image)
                     })
                     .map(|()| release.version);
@@ -1636,6 +1644,8 @@ impl qobject::AppController {
         let n = self.rust().board_updates + 1;
         self.as_mut().rust_mut().board_updates = n;
         self.as_mut().rust_mut().board_expected = Some((v, n));
+        // Not asked over HTTP while it restarts (refresh_board_info).
+        self.as_mut().set_board_info_error(QString::default());
         self.as_mut().update_message(
             "info",
             &format!("Written and checked. The board restarts into firmware {v} …"),
