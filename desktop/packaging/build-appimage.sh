@@ -5,7 +5,8 @@ set -euo pipefail
 
 ROOT=/work
 APP_ID=io.github.thealhu.pshidbridge
-APPDIR=$ROOT/.cache/build/AppDir
+# Per processor: an x86_64 and an aarch64 build may run at the same time.
+APPDIR=$ROOT/.cache/build/AppDir-$(uname -m)
 # Named after the processor it runs on (x86_64 or aarch64).
 OUTPUT=$ROOT/out/PS-HID-Bridge-$(uname -m).AppImage
 TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/desktop/target}

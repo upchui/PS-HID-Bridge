@@ -171,8 +171,8 @@ print-image-args:
 
 # desktop/ui/qml/Icons.qml and the web interface's icon sprite are generated
 # from desktop/ui/icons/*.svg by tools/gen_icons.py.
-check-icons:
-	@python3 tools/gen_icons.py --check
+check-icons: image-firmware
+	$(FW_RUN) python3 tools/gen_icons.py --check
 
 # Release tag, e.g. v0.9.16: every commit on main gets a higher one.
 print-release-tag:

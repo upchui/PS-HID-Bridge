@@ -13,7 +13,9 @@ commit=${1:-}
 if [ -z "$commit" ]; then
     {
         sha256sum versions.env
-        find docker -type f -print0 | sort -z | xargs -0 sha256sum
+        # Tracked files only (as in CI's checkout): a stray editor file in
+        # docker/ must not change the tag.
+        git ls-files -z -- docker | sort -z | xargs -0 sha256sum
     } | sha256sum | cut -c1-16
     exit 0
 fi

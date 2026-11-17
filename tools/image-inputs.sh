@@ -22,7 +22,11 @@ case $image in
                docker/scripts/build-qt-module.sh) ;;
     *) echo "image-inputs.sh: unknown image $image" >&2; exit 2 ;;
 esac
-read -r -a keys <<<"$(make -s print-image-args IMAGE="$image")"
+# On its own line, so a failing make stops the script (set -e): without the
+# keys the hash would ignore every version pin.
+args=$(make -s print-image-args IMAGE="$image")
+[ -n "$args" ] || { echo "image-inputs.sh: no build arguments for $image" >&2; exit 1; }
+read -r -a keys <<<"$args"
 
 # A file as it is in the working tree or in COMMIT; missing: empty.
 show() {

@@ -12,9 +12,10 @@ on:
   workflow_dispatch:
 
 # One release at a time. A push that arrives while a run is in progress waits;
-# GitHub keeps only the newest waiting run.
+# GitHub keeps only the newest waiting run. Per branch: a run started by hand
+# on another branch (it does nothing, see prepare) cannot replace main's.
 concurrency:
-  group: release
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -180,9 +181,12 @@ jobs:
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           prefix="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pshb"
-          docker pull --quiet "$prefix-desktop:$TAG-aarch64" &
-          docker pull --quiet "$prefix-apptest:$TAG-aarch64" &
-          wait
+          pids=()
+          for image in desktop apptest; do
+            docker pull --quiet "$prefix-$image:$TAG-aarch64" &
+            pids+=($!)
+          done
+          for p in "${pids[@]}"; do wait "$p"; done
           {
             echo "RUST_IMAGE=$prefix-desktop:$TAG-aarch64"
             echo "DESKTOP_IMAGE=$prefix-desktop:$TAG-aarch64"
@@ -257,6 +261,14 @@ jobs:
             echo "$tag exists already, replacing its files"
             gh release upload "$tag" release/* --clobber
           else
-            gh release create "$tag" release/* --latest --target "$GITHUB_SHA" \
+            # "Latest" (what the app's update check follows) only if this one is
+            # newer than the current latest: a run started again for an older
+            # commit must not take it back.
+            current=$(gh release view --json tagName --jq .tagName 2>/dev/null || echo v0)
+            latest=false
+            if [ "$(printf '%s\n%s\n' "$current" "$tag" | sort -V | tail -n1)" = "$tag" ]; then
+              latest=true
+            fi
+            gh release create "$tag" release/* --latest="$latest" --target "$GITHUB_SHA" \
               --title "$tag" --notes-file notes.md
           fi
