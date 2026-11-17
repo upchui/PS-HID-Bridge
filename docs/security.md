@@ -23,7 +23,7 @@ With the key, all of this is refused. You create the key once in the board's web
 | Reading your keystrokes | The input is encrypted on its way to the board. |
 | Replaying recorded packets | Every packet carries a counter that must grow; the board also starts a new session at every restart, so packets from before are worthless. |
 | A forged firmware update | An update over the network needs the web password, or a signature made with the key over the exact file; the board checks it before it writes anything. |
-| Changing the board's settings | The web interface needs your own password; after three wrong attempts the address they came from has to wait, up to 64 seconds. |
+| Changing the board's settings | The web interface needs your own password; after three wrong attempts the address they came from has to wait, up to 64 seconds. The board keeps eight addresses apart; any more share one count, so changing addresses does not get around the wait. |
 | The app or the network failing in the middle of a game | If no valid packet arrives for 250 ms, the board lets go of every key and button. `Ctrl+Alt+Shift+Esc` always gives mouse and keyboard back to the PC. See [When something goes wrong](#when-something-goes-wrong). |
 
 ## What it does not protect against
@@ -56,7 +56,7 @@ The web interface is only for setting things up: password, key, network, firmwar
 - **HTTPS needs a certificate**, and a device in a home network has no domain name a certificate could be issued for. A self-made certificate makes every browser show a red warning page at every visit, and teaches you to click such warnings away, which is worse than the risk it would remove.
 - **Settings and input are separate ways.** The password guards the settings only. Your input never goes through the web interface: it goes its own way, encrypted with the key (UDP, see [protocol/SPEC.md](../protocol/SPEC.md)).
 - **The app never sends the password.** It reads the board's status, sets its clock and installs firmware with the key, through signed one-time requests that are worthless when recorded.
-- **Guessing is slow:** after three wrong passwords the address they came from has to wait, growing to 64 seconds, so guessing runs at about one try a minute. Choose a password that is not easy to guess.
+- **Guessing is slow:** after three wrong passwords the address they came from has to wait, growing to 64 seconds, so guessing runs at about one try a minute; addresses beyond the eight the board keeps apart share one count. Choose a password that is not easy to guess.
 - **To read the traffic, someone has to be in your network already**, and capture it at the moment you log in or generate the key. If that is a concern (a shared network), set the board up where you trust the network.
 
 ## How it works

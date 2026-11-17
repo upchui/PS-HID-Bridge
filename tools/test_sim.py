@@ -575,6 +575,17 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.login_from("127.0.0.2", "ps-hid-bridge"), 429)
         self.assertEqual(self.web.login("ps-hid-bridge")[0], 200)
 
+    def test_login_lockout_holds_across_many_addresses(self):
+        # More addresses than the board keeps apart (8): the others share one
+        # count, so rotating through addresses does not avoid the lockout.
+        for i in range(2, 10):
+            self.assertEqual(self.login_from(f"127.0.0.{i}", "falsch"), 401)
+        for i in range(10, 13):
+            self.assertEqual(self.login_from(f"127.0.0.{i}", "falsch"), 401)
+        self.assertEqual(self.login_from("127.0.0.13", "falsch"), 429)
+        # An address with its own entry keeps its own count.
+        self.assertEqual(self.login_from("127.0.0.2", "falsch"), 401)
+
     def test_password_change_counts_towards_the_lockout(self):
         self.assertEqual(self.web.login("ps-hid-bridge")[0], 200)
         for _ in range(3):

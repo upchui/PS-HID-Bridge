@@ -136,6 +136,8 @@ typedef struct {
         bool used;
     } sessions[WEB_SESSIONS];
     web_lockout_t lockouts[WEB_LOCKOUTS];
+    // Shared by every address that finds `lockouts` full (see web.c).
+    web_lockout_t lockout_shared;
     // The connection streaming a firmware image (one update at a time).
     const void *ota_owner;
     // Challenges for requests and uploads signed with the key (see

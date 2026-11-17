@@ -253,14 +253,22 @@ static void h_state(web_app_t *app, web_conn_t *c, bool logged_in) {
 
 // Failed password attempts are counted per sender address: one address
 // guessing cannot lock the owner out at another. They are forgotten
-// WEB_LOCKOUT_FORGET_US after the last one.
+// WEB_LOCKOUT_FORGET_US after the last one. While every entry is taken,
+// the addresses without one share one more entry instead of pushing others
+// out: guessing from more addresses than the table holds would otherwise
+// reset each count before it reaches the lockout.
 static web_lockout_t *lockout_of(web_app_t *app, uint32_t ip, uint64_t t) {
     web_lockout_t *found = NULL;
+    bool full = true;
     for (int i = 0; i < WEB_LOCKOUTS; i++) {
         web_lockout_t *l = &app->lockouts[i];
         if (l->failed && t - l->last_us >= WEB_LOCKOUT_FORGET_US) l->failed = 0;
         if (l->failed && l->ip == ip) found = l;
+        if (!l->failed) full = false;
     }
+    web_lockout_t *s = &app->lockout_shared;
+    if (s->failed && t - s->last_us >= WEB_LOCKOUT_FORGET_US) s->failed = 0;
+    if (!found && full && s->failed) found = s;
     return found;
 }
 
@@ -279,11 +287,13 @@ static bool locked_out(web_app_t *app, web_conn_t *c, uint64_t t) {
 static void password_failed(web_app_t *app, web_conn_t *c, uint64_t t) {
     web_lockout_t *l = lockout_of(app, c->peer_ip, t);
     if (!l) {
-        // A free entry, else the one whose last attempt is the oldest.
-        l = &app->lockouts[0];
-        for (int i = 0; i < WEB_LOCKOUTS && l->failed; i++) {
-            web_lockout_t *e = &app->lockouts[i];
-            if (!e->failed || e->last_us < l->last_us) l = e;
+        // A free entry; none free: the shared one (see lockout_of).
+        l = &app->lockout_shared;
+        for (int i = 0; i < WEB_LOCKOUTS; i++) {
+            if (!app->lockouts[i].failed) {
+                l = &app->lockouts[i];
+                break;
+            }
         }
         *l = (web_lockout_t){.ip = c->peer_ip};
     }
