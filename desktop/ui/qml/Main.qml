@@ -60,12 +60,12 @@ Controls.ApplicationWindow {
     }
 
     readonly property var pages: [
-        { name: "status", text: "Status", icon: "status" },
-        { name: "input", text: "Input", icon: "input" },
-        { name: "triggers", text: "Triggers", icon: "bolt" },
-        { name: "board", text: "Board", icon: "board" },
-        { name: "latency", text: "Latency", icon: "latency" },
-        { name: "firmware", text: "Firmware & updates", icon: "update" }
+        { name: "status", text: I18n.tr("Status"), icon: "status" },
+        { name: "input", text: I18n.tr("Input"), icon: "input" },
+        { name: "triggers", text: I18n.tr("Triggers"), icon: "bolt" },
+        { name: "board", text: I18n.tr("Board"), icon: "board" },
+        { name: "latency", text: I18n.tr("Latency"), icon: "latency" },
+        { name: "firmware", text: I18n.tr("Firmware & updates"), icon: "update" }
     ]
     readonly property var pageNames: pages.map(p => p.name)
     readonly property var pageComponents: ({
@@ -155,7 +155,8 @@ Controls.ApplicationWindow {
                                 // "Please release all keys …", "Connecting …").
                                 Layout.fillWidth: true
                                 text: AppController.statusText !== "" ? AppController.statusText
-                                      : AppController.active ? "Bridge on" : AppController.connected ? "Ready" : "Not connected"
+                                      : AppController.active ? I18n.tr("Bridge on") : AppController.connected ? I18n.tr("Ready")
+                                      : I18n.tr("Not connected")
                                 elide: Text.ElideRight
                                 color: Style.muted
                                 font.pointSize: Style.fontSize * 0.9
@@ -178,7 +179,7 @@ Controls.ApplicationWindow {
                 Item { Layout.fillHeight: true }
 
                 NavItem {
-                    text: "Run setup again"
+                    text: I18n.tr("Run setup again")
                     iconName: "setup"
                     onClicked: root.showPage("wizard")
                 }
@@ -187,11 +188,21 @@ Controls.ApplicationWindow {
                     Layout.topMargin: 6
                     value: AppController.appearance
                     model: [
-                        { value: "light", icon: "sun", tip: "Light" },
-                        { value: "system", text: "Auto", tip: "Like the desktop" },
-                        { value: "dark", icon: "moon", tip: "Dark" }
+                        { value: "light", icon: "sun", tip: I18n.tr("Light") },
+                        { value: "system", text: I18n.tr("Auto"), tip: I18n.tr("Like the desktop") },
+                        { value: "dark", icon: "moon", tip: I18n.tr("Dark") }
                     ]
                     onActivated: v => AppController.chooseAppearance(v)
+                }
+                // Language names in their own language.
+                Segmented {
+                    Layout.alignment: Qt.AlignHCenter
+                    value: AppController.language
+                    model: [
+                        { value: "en", text: "EN", tip: "English" },
+                        { value: "de", text: "DE", tip: "Deutsch" }
+                    ]
+                    onActivated: v => AppController.setAppLanguage(v)
                 }
             }
             Rectangle {

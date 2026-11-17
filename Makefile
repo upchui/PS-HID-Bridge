@@ -237,19 +237,22 @@ test-appimage: desktop image-apptest dirs
 # the demo values of tools/ui_demo.qml (every pill, warning and banner at
 # once): out/ui-shots/<state>-<width>-<theme>/<page>.png. Offscreen in the
 # AppImage test image with an empty config: no board is contacted and no
-# device is grabbed. UI_STATES=plain: as after a fresh start.
+# device is grabbed. UI_STATES=plain: as after a fresh start. UI_LANGS="en de":
+# also in German, in out/ui-shots/<state>-<width>-<theme>-de/.
 UI_WIDTHS ?= 612 760 1008 1400
 UI_THEMES ?= light dark
 UI_STATES ?= busy
+UI_LANGS ?= en
 ui-shots: desktop image-apptest dirs
 	$(DOCKER_RUN) -e APPIMAGE_EXTRACT_AND_RUN=1 -e TMPDIR=/tmp -e LANG=C.UTF-8 \
 		-e XDG_CONFIG_HOME=/tmp/pshb-ui-shots $(APPTEST_IMAGE) \
 		bash -c 'set -e; export PSHB_STARTUP_QML="$$(cat tools/ui_demo.qml)"; \
-		for s in $(UI_STATES); do for w in $(UI_WIDTHS); do for t in $(UI_THEMES); do \
-			d=/work/out/ui-shots/$$s-$$w-$$t; mkdir -p $$d; \
+		for l in $(UI_LANGS); do for s in $(UI_STATES); do for w in $(UI_WIDTHS); do for t in $(UI_THEMES); do \
+			n=$$s-$$w-$$t; [ $$l = en ] || n=$$n-$$l; \
+			d=/work/out/ui-shots/$$n; mkdir -p $$d; \
 			timeout $(SELFTEST_TIMEOUT) $(APPIMAGE) --screenshot $$d --screenshot-height 2400 \
-				--demo-width $$w --demo-theme $$t --demo-state $$s; \
-		done; done; done'
+				--demo-width $$w --demo-theme $$t --demo-state $$s --demo-lang $$l; \
+		done; done; done; done'
 
 # ---------------------------------------------------------------- manual testing
 SIM_PORT ?= 45045

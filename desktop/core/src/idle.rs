@@ -71,7 +71,7 @@ impl IdleInhibitor {
                 .name("pshb-idle".into())
                 .spawn(move || run(backend, rx));
             if let Err(e) = spawned {
-                eprintln!("PS HID Bridge: the screen may turn off while the bridge is on ({e}).");
+                crate::logln!("PS HID Bridge: the screen may turn off while the bridge is on ({e}).");
                 return;
             }
             self.worker = Some(tx);
@@ -102,7 +102,7 @@ fn run(mut backend: Box<dyn Backend>, rx: Receiver<bool>) {
                 // Tried again at the next switch-on; said once.
                 Err(e) if !warned => {
                     warned = true;
-                    eprintln!("PS HID Bridge: the screen may turn off while the bridge is on ({e}).");
+                    crate::logln!("PS HID Bridge: the screen may turn off while the bridge is on ({e}).");
                 }
                 Err(_) => {}
             }
@@ -206,7 +206,7 @@ mod dbus {
             };
             if let Err(e) = result {
                 // Closing the connection ends the inhibition as well.
-                eprintln!("PS HID Bridge: releasing the screen ({e}), closing the D-Bus connection.");
+                crate::logln!("PS HID Bridge: releasing the screen ({e}), closing the D-Bus connection.");
                 self.conn = None;
             }
         }

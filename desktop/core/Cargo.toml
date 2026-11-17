@@ -32,14 +32,19 @@ blake2 = "0.11"
 # Real-time priority through rtkit (D-Bus) when SCHED_FIFO is not permitted
 # directly (feature "rtkit", on by default).
 zbus = { version = "5", optional = true, default-features = false, features = ["async-io", "blocking-api"] }
+x11rb = { version = "0.13", optional = true }
 
 [features]
-default = ["rtkit", "udisks", "idle"]
+default = ["rtkit", "udisks", "idle", "focus", "x11"]
 rtkit = ["dep:zbus"]
 # Keeps the screen on while the bridge is on (idle inhibition over D-Bus).
 idle = ["dep:zbus"]
 # Flashing the board over USB: finds and mounts its boot drive via UDisks2.
 udisks = ["dep:zbus"]
+# Window rule on KDE Plasma (KWin script over D-Bus).
+focus = ["dep:zbus"]
+# Window rule on X11 desktops.
+x11 = ["dep:x11rb"]
 
 [dev-dependencies]
 serde_json = "1"

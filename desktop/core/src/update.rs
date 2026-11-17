@@ -559,6 +559,150 @@ impl BoardApi {
     }
 }
 
+/// Why pairing did not work.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PairError {
+    WrongPassword,
+    /// Too many wrong passwords: the board's answer ("Please wait 8 s").
+    LockedOut(String),
+    /// The board still has its factory password: a new one is needed.
+    NeedsNewPassword,
+    /// The new password was refused (too short, the factory password).
+    NewPasswordRefused(String),
+    Other(String),
+}
+
+/// The board's web interface with its password, as the browser uses it
+/// (plain HTTP, like the browser: see docs/security.md). Pairing takes the
+/// key from the board this way. Logs out when dropped: the board keeps only
+/// two sessions, the user's browser may hold the other.
+pub struct BoardWeb {
+    base: String,
+    agent: ureq::Agent,
+    session: Option<String>,
+}
+
+impl BoardWeb {
+    pub fn new(host: &str, http_port: u16) -> Self {
+        Self {
+            base: board_base(host, http_port),
+            // The board checks passwords with Argon2id: a login takes a while.
+            agent: agent(Duration::from_secs(15), false),
+            session: None,
+        }
+    }
+
+    fn post(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<ureq::http::Response<ureq::Body>, Failure> {
+        let mut req = self
+            .agent
+            .post(format!("{}{path}", self.base))
+            .header("X-PSHB", "1")
+            .header("Content-Type", "application/json");
+        if let Some(s) = &self.session {
+            req = req.header("Cookie", format!("pshb_session={s}"));
+        }
+        req.send(body.to_string().as_bytes()).map_err(ureq_failure)
+    }
+
+    /// Log in; Ok(true) if the board still has its factory password.
+    pub fn login(&mut self, password: &str) -> Result<bool, PairError> {
+        let body = serde_json::json!({ "password": password });
+        let mut resp = retry(|| self.post("/api/login", &body)).map_err(PairError::Other)?;
+        match resp.status().as_u16() {
+            401 => return Err(PairError::WrongPassword),
+            429 => return Err(PairError::LockedOut(board_error(&mut resp))),
+            _ => {}
+        }
+        let cookie = resp
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find_map(session_cookie);
+        let v = read_json(&mut resp).map_err(PairError::Other)?;
+        self.session =
+            Some(cookie.ok_or_else(|| PairError::Other("Board: no session in the answer".into()))?);
+        Ok(v.get("must_change_password")
+            .and_then(|m| m.as_bool())
+            .unwrap_or(false))
+    }
+
+    /// Replace the password (logged in).
+    pub fn change_password(&self, old: &str, new: &str) -> Result<(), PairError> {
+        let body = serde_json::json!({ "old": old, "new": new });
+        let mut resp = retry(|| self.post("/api/password", &body)).map_err(PairError::Other)?;
+        match resp.status().as_u16() {
+            200 => Ok(()),
+            400 => Err(PairError::NewPasswordRefused(board_error(&mut resp))),
+            403 => Err(PairError::WrongPassword),
+            429 => Err(PairError::LockedOut(board_error(&mut resp))),
+            _ => Err(PairError::Other(board_error(&mut resp))),
+        }
+    }
+
+    /// Make the board create a new key and return it (logged in, with an
+    /// own password). Other PCs with the old key no longer get through.
+    pub fn generate_key(&self) -> Result<[u8; 32], PairError> {
+        let mut resp =
+            retry(|| self.post("/api/psk/generate", &serde_json::json!({}))).map_err(PairError::Other)?;
+        if resp.status() == 403 {
+            return Err(PairError::NeedsNewPassword);
+        }
+        let v = read_json(&mut resp).map_err(PairError::Other)?;
+        let hex = v
+            .get("psk")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| PairError::Other("Board: no key in the answer".into()))?;
+        crate::crypto::parse_key_hex(hex).map_err(PairError::Other)
+    }
+
+    pub fn logout(&mut self) {
+        if self.session.is_some() {
+            let _ = self.post("/api/logout", &serde_json::json!({}));
+            self.session = None;
+        }
+    }
+}
+
+impl Drop for BoardWeb {
+    fn drop(&mut self) {
+        self.logout();
+    }
+}
+
+/// "pshb_session=<token>; Path=/; …" -> the token.
+fn session_cookie(header: &str) -> Option<String> {
+    let first = header.split(';').next()?.trim();
+    let token = first.strip_prefix("pshb_session=")?;
+    (!token.is_empty()).then(|| token.to_string())
+}
+
+/// Pair with the board at `host`: log in with `password`, replace a factory
+/// password by `new_password` (Err(NeedsNewPassword) without one), and let
+/// the board create a new key, which is returned.
+pub fn pair(
+    host: &str,
+    http_port: u16,
+    password: &str,
+    new_password: Option<&str>,
+) -> Result<[u8; 32], PairError> {
+    let mut web = BoardWeb::new(host, http_port);
+    let factory = web.login(password)?;
+    if factory {
+        let new = new_password
+            .filter(|p| !p.is_empty())
+            .ok_or(PairError::NeedsNewPassword)?;
+        web.change_password(password, new)?;
+    }
+    let key = web.generate_key()?;
+    web.logout();
+    Ok(key)
+}
+
 /// Install `image` (a UF2 file) on the board at `host` (web interface on
 /// `http_port`), signed with the key. The board restarts into it afterwards.
 pub fn board_ota(host: &str, http_port: u16, psk: &[u8; 32], image: &[u8]) -> Result<(), String> {
@@ -726,6 +870,16 @@ mod tests {
             )),
             "4cbcb3b57c1ac62c0e9be0868a11009f462ff030d149d018e42380c80f513c64"
         );
+    }
+
+    #[test]
+    fn session_cookie_from_the_header() {
+        assert_eq!(
+            session_cookie("pshb_session=0123abcd; Path=/; HttpOnly; SameSite=Strict"),
+            Some("0123abcd".into())
+        );
+        assert_eq!(session_cookie("pshb_session=; Path=/; Max-Age=0"), None);
+        assert_eq!(session_cookie("other=1"), None);
     }
 
     #[test]

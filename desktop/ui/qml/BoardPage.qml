@@ -6,8 +6,8 @@ import PSHIDBridge
 // Connection to the board: address and key.
 AppPage {
     id: page
-    title: "Board"
-    subtitle: "The small board at the PlayStation's USB port, reached over the network."
+    title: I18n.tr("Board")
+    subtitle: I18n.tr("The small board at the PlayStation's USB port, reached over the network.")
 
     property string error: ""
     property bool saved: false
@@ -37,20 +37,20 @@ AppPage {
     Banner {
         kind: AppController.connected ? "ok" : AppController.lastError !== "" ? "warn" : "info"
         visible: page.saved && page.error === ""
-        text: AppController.connected ? "Connected."
-              : AppController.lastError !== "" ? "Saved. " + AppController.lastError
-              : "Saved. Connecting …"
+        text: AppController.connected ? I18n.tr("Connected.")
+              : AppController.lastError !== "" ? I18n.trf("Saved. %1", AppController.lastError)
+              : I18n.tr("Saved. Connecting …")
     }
 
     Card {
-        title: "Connection"
+        title: I18n.tr("Connection")
         icon: "network"
-        help: "The app finds boards in this network with current firmware; otherwise your router lists the board as ps-hid-bridge-… with its address. The key is created in the board's web interface under \"Security\"."
+        help: I18n.tr("The app finds boards in this network with current firmware; otherwise your router lists the board as ps-hid-bridge-… with its address. The key is created in the board's web interface under \"Security\".")
         actions: Pill {
-            readonly property bool connecting: AppController.statusText === "Connecting …"
+            readonly property bool connecting: AppController.connecting
             level: AppController.boardAddress === "" || connecting ? "" : AppController.connected ? "ok" : "bad"
-            text: AppController.boardAddress === "" ? "not set up" : AppController.connected ? "connected"
-                  : connecting ? "connecting …" : "not reachable"
+            text: AppController.boardAddress === "" ? I18n.tr("not set up") : AppController.connected ? I18n.tr("connected")
+                  : connecting ? I18n.tr("connecting …") : I18n.tr("not reachable")
         }
 
         BoardFinder {
@@ -69,27 +69,28 @@ AppPage {
             columnSpacing: 12
             rowSpacing: 8
             Controls.Label {
-                text: "Address"
+                text: I18n.tr("Address")
                 color: Style.text
             }
             Controls.TextField {
                 id: address
                 Layout.fillWidth: true
                 text: AppController.boardAddress
-                placeholderText: "e.g. 192.168.1.50"
+                placeholderText: I18n.tr("e.g. 192.168.1.50")
             }
             Item {
                 implicitWidth: showKey.implicitWidth
             }
             Controls.Label {
-                text: "Key"
+                text: I18n.tr("Key")
                 color: Style.text
             }
             Controls.TextField {
                 id: psk
                 Layout.fillWidth: true
                 echoMode: showKey.checked ? TextInput.Normal : TextInput.Password
-                placeholderText: AppController.pskSet ? "stored – fill in only to change it" : "64 hex digits from the web interface"
+                placeholderText: AppController.pskSet ? I18n.tr("stored – fill in only to change it")
+                                 : I18n.tr("64 hex digits from the web interface")
             }
             AppButton {
                 id: showKey
@@ -97,16 +98,18 @@ AppPage {
                 flat: true
                 icon.name: "eye"
                 icon.color: checked ? Style.accent : Style.muted
-                Accessible.name: "Show key"
+                Accessible.name: I18n.tr("Show key")
                 Controls.ToolTip.visible: hovered
-                Controls.ToolTip.text: checked ? "Hide key" : "Show key"
+                Controls.ToolTip.text: checked ? I18n.tr("Hide key") : I18n.tr("Show key")
             }
         }
 
-        RowLayout {
+        // Wraps in a narrow window (the German texts are long).
+        Flow {
+            Layout.fillWidth: true
             spacing: 8
             AppButton {
-                text: "Save and connect"
+                text: I18n.tr("Save and connect")
                 highlighted: true
                 onClicked: {
                     page.error = AppController.saveBoard(address.text, psk.text);
@@ -116,20 +119,26 @@ AppPage {
                 }
             }
             AppButton {
-                text: "Open web interface"
+                text: I18n.tr("Open web interface")
                 icon.name: "external"
                 icon.color: Style.text
                 enabled: AppController.boardAddress !== ""
                 onClicked: Qt.openUrlExternally("http://" + page.host() + "/")
             }
         }
+
+        PairBox {
+            Layout.fillWidth: true
+            address: address.text
+            keySet: finder.boards.some(b => b.address === address.text.trim() && b.key_set)
+        }
     }
 
     Card {
         id: nameCard
-        title: "Name"
+        title: I18n.tr("Name")
         icon: "board"
-        help: "Shown in the app's search and in the board's web interface. Your router and the browser use a network name made from it (letters, digits and dashes); the board keeps answering to its old name ps-hid-bridge-… too."
+        help: I18n.tr("Shown in the app's search and in the board's web interface. Your router and the browser use a network name made from it (letters, digits and dashes); the board keeps answering to its old name ps-hid-bridge-… too.")
 
         // The board's default name, from its MAC address ("" = not known).
         readonly property string defaultName: {
@@ -148,13 +157,13 @@ AppPage {
                 Layout.fillWidth: true
                 text: AppController.boardName
                 maximumLength: 31
-                placeholderText: AppController.connected ? "e.g. Living room" : "Connect to the board first"
+                placeholderText: AppController.connected ? I18n.tr("e.g. Living room") : I18n.tr("Connect to the board first")
                 enabled: AppController.connected && !AppController.renameBusy
                 onAccepted: if (renameButton.enabled) nameCard.rename()
             }
             AppButton {
                 id: renameButton
-                text: AppController.renameBusy ? "Renaming …" : "Rename"
+                text: AppController.renameBusy ? I18n.tr("Renaming …") : I18n.tr("Rename")
                 enabled: AppController.connected && !AppController.renameBusy
                          && nameField.text.trim() !== AppController.boardName
                 onClicked: nameCard.rename()
@@ -163,8 +172,8 @@ AppPage {
         Controls.Label {
             Layout.fillWidth: true
             visible: AppController.connected
-            text: "In your router and the browser: "
-                  + AppController.networkNameFor(nameField.text, nameCard.defaultName !== "" ? nameCard.defaultName : "ps-hid-bridge-…")
+            text: I18n.trf("In your router and the browser: %1",
+                           AppController.networkNameFor(nameField.text, nameCard.defaultName !== "" ? nameCard.defaultName : "ps-hid-bridge-…"))
             color: Style.muted
             wrapMode: Text.WordWrap
         }
@@ -176,7 +185,7 @@ AppPage {
     }
 
     Card {
-        title: "Details"
+        title: I18n.tr("Details")
         icon: "board"
         GridLayout {
             id: details
@@ -187,10 +196,10 @@ AppPage {
             rowSpacing: 6
             Repeater {
                 model: [
-                    ["Firmware", AppController.boardFirmware !== "" ? AppController.boardFirmware : "–"],
+                    [I18n.tr("Firmware"), AppController.boardFirmware !== "" ? AppController.boardFirmware : "–"],
                     ["PlayStation", AppController.boardUsb !== "" ? Style.playStation(AppController.boardUsb) : "–"],
-                    ["Round trip", AppController.rttMs >= 0 ? Style.us(AppController.rttMs * 1000) : "–"],
-                    ["Desktop app", AppController.version]
+                    [I18n.tr("Round trip"), AppController.rttMs >= 0 ? Style.us(AppController.rttMs * 1000) : "–"],
+                    [I18n.tr("Desktop app"), AppController.version]
                 ]
                 delegate: RowLayout {
                     required property var modelData

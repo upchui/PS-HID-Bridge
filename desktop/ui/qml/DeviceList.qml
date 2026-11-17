@@ -42,6 +42,12 @@ ColumnLayout {
     ListModel {
         id: rows
     }
+    // A device's kind ("keyboard + mouse", …) in the app's language.
+    function kindText(kind) {
+        const names = { "keyboard": I18n.tr("keyboard"), "mouse": I18n.tr("mouse"), "touchpad": I18n.tr("touchpad"),
+                        "touchscreen": I18n.tr("touchscreen"), "other": I18n.tr("other") };
+        return kind.split(" + ").map(k => names[k] ?? k).join(" + ");
+    }
     function entry(d) {
         return { devId: d.id, name: d.name, kind: d.kind, nodes: d.nodes, accessible: d.accessible,
                  selected: d.selected, paths: JSON.stringify(d.paths) };
@@ -76,10 +82,12 @@ ColumnLayout {
     Banner {
         kind: "warn"
         visible: list.selectedBlocked > 0
-        text: (list.selectedBlocked === 1 ? "1 selected device cannot" : list.selectedBlocked + " selected devices cannot")
-              + " be read yet. The app sets up access once (administrator password)."
+        text: list.selectedBlocked === 1
+              ? I18n.tr("1 selected device cannot be read yet. The app sets up access once (administrator password).")
+              : I18n.trf("%1 selected devices cannot be read yet. The app sets up access once (administrator password).",
+                         list.selectedBlocked)
         actions: AppButton {
-            text: AppController.accessBusy ? "Setting up …" : "Set up access"
+            text: AppController.accessBusy ? I18n.tr("Setting up …") : I18n.tr("Set up access")
             enabled: !AppController.accessBusy
             onClicked: AppController.installAccess()
         }
@@ -95,7 +103,7 @@ ColumnLayout {
         spacing: 8
         Controls.Label {
             Layout.fillWidth: true
-            text: list.selectedCount + " of " + list.groups.length + " selected"
+            text: I18n.trf("%1 of %2 selected", list.selectedCount, list.groups.length)
             color: Style.muted
             elide: Text.ElideRight
         }
@@ -106,7 +114,7 @@ ColumnLayout {
             AppButton {
                 id: identifyButton
                 anchors.fill: parent
-                text: list.identify ? "Press a key …" : "Identify"
+                text: list.identify ? I18n.tr("Press a key …") : I18n.tr("Identify")
                 icon.name: "target"
                 icon.color: !enabled ? Style.disabled : list.identify ? Style.accentText : Style.text
                 checkable: true
@@ -119,12 +127,12 @@ ColumnLayout {
                 id: identifyHover
             }
             Controls.ToolTip.visible: identifyHover.hovered
-            Controls.ToolTip.text: list.selectedCount === 0 ? "Select a device first."
-                                   : list.selectedBlocked > 0 ? "Set up access first (above)."
-                                   : "Marks the selected device you are typing on."
+            Controls.ToolTip.text: list.selectedCount === 0 ? I18n.tr("Select a device first.")
+                                   : list.selectedBlocked > 0 ? I18n.tr("Set up access first (above).")
+                                   : I18n.tr("Marks the selected device you are typing on.")
         }
         AppButton {
-            text: "Refresh"
+            text: I18n.tr("Refresh")
             icon.name: "update"
             icon.color: Style.text
             onClicked: {
@@ -137,7 +145,7 @@ ColumnLayout {
     Controls.Label {
         Layout.fillWidth: true
         visible: list.groups.length === 0
-        text: "No keyboard, mouse, touchpad or touchscreen found."
+        text: I18n.tr("No keyboard, mouse, touchpad or touchscreen found.")
         color: Style.muted
     }
 
@@ -193,7 +201,8 @@ ColumnLayout {
                     }
                     Controls.Label {
                         Layout.fillWidth: true
-                        text: row.kind + " · " + row.devId + (row.nodes > 1 ? " · " + row.nodes + " interfaces" : "")
+                        text: list.kindText(row.kind) + " · " + row.devId
+                              + (row.nodes > 1 ? " · " + I18n.trf("%1 interfaces", row.nodes) : "")
                         color: Style.muted
                         font.pointSize: Style.fontSize * 0.9
                         elide: Text.ElideRight
@@ -202,12 +211,12 @@ ColumnLayout {
                 Pill {
                     visible: row.identified
                     level: "accent"
-                    text: "input"
+                    text: I18n.tr("input")
                 }
                 Pill {
                     visible: !row.accessible
                     level: row.selected ? "warn" : ""
-                    text: "no access"
+                    text: I18n.tr("no access")
                 }
                 AppSwitch {
                     checked: row.selected

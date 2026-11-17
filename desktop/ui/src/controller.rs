@@ -11,17 +11,21 @@ use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use pshb_core::config::{self, Config, TriggerConfig};
 use pshb_core::crypto::parse_key_hex;
+use pshb_core::diagnostics::{BoardHealth, HealthWarning};
 use pshb_core::discover::{self, FoundBoard, board_ipv4};
 use pshb_core::engine::Notice;
 use pshb_core::input::{self, DeviceInfo};
 use pshb_core::protocol::{self, Pong};
-use pshb_core::service::{Service, ServiceCmd, ServiceConfig, ServiceEvent, ServiceStatus};
+use pshb_core::service::{Service, ServiceCmd, ServiceConfig, ServiceEvent, ServiceStatus, TypingStop};
+use pshb_core::transport::KeyState;
 use pshb_core::trigger::Action;
+use pshb_core::typing;
 use pshb_core::update::{self, Release, Version};
 use pshb_core::usbflash::{self, Image};
+use pshb_core::window::{self, WindowInfo};
 use serde::Serialize;
 
-use crate::focus::FocusWatcher;
+use crate::i18n::{self, tr, trf};
 use crate::notify;
 use crate::tray::{self, BridgeTray};
 
@@ -78,6 +82,9 @@ pub mod qobject {
         #[qproperty(bool, window_rule_enabled)]
         #[qproperty(QString, window_rule)]
         #[qproperty(bool, window_rule_available)]
+        /// Where the focused window is learned from ("KDE Plasma", "Hyprland"
+        /// …), or why it cannot be (window_rule_available false).
+        #[qproperty(QString, window_backend)]
         #[qproperty(bool, iso_keyboard)]
         #[qproperty(f64, sensitivity)]
         #[qproperty(f64, accel)]
@@ -91,7 +98,44 @@ pub mod qobject {
         #[qproperty(QString, recorded)]
         #[qproperty(QString, identified_path)]
         #[qproperty(QString, live_text)]
+        /// The same as chips: JSON array of texts ("Shift", "A", "mouse: left").
+        #[qproperty(QString, live_chips_json)]
+        /// A mouse button reaches the PlayStation right now.
+        #[qproperty(bool, live_mouse_held)]
         #[qproperty(QString, live_device)]
+        /// The service is starting (connecting to the board).
+        #[qproperty(bool, connecting)]
+        /// "en" or "de"; the texts for QML in translations_json (I18n.qml).
+        #[qproperty(QString, language)]
+        #[qproperty(QString, translations_json)]
+        /// Profiles, "Standard" first: JSON array of {name, window,
+        /// sensitivity, accel, invert_y, y_ratio, wheel_speed, remap: [{from, to}]}.
+        #[qproperty(QString, profiles_json)]
+        /// The profile chosen by hand or by a trigger, and the one in effect
+        /// (a window's profile may override the first).
+        #[qproperty(QString, active_profile)]
+        #[qproperty(QString, effective_profile)]
+        /// Keyboard language of the PlayStation for typing text ("de", "us",
+        /// "uk"), and the choices: JSON array of {id, name}.
+        #[qproperty(QString, ps_layout)]
+        #[qproperty(QString, layouts_json)]
+        /// Typing text: busy, share done (0..1), outcome ("" while busy).
+        #[qproperty(bool, typing_busy)]
+        #[qproperty(f64, typing_progress)]
+        #[qproperty(QString, typing_message)]
+        #[qproperty(QString, typing_level)]
+        /// Pairing with the board's password: busy, outcome, and whether the
+        /// board asks for a new password first (factory password).
+        #[qproperty(bool, pair_busy)]
+        #[qproperty(QString, pair_message)]
+        #[qproperty(QString, pair_level)]
+        #[qproperty(bool, pair_needs_new_password)]
+        /// Saving the diagnostics report: busy, outcome.
+        #[qproperty(bool, diag_busy)]
+        #[qproperty(QString, diag_message)]
+        #[qproperty(QString, diag_level)]
+        /// The board refuses packets from somewhere else ("" = all fine).
+        #[qproperty(QString, board_warning)]
         #[qproperty(QString, last_error)]
         /// Settings that could not be written; stays until a save works.
         #[qproperty(QString, save_error)]
@@ -214,6 +258,67 @@ pub mod qobject {
         fn set_keyboard_type(self: Pin<&mut AppController>, iso: bool);
         #[qinvokable]
         fn set_mouse(self: Pin<&mut AppController>, sensitivity: f64, accel: f64);
+        /// Mouse settings of a profile (0 = "Standard").
+        #[qinvokable]
+        fn set_profile_mouse(
+            self: Pin<&mut AppController>,
+            index: i32,
+            sensitivity: f64,
+            accel: f64,
+            invert_y: bool,
+            y_ratio: f64,
+            wheel_speed: f64,
+        );
+        /// Remapped keys of a profile (JSON array of {from, to}); error text or "".
+        #[qinvokable]
+        fn set_profile_remap(self: Pin<&mut AppController>, index: i32, json: &QString) -> QString;
+        /// Window pattern of a profile ("" = by hand only).
+        #[qinvokable]
+        fn set_profile_window(self: Pin<&mut AppController>, index: i32, pattern: &QString);
+        /// New profile with the settings of `copy_of`; error text or "".
+        #[qinvokable]
+        fn add_profile(self: Pin<&mut AppController>, name: &QString, copy_of: i32) -> QString;
+        #[qinvokable]
+        fn rename_profile(self: Pin<&mut AppController>, index: i32, name: &QString) -> QString;
+        #[qinvokable]
+        fn delete_profile(self: Pin<&mut AppController>, index: i32);
+        /// Use this profile (by hand).
+        #[qinvokable]
+        fn choose_profile(self: Pin<&mut AppController>, index: i32);
+        /// Gain of a profile's acceleration curve at a given speed.
+        #[qinvokable]
+        fn profile_curve_gain(self: &AppController, index: i32, speed: f64) -> f64;
+        /// Language of the app: "en" or "de".
+        #[qinvokable]
+        fn set_app_language(self: Pin<&mut AppController>, code: &QString);
+        /// Keyboard language of the PlayStation ("de", "us", "uk").
+        #[qinvokable]
+        fn choose_ps_layout(self: Pin<&mut AppController>, id: &QString);
+        /// Characters of `text` the PlayStation's keyboard language cannot type.
+        #[qinvokable]
+        fn unsupported_chars(self: &AppController, text: &QString) -> QString;
+        /// Type `text` on the PlayStation (the bridge must be off);
+        /// `typing_busy` meanwhile, then `typing_message`.
+        #[qinvokable]
+        fn type_text(self: Pin<&mut AppController>, text: &QString);
+        #[qinvokable]
+        fn cancel_typing(self: Pin<&mut AppController>);
+        /// Take a new key from the board at `address` with its web password
+        /// (and set `new_password` first while it has the factory one);
+        /// `pair_busy` meanwhile, then `pair_message`.
+        #[qinvokable]
+        fn pair_board(
+            self: Pin<&mut AppController>,
+            address: &QString,
+            password: &QString,
+            new_password: &QString,
+        );
+        /// Write the diagnostics report to the file at `url` (file dialog);
+        /// `diag_busy` meanwhile, then `diag_message`.
+        #[qinvokable]
+        fn save_diagnostics(self: Pin<&mut AppController>, url: &QString);
+        #[qinvokable]
+        fn dismiss_board_warning(self: Pin<&mut AppController>);
         /// Touchpads and touchscreens: speed factor, tap to click, natural scrolling.
         #[qinvokable]
         fn set_touchpad(self: Pin<&mut AppController>, speed: f64, tap: bool, natural: bool);
@@ -328,6 +433,7 @@ pub struct AppControllerRust {
     window_rule_enabled: bool,
     window_rule: QString,
     window_rule_available: bool,
+    window_backend: QString,
     iso_keyboard: bool,
     sensitivity: f64,
     accel: f64,
@@ -339,7 +445,29 @@ pub struct AppControllerRust {
     recorded: QString,
     identified_path: QString,
     live_text: QString,
+    live_chips_json: QString,
+    live_mouse_held: bool,
     live_device: QString,
+    connecting: bool,
+    language: QString,
+    translations_json: QString,
+    profiles_json: QString,
+    active_profile: QString,
+    effective_profile: QString,
+    ps_layout: QString,
+    layouts_json: QString,
+    typing_busy: bool,
+    typing_progress: f64,
+    typing_message: QString,
+    typing_level: QString,
+    pair_busy: bool,
+    pair_message: QString,
+    pair_level: QString,
+    pair_needs_new_password: bool,
+    diag_busy: bool,
+    diag_message: QString,
+    diag_level: QString,
+    board_warning: QString,
     last_error: QString,
     save_error: QString,
     counter_error: QString,
@@ -353,14 +481,22 @@ pub struct AppControllerRust {
     tray: Option<ksni::blocking::Handle<BridgeTray>>,
     /// Last tray state shown (active, connected).
     tray_state: Option<(bool, bool)>,
-    focus: Option<FocusWatcher>,
+    /// Watches the focused window while the window rule or a profile needs it.
+    window_watcher: Option<window::Watcher>,
     /// What the GUI asked the service for; re-applied after a restart.
     identify_on: bool,
     latency_view: bool,
     /// The board's address the running service sends to (looked up from
     /// the setting, which may be a host name).
     board_addr: Option<std::net::SocketAddr>,
-    focus_state: Option<bool>,
+    /// The focused window as last reported (None: not watched).
+    window_state: Option<Option<WindowInfo>>,
+    /// The service's last status and live state (shown again in another
+    /// language).
+    last_status: ServiceStatus,
+    last_live: Option<KeyState>,
+    /// Watches the board's counters of refused packets.
+    health: BoardHealth,
 
     update_check: bool,
     appearance: QString,
@@ -488,6 +624,7 @@ impl Default for AppControllerRust {
             window_rule_enabled: false,
             window_rule: QString::default(),
             window_rule_available: false,
+            window_backend: QString::default(),
             iso_keyboard: true,
             sensitivity: 1.0,
             accel: 0.0,
@@ -499,7 +636,29 @@ impl Default for AppControllerRust {
             recorded: QString::default(),
             identified_path: QString::default(),
             live_text: QString::default(),
+            live_chips_json: QString::from("[]"),
+            live_mouse_held: false,
             live_device: QString::default(),
+            connecting: false,
+            language: QString::from("en"),
+            translations_json: QString::from("{}"),
+            profiles_json: QString::from("[]"),
+            active_profile: QString::default(),
+            effective_profile: QString::default(),
+            ps_layout: QString::default(),
+            layouts_json: QString::from(&layouts_json()),
+            typing_busy: false,
+            typing_progress: 0.0,
+            typing_message: QString::default(),
+            typing_level: QString::default(),
+            pair_busy: false,
+            pair_message: QString::default(),
+            pair_level: QString::default(),
+            pair_needs_new_password: false,
+            diag_busy: false,
+            diag_message: QString::default(),
+            diag_level: QString::default(),
+            board_warning: QString::default(),
             last_error: QString::default(),
             save_error: QString::default(),
             counter_error: QString::default(),
@@ -511,11 +670,14 @@ impl Default for AppControllerRust {
             slot: Arc::default(),
             tray: None,
             tray_state: None,
-            focus: None,
+            window_watcher: None,
             identify_on: false,
             latency_view: false,
             board_addr: None,
-            focus_state: None,
+            window_state: None,
+            last_status: ServiceStatus::default(),
+            last_live: None,
+            health: BoardHealth::default(),
             update_check: true,
             appearance: QString::from("system"),
             latest_version: QString::default(),
@@ -649,8 +811,9 @@ impl qobject::AppController {
         let result = self.config_ref().save(&path);
         let text = match &result {
             Ok(()) => QString::default(),
-            Err(e) => QString::from(&format!(
-                "Settings could not be saved: {e}. Changes apply only until the app closes."
+            Err(e) => QString::from(&trf(
+                "Settings could not be saved: %1. Changes apply only until the app closes.",
+                &[e],
             )),
         };
         self.as_mut().set_save_error(text);
@@ -681,6 +844,22 @@ impl qobject::AppController {
         self.as_mut().set_update_check(c.update_check);
         self.as_mut().set_appearance(QString::from(&c.appearance));
         self.as_mut().set_keep_cpu_awake(c.keep_cpu_awake);
+        self.as_mut().set_language(QString::from(i18n::language()));
+        self.as_mut()
+            .set_translations_json(QString::from(i18n::catalog_json()));
+        self.as_mut().set_profiles_json(QString::from(&profiles_json(&c)));
+        self.as_mut()
+            .set_ps_layout(QString::from(typing::layout_or_default(&c.ps_layout).id));
+        let active = c.profile_names()[c.active_profile_index()].to_string();
+        self.as_mut().set_active_profile(QString::from(&active));
+        if let Some(t) = &self.rust().tray {
+            let names: Vec<String> = c.profile_names().iter().map(|n| n.to_string()).collect();
+            let index = c.active_profile_index();
+            t.update(move |tray| {
+                tray.profiles = names;
+                tray.profile = index;
+            });
+        }
         self.as_mut().publish_rules();
         self.as_mut().publish_found();
     }
@@ -741,15 +920,16 @@ impl qobject::AppController {
         let generation = slot.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let cfg = self.config_ref().clone();
         let problem = if cfg.board.is_empty() {
-            Some("Board address missing")
+            Some(tr("Board address missing"))
         } else if !config::psk_path().exists() {
-            Some("Key missing")
+            Some(tr("Key missing"))
         } else {
             None
         };
         if let Some(text) = problem {
             self.as_mut().apply_status(ServiceStatus::default()); // no service: not on, not connected
-            self.as_mut().set_status_text(QString::from(text));
+            self.as_mut().set_status_text(QString::from(&text));
+            self.as_mut().set_connecting(false);
             stop_service(slot);
             return;
         }
@@ -757,7 +937,8 @@ impl qobject::AppController {
         // is on or connected until the new one says so (a host name lookup
         // can take seconds).
         self.as_mut().apply_status(ServiceStatus::default());
-        self.as_mut().set_status_text(QString::from("Connecting …"));
+        self.as_mut().set_status_text(QString::from(&tr("Connecting …")));
+        self.as_mut().set_connecting(true);
         let events = self.qt_thread();
         let done = self.qt_thread();
         let spawned = thread::Builder::new().name("pshb-start".into()).spawn(move || {
@@ -805,6 +986,8 @@ impl qobject::AppController {
             return;
         }
         self.as_mut().rust_mut().board_addr = addr;
+        self.as_mut().set_connecting(false);
+        self.as_mut().rust_mut().health.reset(std::time::Instant::now());
         self.as_mut().schedule_name_check(generation); // in case it never answers
         self.as_mut().set_last_error(QString::default());
         // A new service knows nothing of what the GUI asked the old one for.
@@ -817,8 +1000,8 @@ impl qobject::AppController {
         if *self.recording() {
             self.command(ServiceCmd::Record(true));
         }
-        if let Some(f) = self.rust().focus_state {
-            self.command(ServiceCmd::Focus(f));
+        if let Some(w) = self.rust().window_state.clone() {
+            self.command(ServiceCmd::Window(w));
         }
     }
 
@@ -826,12 +1009,14 @@ impl qobject::AppController {
         if !self.rust().slot.is_current(generation) {
             return;
         }
+        pshb_core::logln!("PS HID Bridge: starting the bridge: {error}");
         // The old service is gone (dropped before the start): switch and
         // tray must not keep showing it as on and connected.
         self.as_mut().apply_status(ServiceStatus::default());
-        self.as_mut().set_status_text(QString::from("Not connected"));
+        self.as_mut().set_status_text(QString::from(&tr("Not connected")));
+        self.as_mut().set_connecting(false);
         self.as_mut()
-            .set_last_error(QString::from(&format!("{error} (trying again)")));
+            .set_last_error(QString::from(&trf("%1 (trying again)", &[&error])));
         let qt = self.qt_thread();
         let _ = thread::Builder::new().name("pshb-retry".into()).spawn(move || {
             thread::sleep(RETRY);
@@ -909,8 +1094,8 @@ impl qobject::AppController {
         self.as_mut().set_board_info_json(QString::default());
         self.as_mut().set_board_info_error(QString::default());
         notify::send(
-            "Board found again",
-            &format!("{} has a new address in the network: {address}.", b.name),
+            &tr("Board found again"),
+            &trf("%1 has a new address in the network: %2.", &[&b.name, &address]),
         );
         self.as_mut().publish_config();
         // A running service only sends elsewhere from now on: the bridge
@@ -969,30 +1154,74 @@ impl qobject::AppController {
         }
     }
 
-    /// Watch the window focus (only when the window rule is on). Restarted
-    /// only when the rule changes; the service learns the focus from
-    /// `focus_state`.
-    fn restart_focus_watcher(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().focus = None;
-        self.as_mut().rust_mut().focus_state = None;
-        if !self.config_ref().window_rule_active() {
+    /// The window rule or a profile follows the focused window.
+    fn wants_window(&self) -> bool {
+        let c = self.config_ref();
+        c.window_rule_active() || c.profiles.iter().any(|p| !p.window.trim().is_empty())
+    }
+
+    /// Watch the focused window while the window rule or a profile needs
+    /// it (started and stopped as that changes); the service learns the
+    /// window from `window_state`.
+    fn update_window_watcher(mut self: Pin<&mut Self>) {
+        let wanted = self.wants_window();
+        if wanted == self.rust().window_watcher.is_some() {
             return;
         }
-        let rule = self.config_ref().window_rule.trim().to_string();
+        self.as_mut().rust_mut().window_watcher = None;
+        self.as_mut().rust_mut().window_state = None;
+        if !wanted {
+            self.command(ServiceCmd::Window(None));
+            return;
+        }
         let qt = self.qt_thread();
-        match FocusWatcher::start(&rule, move |focused| {
-            let _ = qt.queue(move |obj| obj.focus_changed(focused));
-        }) {
-            Ok(w) => self.as_mut().rust_mut().focus = Some(w),
-            Err(e) => self
-                .as_mut()
-                .set_last_error(QString::from(&format!("Window rule not available: {e}"))),
+        let started = window::detect().and_then(|b| {
+            window::Watcher::start(b, move |info| {
+                let _ = qt.queue(move |obj| obj.window_changed(info));
+            })
+        });
+        match started {
+            Ok(w) => self.as_mut().rust_mut().window_watcher = Some(w),
+            Err(e) => self.as_mut().set_last_error(QString::from(&trf(
+                "Window rule and window profiles not available: %1",
+                &[&e],
+            ))),
         }
     }
 
-    fn focus_changed(mut self: Pin<&mut Self>, focused: bool) {
-        self.as_mut().rust_mut().focus_state = Some(focused);
-        self.command(ServiceCmd::Focus(focused));
+    fn window_changed(mut self: Pin<&mut Self>, info: Option<WindowInfo>) {
+        if self.rust().window_watcher.is_none() {
+            return; // stopped meanwhile
+        }
+        self.as_mut().rust_mut().window_state = Some(info.clone());
+        self.command(ServiceCmd::Window(info));
+    }
+
+    /// What the PlayStation receives, as text and chips in the app's
+    /// language (None: nothing, the bridge is off).
+    fn show_live(mut self: Pin<&mut Self>, state: Option<KeyState>) {
+        self.as_mut().rust_mut().last_live = state;
+        let Some(s) = state else {
+            self.as_mut().set_live_text(QString::default());
+            self.as_mut().set_live_chips_json(QString::from("[]"));
+            self.as_mut().set_live_mouse_held(false);
+            return;
+        };
+        let (keys, mouse) = live_parts(&s);
+        let mut text = if keys.is_empty() {
+            tr("no key")
+        } else {
+            keys.join(" + ")
+        };
+        let mut chips = keys;
+        if let Some(m) = mouse {
+            text += &format!(" · {m}");
+            chips.push(m);
+        }
+        self.as_mut().set_live_text(QString::from(&text));
+        self.as_mut()
+            .set_live_chips_json(QString::from(&serde_json::to_string(&chips).unwrap_or_default()));
+        self.as_mut().set_live_mouse_held(s.buttons != 0);
     }
 
     fn apply_status(mut self: Pin<&mut Self>, st: ServiceStatus) {
@@ -1059,6 +1288,23 @@ impl qobject::AppController {
         self.as_mut()
             .set_adapter_at_once_now(a.is_some_and(|a| a.at_once_now));
         if let Some(p) = &st.board {
+            let warning = self
+                .as_mut()
+                .rust_mut()
+                .health
+                .update(p, std::time::Instant::now());
+            if let Some(w) = warning {
+                let text = match w {
+                    HealthWarning::WrongKey => tr(
+                        "The board refuses packets with a wrong key: another PC (or program) sends with an old key. Pair it again, or switch it off.",
+                    ),
+                    HealthWarning::Replayed => tr(
+                        "The board refuses repeated packets: a second PC sends with the same key. Use the bridge on one PC at a time.",
+                    ),
+                };
+                pshb_core::logln!("PS HID Bridge: {w:?} (board counters rose)");
+                self.as_mut().set_board_warning(QString::from(&text));
+            }
             self.as_mut()
                 .set_board_firmware(QString::from(&p.fw_version_string()));
             self.as_mut().set_board_usb(QString::from(usb_text(p)));
@@ -1072,7 +1318,7 @@ impl qobject::AppController {
                 self.as_mut().rust_mut().board_expected = None;
                 self.as_mut().set_update_busy(false);
                 self.as_mut()
-                    .update_message("ok", &format!("The board runs firmware {want}."));
+                    .update_message("ok", &trf("The board runs firmware %1.", &[&want.to_string()]));
             }
         } else if !self.board_firmware().is_empty() || !self.board_usb().is_empty() {
             // Not reachable: what it said last no longer holds.
@@ -1083,17 +1329,39 @@ impl qobject::AppController {
         }
         self.as_mut().refresh_board_update(st.connected);
         let text = if !st.connected {
-            "Board not reachable"
+            tr("Board not reachable")
         } else if st.active {
-            "Bridge on"
+            tr("Bridge on")
         } else if st.pending {
-            "Please release all keys …"
+            tr("Please release all keys …")
         } else if st.paused {
-            "Paused"
+            tr("Paused")
         } else {
-            "Ready"
+            tr("Ready")
         };
-        self.as_mut().set_status_text(QString::from(text));
+        self.as_mut().set_status_text(QString::from(&text));
+        // Profiles: the one in effect, and a choice by a trigger is kept.
+        if !st.profile.is_empty() {
+            let before = self.effective_profile().to_string();
+            if !before.is_empty() && before != st.profile {
+                notify::send(&tr("Profile"), &st.profile);
+            }
+            self.as_mut().set_effective_profile(QString::from(&st.profile));
+            if *self.active_profile() != QString::from(&st.manual_profile)
+                && let Some(i) = self.config_ref().profile_index(&st.manual_profile)
+            {
+                self.as_mut().rust_mut().config.active_profile = if i == 0 {
+                    String::new()
+                } else {
+                    st.manual_profile.clone()
+                };
+                self.as_mut().save_config();
+                self.as_mut().publish_config(); // also the tray's menu
+            }
+        } else {
+            self.as_mut().set_effective_profile(QString::default());
+        }
+        self.as_mut().rust_mut().last_status = st.clone();
         let tray_state = Some((st.active, st.connected));
         if self.rust().tray_state != tray_state {
             self.as_mut().rust_mut().tray_state = tray_state;
@@ -1116,19 +1384,22 @@ impl qobject::AppController {
             ServiceEvent::Status(st) => self.as_mut().apply_status(*st),
             ServiceEvent::Notice(n) => {
                 let msg = match n {
-                    Notice::Activated => Some(("Bridge on", "Mouse and keyboard go to the PlayStation.")),
-                    Notice::Deactivated => {
-                        Some(("Bridge off", "Mouse and keyboard belong to the desktop again."))
+                    Notice::Activated => {
+                        Some((tr("Bridge on"), tr("Mouse and keyboard go to the PlayStation.")))
                     }
-                    Notice::Emergency => Some(("Emergency stop", "All devices were released.")),
-                    Notice::Paused => Some(("Paused", "Input is not forwarded.")),
+                    Notice::Deactivated => Some((
+                        tr("Bridge off"),
+                        tr("Mouse and keyboard belong to the desktop again."),
+                    )),
+                    Notice::Emergency => Some((tr("Emergency stop"), tr("All devices were released."))),
+                    Notice::Paused => Some((tr("Paused"), tr("Input is not forwarded."))),
                     _ => None,
                 };
                 if let Some((summary, body)) = msg {
-                    notify::send(summary, body);
+                    notify::send(&summary, &body);
                 }
                 if matches!(n, Notice::Deactivated | Notice::Emergency) {
-                    self.as_mut().set_live_text(QString::default());
+                    self.as_mut().show_live(None);
                 }
             }
             ServiceEvent::Recorded(text) => {
@@ -1139,13 +1410,39 @@ impl qobject::AppController {
                 self.as_mut()
                     .set_identified_path(QString::from(&path.display().to_string()));
             }
-            ServiceEvent::Live { text, device } => {
-                self.as_mut().set_live_text(QString::from(&text));
+            ServiceEvent::Live { state, device, .. } => {
+                self.as_mut().show_live(Some(state));
                 if !device.is_empty() {
                     self.as_mut().set_live_device(QString::from(&device));
                 }
             }
             ServiceEvent::Error(e) => self.as_mut().set_last_error(QString::from(&e)),
+            ServiceEvent::Typing {
+                done,
+                total,
+                finished,
+                error,
+            } => {
+                self.as_mut().set_typing_progress(if total > 0 {
+                    done as f64 / total as f64
+                } else {
+                    1.0
+                });
+                if finished {
+                    self.as_mut().set_typing_busy(false);
+                    let (level, text) = match error {
+                        None => ("ok", tr("Typed on the PlayStation.")),
+                        Some(TypingStop::BridgeOn) => ("warn", tr("Switch the bridge off first.")),
+                        Some(TypingStop::NotReady) => (
+                            "warn",
+                            tr("The PlayStation is off, asleep or the board is not reachable."),
+                        ),
+                        Some(TypingStop::Cancelled) => ("warn", tr("Stopped before the end.")),
+                    };
+                    self.as_mut().set_typing_level(QString::from(level));
+                    self.as_mut().set_typing_message(QString::from(&text));
+                }
+            }
         }
     }
 
@@ -1180,7 +1477,7 @@ impl qobject::AppController {
                 Err(e) => return QString::from(&e),
             }
         } else if !key_path.exists() {
-            return QString::from("Please paste the key from the board's web interface.");
+            return QString::from(&tr("Please paste the key from the board's web interface."));
         } else {
             None
         };
@@ -1252,8 +1549,9 @@ impl qobject::AppController {
                     Ok((shown, host)) => {
                         obj.as_mut().set_board_name(QString::from(&shown));
                         obj.as_mut().set_rename_level(QString::from("ok"));
-                        obj.as_mut().set_rename_message(QString::from(&format!(
-                            "Renamed. In your router and the browser the board is now called {host}."
+                        obj.as_mut().set_rename_message(QString::from(&trf(
+                            "Renamed. In your router and the browser the board is now called %1.",
+                            &[&host],
                         )));
                         // The list shows the new name.
                         obj.as_mut().discover_boards();
@@ -1304,7 +1602,7 @@ impl qobject::AppController {
             Ok(l) => l.devices,
             Err(e) => {
                 self.as_mut()
-                    .set_last_error(QString::from(&format!("Device list: {e}")));
+                    .set_last_error(QString::from(&trf("Device list: %1", &[&e.to_string()])));
                 return;
             }
         };
@@ -1359,7 +1657,7 @@ impl qobject::AppController {
         let selected = input::select(&self.rust().devices, &self.config_ref().devices);
         if selected.is_empty() {
             self.as_mut()
-                .set_access_message(QString::from("Please select keyboard and mouse first."));
+                .set_access_message(QString::from(&tr("Please select keyboard and mouse first.")));
             return;
         }
         let rule = pshb_core::access::udev_rule(&selected);
@@ -1453,7 +1751,7 @@ impl qobject::AppController {
         }
         if *self.active() || *self.pending() {
             self.as_mut()
-                .set_access_message(QString::from("Switch the bridge off first."));
+                .set_access_message(QString::from(&tr("Switch the bridge off first.")));
             return;
         }
         self.as_mut().set_access_busy(true);
@@ -1526,10 +1824,17 @@ impl qobject::AppController {
     pub fn set_triggers(mut self: Pin<&mut Self>, json: &QString) -> QString {
         let triggers: Vec<TriggerConfig> = match serde_json::from_str(&String::from(json)) {
             Ok(t) => t,
-            Err(e) => return QString::from(&format!("Invalid triggers: {e}")),
+            Err(e) => return QString::from(&trf("Invalid triggers: %1", &[&e.to_string()])),
         };
+        let names: Vec<String> = self
+            .config_ref()
+            .profile_names()
+            .iter()
+            .map(|n| n.to_string())
+            .collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
         for t in &triggers {
-            if let Err(e) = t.to_trigger() {
+            if let Err(e) = t.to_trigger(&names) {
                 return QString::from(&e);
             }
         }
@@ -1548,7 +1853,7 @@ impl qobject::AppController {
         self.as_mut().rust_mut().config.window_rule = String::from(text).trim().to_string();
         self.as_mut().save_config();
         self.as_mut().publish_config();
-        self.as_mut().restart_focus_watcher();
+        self.as_mut().update_window_watcher();
         self.as_mut().restart_service();
     }
 
@@ -1556,7 +1861,7 @@ impl qobject::AppController {
         self.as_mut().rust_mut().config.window_rule_enabled = on;
         self.as_mut().save_config();
         self.as_mut().publish_config();
-        self.as_mut().restart_focus_watcher();
+        self.as_mut().update_window_watcher();
         self.as_mut().restart_service();
     }
 
@@ -1567,19 +1872,385 @@ impl qobject::AppController {
         self.as_mut().restart_service();
     }
 
-    pub fn set_mouse(mut self: Pin<&mut Self>, sensitivity: f64, accel: f64) {
+    /// Sensitivity and acceleration of the profile "Standard" (wizard).
+    pub fn set_mouse(self: Pin<&mut Self>, sensitivity: f64, accel: f64) {
+        let m = self.config_ref().mouse.clone();
+        self.set_profile_mouse(0, sensitivity, accel, m.invert_y, m.y_ratio, m.wheel_speed);
+    }
+
+    pub fn set_profile_mouse(
+        mut self: Pin<&mut Self>,
+        index: i32,
+        sensitivity: f64,
+        accel: f64,
+        invert_y: bool,
+        y_ratio: f64,
+        wheel_speed: f64,
+    ) {
         {
             // On the sliders' steps: "1.00x" is exactly 1 (raw input), not
             // 1.0000000000000002 from the slider's arithmetic.
             let (s, a) = (config::SENSITIVITY_RANGE, config::ACCEL_RANGE);
-            let m = &mut self.as_mut().rust_mut().config.mouse;
+            let (y, w) = (config::Y_RATIO_RANGE, config::WHEEL_SPEED_RANGE);
+            let mut r = self.as_mut().rust_mut();
+            let m = r.config.profile_mouse_mut(index.max(0) as usize);
             m.sensitivity = round_to(sensitivity, 0.05).clamp(s.0, s.1);
             m.accel = round_to(accel, 0.01).clamp(a.0, a.1);
+            m.invert_y = invert_y;
+            m.y_ratio = round_to(y_ratio, 0.05).clamp(y.0, y.1);
+            m.wheel_speed = round_to(wheel_speed, 0.05).clamp(w.0, w.1);
         }
         self.as_mut().save_config();
         self.as_mut().publish_config();
-        let curve = self.config_ref().mouse_curve();
-        self.command(ServiceCmd::MouseCurve(curve));
+        self.as_mut().send_profiles();
+    }
+
+    /// The profiles' settings to the running service (the bridge stays as it
+    /// is); a profile that cannot be used shows why.
+    fn send_profiles(mut self: Pin<&mut Self>) {
+        match self.config_ref().engine_profiles() {
+            Ok(p) => self.command(ServiceCmd::Profiles(p)),
+            Err(e) => self.as_mut().set_last_error(QString::from(&e)),
+        }
+    }
+
+    pub fn set_profile_remap(mut self: Pin<&mut Self>, index: i32, json: &QString) -> QString {
+        let list: Vec<config::RemapConfig> = match serde_json::from_str(&String::from(json)) {
+            Ok(l) => l,
+            Err(e) => return QString::from(&format!("{e}")),
+        };
+        let keymap = self.config_ref().keymap();
+        for r in &list {
+            if let Err(e) = r.parse(keymap) {
+                return QString::from(&e);
+            }
+        }
+        let index = index.max(0) as usize;
+        let old = std::mem::replace(self.as_mut().rust_mut().config.profile_remap_mut(index), list);
+        if !self.as_mut().save_config() {
+            *self.as_mut().rust_mut().config.profile_remap_mut(index) = old;
+            return self.save_error().clone();
+        }
+        self.as_mut().publish_config();
+        self.as_mut().send_profiles();
+        QString::default()
+    }
+
+    pub fn set_profile_window(mut self: Pin<&mut Self>, index: i32, pattern: &QString) {
+        let Some(i) = (index as usize).checked_sub(1) else {
+            return; // "Standard" applies when no other one does
+        };
+        {
+            let mut r = self.as_mut().rust_mut();
+            let Some(p) = r.config.profiles.get_mut(i) else {
+                return;
+            };
+            p.window = String::from(pattern).trim().to_string();
+        }
+        self.as_mut().save_config();
+        self.as_mut().publish_config();
+        self.as_mut().update_window_watcher();
+        self.as_mut().send_profiles();
+    }
+
+    pub fn add_profile(mut self: Pin<&mut Self>, name: &QString, copy_of: i32) -> QString {
+        let name = String::from(name).trim().to_string();
+        if let Err(e) = self.config_ref().check_profile_name(&name, None) {
+            return QString::from(&e);
+        }
+        let from = copy_of.max(0) as usize;
+        let profile = config::ProfileConfig {
+            name,
+            mouse: self.config_ref().profile_mouse(from).clone(),
+            remap: self.config_ref().profile_remap(from).to_vec(),
+            ..Default::default()
+        };
+        self.as_mut().rust_mut().config.profiles.push(profile);
+        if !self.as_mut().save_config() {
+            self.as_mut().rust_mut().config.profiles.pop();
+            return self.save_error().clone();
+        }
+        self.as_mut().publish_config();
+        // A new profile: the service learns it with a restart (the bridge
+        // goes off), as with changed triggers.
+        self.as_mut().restart_service();
+        QString::default()
+    }
+
+    pub fn rename_profile(mut self: Pin<&mut Self>, index: i32, name: &QString) -> QString {
+        let name = String::from(name).trim().to_string();
+        let index = index.max(0) as usize;
+        if index == 0 {
+            return QString::from(&tr("The profile \"Standard\" keeps its name."));
+        }
+        if let Err(e) = self.config_ref().check_profile_name(&name, Some(index)) {
+            return QString::from(&e);
+        }
+        {
+            let mut r = self.as_mut().rust_mut();
+            let c = &mut r.config;
+            let Some(p) = c.profiles.get_mut(index - 1) else {
+                return QString::default();
+            };
+            let old = std::mem::replace(&mut p.name, name.clone());
+            // Triggers and the choice name the profile.
+            for t in &mut c.triggers {
+                let named = t.action.trim().strip_prefix("profile:").map(str::trim);
+                if named.is_some_and(|n| n.to_lowercase() == old.to_lowercase()) {
+                    t.action = format!("profile:{name}");
+                }
+            }
+            if c.active_profile.to_lowercase() == old.to_lowercase() {
+                c.active_profile = name;
+            }
+        }
+        self.as_mut().save_config();
+        self.as_mut().publish_config();
+        self.as_mut().restart_service();
+        QString::default()
+    }
+
+    pub fn delete_profile(mut self: Pin<&mut Self>, index: i32) {
+        let index = index.max(0) as usize;
+        if index == 0 || index > self.config_ref().profiles.len() {
+            return;
+        }
+        {
+            let mut r = self.as_mut().rust_mut();
+            let c = &mut r.config;
+            let gone = c.profiles.remove(index - 1).name.to_lowercase();
+            // Triggers that chose it now go to the next profile.
+            for t in &mut c.triggers {
+                let named = t.action.trim().strip_prefix("profile:").map(str::trim);
+                if named.is_some_and(|n| n.to_lowercase() == gone) {
+                    t.action = "next-profile".into();
+                }
+            }
+            if c.active_profile.to_lowercase() == gone {
+                c.active_profile.clear();
+            }
+        }
+        self.as_mut().save_config();
+        self.as_mut().publish_config();
+        self.as_mut().update_window_watcher();
+        self.as_mut().restart_service();
+    }
+
+    pub fn choose_profile(mut self: Pin<&mut Self>, index: i32) {
+        let index = index.max(0) as usize;
+        let Some(name) = self
+            .config_ref()
+            .profile_names()
+            .get(index)
+            .map(|n| n.to_string())
+        else {
+            return;
+        };
+        let stored = if index == 0 { String::new() } else { name };
+        if self.config_ref().active_profile != stored {
+            self.as_mut().rust_mut().config.active_profile = stored;
+            self.as_mut().save_config();
+            self.as_mut().publish_config();
+        }
+        self.command(ServiceCmd::Action(Action::Profile(index as u16)));
+    }
+
+    pub fn profile_curve_gain(&self, index: i32, speed: f64) -> f64 {
+        self.config_ref()
+            .profile_mouse(index.max(0) as usize)
+            .curve()
+            .gain(speed)
+    }
+
+    pub fn choose_ps_layout(mut self: Pin<&mut Self>, id: &QString) {
+        let id = String::from(id);
+        if typing::layout(&id).is_none() {
+            return;
+        }
+        self.as_mut().rust_mut().config.ps_layout = id;
+        self.as_mut().save_config();
+        self.as_mut().publish_config();
+    }
+
+    pub fn unsupported_chars(&self, text: &QString) -> QString {
+        let layout = typing::layout_or_default(&self.config_ref().ps_layout);
+        let missing: String = layout.unsupported(&String::from(text)).into_iter().collect();
+        QString::from(&missing)
+    }
+
+    pub fn type_text(mut self: Pin<&mut Self>, text: &QString) {
+        let layout = typing::layout_or_default(&self.config_ref().ps_layout);
+        let text = String::from(text);
+        let states = match typing::plan(&text, layout) {
+            Ok(s) => s,
+            Err(missing) => {
+                let chars: String = missing.into_iter().collect();
+                self.as_mut().set_typing_level(QString::from("bad"));
+                self.as_mut().set_typing_message(QString::from(&trf(
+                    "The PlayStation's keyboard language (%1) has no key for: %2",
+                    &[layout.name, &chars],
+                )));
+                return;
+            }
+        };
+        if self.rust().slot.service.lock().unwrap().is_none() {
+            self.as_mut().set_typing_level(QString::from("warn"));
+            self.as_mut()
+                .set_typing_message(QString::from(&tr("The board is not connected.")));
+            return;
+        }
+        self.as_mut().set_typing_message(QString::default());
+        self.as_mut().set_typing_progress(0.0);
+        self.as_mut().set_typing_busy(true);
+        self.command(ServiceCmd::Type(states));
+    }
+
+    pub fn cancel_typing(self: Pin<&mut Self>) {
+        self.command(ServiceCmd::CancelTyping);
+    }
+
+    pub fn pair_board(
+        mut self: Pin<&mut Self>,
+        address: &QString,
+        password: &QString,
+        new_password: &QString,
+    ) {
+        if *self.pair_busy() {
+            return;
+        }
+        let address = String::from(address).trim().to_string();
+        if let Err(e) = check_address(&address) {
+            self.as_mut().set_pair_level(QString::from("bad"));
+            self.as_mut().set_pair_message(QString::from(&e));
+            return;
+        }
+        let password = String::from(password);
+        let new_password = String::from(new_password);
+        self.as_mut().set_pair_busy(true);
+        self.as_mut().set_pair_message(QString::default());
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new().name("pshb-pair".into()).spawn(move || {
+            let result = resolve(&address).and_then(|a| {
+                update::pair(
+                    &a.ip().to_string(),
+                    80,
+                    &password,
+                    Some(new_password.as_str()).filter(|p| !p.is_empty()),
+                )
+                .map_err(|e| match e {
+                    update::PairError::WrongPassword => tr("Wrong password."),
+                    update::PairError::LockedOut(m) => trf("Too many wrong passwords: %1", &[&m]),
+                    update::PairError::NeedsNewPassword => NEEDS_NEW_PASSWORD.to_string(),
+                    update::PairError::NewPasswordRefused(m) => {
+                        trf("The new password was refused: %1", &[&m])
+                    }
+                    update::PairError::Other(m) => m,
+                })
+            });
+            let _ = qt.queue(move |obj| obj.paired(address, result));
+        });
+    }
+
+    fn paired(mut self: Pin<&mut Self>, address: String, result: Result<[u8; 32], String>) {
+        self.as_mut().set_pair_busy(false);
+        match result {
+            Ok(key) => {
+                let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+                let error = self
+                    .as_mut()
+                    .save_board(&QString::from(&address), &QString::from(&hex));
+                self.as_mut().set_pair_needs_new_password(false);
+                if error.is_empty() {
+                    self.as_mut().set_pair_level(QString::from("ok"));
+                    self.as_mut().set_pair_message(QString::from(&tr(
+                        "Paired: the board made a new key and the app stored it.",
+                    )));
+                } else {
+                    self.as_mut().set_pair_level(QString::from("bad"));
+                    self.as_mut().set_pair_message(error);
+                }
+            }
+            Err(e) if e == NEEDS_NEW_PASSWORD => {
+                self.as_mut().set_pair_needs_new_password(true);
+                self.as_mut().set_pair_level(QString::from("warn"));
+                self.as_mut().set_pair_message(QString::from(&tr(
+                    "The board still has its factory password: choose your own (8 to 64 characters).",
+                )));
+            }
+            Err(e) => {
+                self.as_mut().set_pair_level(QString::from("bad"));
+                self.as_mut().set_pair_message(QString::from(&e));
+            }
+        }
+    }
+
+    pub fn save_diagnostics(mut self: Pin<&mut Self>, url: &QString) {
+        if *self.diag_busy() {
+            return;
+        }
+        let Some(path) = local_path(&String::from(url)) else {
+            return;
+        };
+        let config = self.config_ref().clone();
+        let status = format!("{:#?}", self.rust().last_status);
+        let windows = self.window_backend().to_string();
+        self.as_mut().set_diag_busy(true);
+        self.as_mut().set_diag_message(QString::default());
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new().name("pshb-diag".into()).spawn(move || {
+            let text = {
+                // One request to the board at a time (see BOARD_API).
+                let _one = BOARD_API.lock().unwrap_or_else(|e| e.into_inner());
+                pshb_core::diagnostics::report(&pshb_core::diagnostics::ReportInput {
+                    config: &config,
+                    program: "desktop app",
+                    windows,
+                    status: Some(status),
+                    key: config::load_psk(&config::psk_path()).ok(),
+                    http_port: 80,
+                })
+            };
+            let result = std::fs::write(&path, text)
+                .map(|_| path.display().to_string())
+                .map_err(|e| format!("{}: {e}", path.display()));
+            let _ = qt.queue(move |obj| obj.diagnostics_saved(result));
+        });
+    }
+
+    fn diagnostics_saved(mut self: Pin<&mut Self>, result: Result<String, String>) {
+        self.as_mut().set_diag_busy(false);
+        match result {
+            Ok(path) => {
+                self.as_mut().set_diag_level(QString::from("ok"));
+                self.as_mut()
+                    .set_diag_message(QString::from(&trf("Saved: %1", &[&path])));
+            }
+            Err(e) => {
+                self.as_mut().set_diag_level(QString::from("bad"));
+                self.as_mut().set_diag_message(QString::from(&e));
+            }
+        }
+    }
+
+    pub fn dismiss_board_warning(self: Pin<&mut Self>) {
+        self.set_board_warning(QString::default());
+    }
+
+    pub fn set_app_language(mut self: Pin<&mut Self>, code: &QString) {
+        let code = String::from(code);
+        let code = if code == "de" { "de" } else { "en" };
+        self.as_mut().rust_mut().config.language = code.into();
+        self.as_mut().save_config();
+        i18n::set_language(code);
+        self.as_mut().publish_config();
+        // Texts made in Rust follow at once too.
+        if let Some(t) = &self.rust().tray {
+            t.update(|_| {});
+        }
+        let st = self.rust().last_status.clone();
+        self.as_mut().apply_status(st);
+        let live = self.rust().last_live;
+        self.as_mut().show_live(live);
     }
 
     pub fn set_touchpad(mut self: Pin<&mut Self>, speed: f64, tap: bool, natural: bool) {
@@ -1597,7 +2268,7 @@ impl qobject::AppController {
     }
 
     pub fn curve_gain(&self, speed: f64) -> f64 {
-        self.config_ref().mouse_curve().gain(speed)
+        self.profile_curve_gain(0, speed)
     }
 
     pub fn set_latency_view(mut self: Pin<&mut Self>, visible: bool) {
@@ -1627,7 +2298,7 @@ impl qobject::AppController {
         slot.generation.fetch_add(1, Ordering::SeqCst);
         let service = slot.service.lock().unwrap().take();
         drop(service);
-        self.as_mut().rust_mut().focus = None;
+        self.as_mut().rust_mut().window_watcher = None;
     }
 
     // ------------------------------------------------------------ updates
@@ -1651,7 +2322,7 @@ impl qobject::AppController {
 
     pub fn check_updates(mut self: Pin<&mut Self>) {
         if !*self.update_busy() {
-            self.as_mut().update_message("info", "Looking for updates …");
+            self.as_mut().update_message("info", &tr("Looking for updates …"));
         }
         self.start_update_check(true);
     }
@@ -1682,7 +2353,7 @@ impl qobject::AppController {
                 // An automatic check stays quiet (offline, rate limit).
                 if manual && !*self.update_busy() {
                     self.as_mut()
-                        .update_message("warn", &format!("Could not look for updates: {e}"));
+                        .update_message("warn", &trf("Could not look for updates: %1", &[&e]));
                 }
                 return;
             }
@@ -1698,9 +2369,10 @@ impl qobject::AppController {
         if manual && !*self.update_busy() {
             if any {
                 self.as_mut()
-                    .update_message("info", &format!("Version {v} is available."));
+                    .update_message("info", &trf("Version %1 is available.", &[&v.to_string()]));
             } else {
-                self.as_mut().update_message("ok", "Everything is up to date.");
+                self.as_mut()
+                    .update_message("ok", &tr("Everything is up to date."));
             }
         } else if any && !*self.update_busy() {
             // An earlier "Everything is up to date." (or an error) would stand
@@ -1710,8 +2382,11 @@ impl qobject::AppController {
         if any && self.rust().notified != Some(v) {
             self.as_mut().rust_mut().notified = Some(v);
             notify::send(
-                "Update available",
-                &format!("PS HID Bridge {v} is available. Install it from the app's status page."),
+                &tr("Update available"),
+                &trf(
+                    "PS HID Bridge %1 is available. Install it from the app's status page.",
+                    &[&v.to_string()],
+                ),
             );
         }
     }
@@ -1745,7 +2420,7 @@ impl qobject::AppController {
         let Some(path) = appimage_path() else {
             self.as_mut().update_message(
                 "warn",
-                "This app does not run as an AppImage in a writable folder: download the new version from the release page.",
+                &tr("This app does not run as an AppImage in a writable folder: download the new version from the release page."),
             );
             return;
         };
@@ -1753,7 +2428,7 @@ impl qobject::AppController {
             return;
         };
         self.as_mut().set_update_busy(true);
-        self.as_mut().update_message("info", "Downloading the app …");
+        self.as_mut().update_message("info", &tr("Downloading the app …"));
         let progress = self.qt_thread();
         let done = self.qt_thread();
         let _ = thread::Builder::new()
@@ -1785,12 +2460,15 @@ impl qobject::AppController {
                 self.as_mut().set_app_update_available(false);
                 self.as_mut().update_message(
                     "ok",
-                    &format!("Version {v} is installed. Restart the app to use it."),
+                    &trf(
+                        "Version %1 is installed. Restart the app to use it.",
+                        &[&v.to_string()],
+                    ),
                 );
             }
             Err(e) => self
                 .as_mut()
-                .update_message("warn", &format!("App update failed: {e}")),
+                .update_message("warn", &trf("App update failed: %1", &[&e])),
         }
     }
 
@@ -1806,7 +2484,7 @@ impl qobject::AppController {
             Ok(_) => std::process::exit(0),
             Err(e) => {
                 self.as_mut()
-                    .update_message("warn", &format!("Restart failed: {e}"));
+                    .update_message("warn", &trf("Restart failed: %1", &[&e.to_string()]));
                 self.as_mut().restart_service();
             }
         }
@@ -1894,7 +2572,7 @@ impl qobject::AppController {
         }
         self.as_mut().set_clock_busy(true);
         self.as_mut()
-            .set_clock_message(QString::from("Storing the clock speeds …"));
+            .set_clock_message(QString::from(&tr("Storing the clock speeds …")));
         let done = self.qt_thread();
         let api = self.board_api();
         let _ = thread::Builder::new()
@@ -1904,8 +2582,8 @@ impl qobject::AppController {
                 let _ = done.queue(move |mut obj| {
                     obj.as_mut().set_clock_busy(false);
                     let text = match result {
-                        Ok(true) => "Stored. The board restarts and reconnects in a few seconds.".to_string(),
-                        Ok(false) => "Nothing changed.".to_string(),
+                        Ok(true) => tr("Stored. The board restarts and reconnects in a few seconds."),
+                        Ok(false) => tr("Nothing changed."),
                         Err(e) => e,
                     };
                     obj.as_mut().set_clock_message(QString::from(&text));
@@ -1920,7 +2598,7 @@ impl qobject::AppController {
         if *self.active() {
             self.as_mut().update_message(
                 "warn",
-                "Switch the bridge off first: the board restarts during the update.",
+                &tr("Switch the bridge off first: the board restarts during the update."),
             );
             return;
         }
@@ -1936,7 +2614,8 @@ impl qobject::AppController {
         };
         let board = self.config_ref().board.clone();
         self.as_mut().set_update_busy(true);
-        self.as_mut().update_message("info", "Downloading the firmware …");
+        self.as_mut()
+            .update_message("info", &tr("Downloading the firmware …"));
         let progress = self.qt_thread();
         let done = self.qt_thread();
         let _ = thread::Builder::new()
@@ -1963,7 +2642,7 @@ impl qobject::AppController {
             Err(e) => {
                 self.as_mut().set_update_busy(false);
                 self.as_mut()
-                    .update_message("warn", &format!("Board update failed: {e}"));
+                    .update_message("warn", &trf("Board update failed: %1", &[&e]));
                 return;
             }
         };
@@ -2081,7 +2760,10 @@ impl qobject::AppController {
         let now = self.board_firmware().to_string();
         self.as_mut().update_message(
             "warn",
-            &format!("The board did not come back with firmware {v} (it reports {now}): it probably went back to the previous version."),
+            &trf(
+                "The board did not come back with firmware %1 (it reports %2): it probably went back to the previous version.",
+                &[&v.to_string(), &now],
+            ),
         );
     }
 }
@@ -2104,8 +2786,17 @@ impl cxx_qt::Initialize for qobject::AppController {
             }
         };
         self.as_mut().rust_mut().config = cfg;
-        self.as_mut()
-            .set_window_rule_available(crate::focus::kwin_available());
+        i18n::set_language(&self.config_ref().language);
+        match window::detect() {
+            Ok(b) => {
+                self.as_mut().set_window_rule_available(true);
+                self.as_mut().set_window_backend(QString::from(b.name()));
+            }
+            Err(e) => {
+                self.as_mut().set_window_rule_available(false);
+                self.as_mut().set_window_backend(QString::from(&e));
+            }
+        }
         self.as_mut().publish_config();
         self.as_mut().refresh_devices();
 
@@ -2121,7 +2812,7 @@ impl cxx_qt::Initialize for qobject::AppController {
         if !self_test {
             let handle = tray::spawn(self.qt_thread());
             self.as_mut().rust_mut().tray = handle;
-            self.as_mut().restart_focus_watcher();
+            self.as_mut().update_window_watcher();
             // Also with a board set but the setup not finished (set with
             // pshb-cli, or the wizard closed early): the wizard's board step
             // shows whether it answers, as after "Connect".
@@ -2238,7 +2929,7 @@ fn round_to(v: f64, step: f64) -> f64 {
 /// Form of a board address: IP, IP:port, host name or host name:port.
 fn check_address(board: &str) -> Result<(), String> {
     if board.is_empty() {
-        return Err("Please enter the board address.".into());
+        return Err(tr("Please enter the board address."));
     }
     let bare = board
         .strip_prefix('[')
@@ -2265,7 +2956,101 @@ fn check_address(board: &str) -> Result<(), String> {
 
 fn resolve(board: &str) -> Result<std::net::SocketAddr, String> {
     if board.is_empty() {
-        return Err("Please enter the board address.".into());
+        return Err(tr("Please enter the board address."));
     }
     config::board_socket_addr(board).map_err(|_| format!("Address \"{board}\" not found."))
 }
+
+/// Names of what is held, in the app's language: the modifiers and keys,
+/// and the mouse buttons as one part ("mouse: left, back").
+fn live_parts(s: &KeyState) -> (Vec<String>, Option<String>) {
+    let mods = [
+        (0x01, tr("Ctrl")),
+        (0x02, tr("Shift")),
+        (0x04, tr("Alt")),
+        (0x08, tr("Super")),
+        (0x10, tr("right Ctrl")),
+        (0x20, tr("right Shift")),
+        (0x40, tr("AltGr")),
+        (0x80, tr("right Super")),
+    ];
+    let buttons = [
+        (0x01, tr("left")),
+        (0x02, tr("right")),
+        (0x04, tr("middle")),
+        (0x08, tr("back")),
+        (0x10, tr("forward")),
+    ];
+    let mut parts: Vec<String> = mods
+        .into_iter()
+        .filter(|(bit, _)| s.mods & bit != 0)
+        .map(|(_, n)| n)
+        .collect();
+    if s.keys.contains(&0x01) {
+        // Rollover: the keyboard report has 0x01 in every slot.
+        parts.push(tr("too many keys"));
+    } else {
+        parts.extend(
+            s.keys
+                .iter()
+                .filter(|u| **u != 0)
+                .map(|u| pshb_core::keymap::usage_name(*u)),
+        );
+    }
+    let buttons: Vec<String> = buttons
+        .into_iter()
+        .filter(|(b, _)| s.buttons & b != 0)
+        .map(|(_, n)| n)
+        .collect();
+    let mouse = (!buttons.is_empty()).then(|| trf("mouse: %1", &[&buttons.join(", ")]));
+    (parts, mouse)
+}
+
+/// The profiles for QML, "Standard" first.
+fn profiles_json(c: &Config) -> String {
+    #[derive(Serialize)]
+    struct Row<'a> {
+        name: &'a str,
+        window: &'a str,
+        sensitivity: f64,
+        accel: f64,
+        invert_y: bool,
+        y_ratio: f64,
+        wheel_speed: f64,
+        remap: &'a [config::RemapConfig],
+    }
+    let rows: Vec<Row> = c
+        .profile_names()
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let m = c.profile_mouse(i);
+            Row {
+                name,
+                window: i
+                    .checked_sub(1)
+                    .and_then(|j| c.profiles.get(j))
+                    .map_or("", |p| p.window.as_str()),
+                sensitivity: m.sensitivity,
+                accel: m.accel,
+                invert_y: m.invert_y,
+                y_ratio: m.y_ratio,
+                wheel_speed: m.wheel_speed,
+                remap: c.profile_remap(i),
+            }
+        })
+        .collect();
+    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
+}
+
+/// The keyboard languages text can be typed for, for QML.
+fn layouts_json() -> String {
+    let rows: Vec<serde_json::Value> = typing::LAYOUTS
+        .iter()
+        .map(|l| serde_json::json!({ "id": l.id, "name": l.name }))
+        .collect();
+    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
+}
+
+/// Marks a pairing that needs a new password first (internal, never shown).
+const NEEDS_NEW_PASSWORD: &str = "\u{0}new-password";

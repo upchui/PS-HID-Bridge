@@ -15,17 +15,17 @@ use std::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::controller::{Controller, Watchdog};
-use crate::engine::{Engine, Event, Notice};
+use crate::engine::{Engine, EngineProfile, Notice};
 use crate::idle::IdleInhibitor;
 use crate::input::{self, DeviceInfo, GrabGuard, InputMsg, InputSet, Waker};
 use crate::keymap;
 use crate::lowlat::{self, AdapterInfo, AdapterStatus, AdapterTimer, CpuWake, CpuWakeState};
-use crate::mouse::MouseCurve;
 use crate::protocol::{KEY_LEN, Pong};
 use crate::rt;
 use crate::touch::TouchSettings;
 use crate::transport::{KeyState, LatencyStats, Link, LinkConfig};
 use crate::trigger::{Action, Combo, KeyAlt};
+use crate::window::WindowInfo;
 
 /// Device list check: after hot-plug events (settled), else rarely as a
 /// fallback; regularly only where /dev/input cannot be watched.
@@ -40,13 +40,17 @@ const RESYNC_LOG_GAP: Duration = Duration::from_secs(10);
 
 pub enum ServiceCmd {
     Action(Action),
-    /// Window rule: the configured window gained (true) or lost the focus.
-    Focus(bool),
+    /// The focused window (None: none, or not known); it drives the window
+    /// rule and the profiles that follow a window.
+    Window(Option<WindowInfo>),
     /// Record the next key combination (bridge input is paused meanwhile).
     Record(bool),
     /// Report which selected device produces input.
     Identify(bool),
-    MouseCurve(MouseCurve),
+    /// The profiles' settings changed (mouse, remapped keys; the same
+    /// profiles in the same order: added or removed ones need a restart).
+    /// Choosing one is [`Action::Profile`].
+    Profiles(Vec<EngineProfile>),
     /// Settings for touchpads and touchscreens.
     Touchpad(TouchSettings),
     /// Ping more often while the latency view is visible.
@@ -59,6 +63,10 @@ pub enum ServiceCmd {
     /// The board has a new address (DHCP): send there from now on, with the
     /// bridge left as it is (on stays on).
     Board(SocketAddr),
+    /// Type text on the PlayStation: these key states one after the other
+    /// (crate::typing::plan), while the bridge is off.
+    Type(Vec<KeyState>),
+    CancelTyping,
     Shutdown,
     /// Result of a device scan (internal: the scan runs on its own thread,
     /// the input thread must not stall on sysfs).
@@ -105,6 +113,9 @@ pub struct ServiceStatus {
     pub adapter: Option<AdapterStatus>,
     /// The packet counter cannot be saved (disk full, read-only).
     pub counter_error: Option<String>,
+    /// Profile in effect, and the one chosen by hand or by a trigger.
+    pub profile: String,
+    pub manual_profile: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -115,13 +126,40 @@ pub enum ServiceEvent {
     Recorded(String),
     /// A selected device produced a key or button press.
     Identified(PathBuf),
+    /// Typing text: `done` of `total` key states sent; `finished` at the end,
+    /// with `error` if it stopped early.
+    Typing {
+        done: usize,
+        total: usize,
+        finished: bool,
+        error: Option<TypingStop>,
+    },
     /// What the PlayStation currently receives, e.g. "Shift + A · mouse: left",
     /// and the device whose event last changed it ("" for a command).
     Live {
         text: String,
         device: String,
+        state: KeyState,
     },
     Error(String),
+}
+
+/// Why typing did not start or stopped early.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypingStop {
+    /// The bridge is on (the PlayStation gets the real keyboard).
+    BridgeOn,
+    /// The board is not reachable, or the PlayStation is off or asleep.
+    NotReady,
+    /// Cancelled, or the bridge went on meanwhile.
+    Cancelled,
+}
+
+/// Text being typed: the key states still to send.
+struct Typing {
+    states: std::collections::VecDeque<KeyState>,
+    total: usize,
+    next_at: Instant,
 }
 
 pub struct ServiceConfig {
@@ -253,8 +291,10 @@ struct Runner {
     blocked: usize,
     recording: Option<BTreeSet<u16>>,
     record_pressed: BTreeSet<u16>,
-    /// Window focus that changed while recording (applied afterwards).
-    pending_focus: Option<bool>,
+    /// The focused window, as last reported.
+    window: Option<WindowInfo>,
+    /// The window changed while recording (applied afterwards).
+    window_pending: bool,
     identify: bool,
     last_identify: Option<Instant>,
     last_status: ServiceStatus,
@@ -278,6 +318,7 @@ struct Runner {
     /// A check was asked for while one was running (its result may be old).
     net_check_again: bool,
     next_net_check: Instant,
+    typing: Option<Typing>,
 }
 
 impl Runner {
@@ -305,7 +346,8 @@ impl Runner {
             blocked: 0,
             recording: None,
             record_pressed: BTreeSet::new(),
-            pending_focus: None,
+            window: None,
+            window_pending: false,
             identify: false,
             last_identify: None,
             last_status: ServiceStatus::default(),
@@ -321,10 +363,92 @@ impl Runner {
             net_check_running: false,
             net_check_again: false,
             next_net_check: Instant::now(),
+            typing: None,
         }
     }
 
+    /// Start typing (see [`ServiceCmd::Type`]). The bridge must be off and
+    /// the PlayStation awake; the link sends the states, then releases all.
+    fn start_typing(&mut self, states: Vec<KeyState>) {
+        self.stop_typing(None);
+        let ready = self.link.status().board.is_some_and(|p| {
+            p.status & crate::protocol::STATUS_USB_MOUNTED != 0
+                && p.status & crate::protocol::STATUS_USB_SUSPENDED == 0
+        });
+        let refuse = if self.ctl.engine.is_active() || self.ctl.engine.is_pending() {
+            Some(TypingStop::BridgeOn)
+        } else if !ready {
+            Some(TypingStop::NotReady)
+        } else {
+            None
+        };
+        if let Some(why) = refuse {
+            self.emit(ServiceEvent::Typing {
+                done: 0,
+                total: states.len(),
+                finished: true,
+                error: Some(why),
+            });
+            return;
+        }
+        self.link.set_active(true);
+        self.typing = Some(Typing {
+            total: states.len(),
+            states: states.into(),
+            next_at: Instant::now(),
+        });
+        self.step_typing();
+    }
+
+    /// Send the next key state when it is due.
+    fn step_typing(&mut self) {
+        let Some(t) = &mut self.typing else { return };
+        let now = Instant::now();
+        if now < t.next_at {
+            return;
+        }
+        match t.states.pop_front() {
+            Some(s) => {
+                self.link.set_state(s, None);
+                t.next_at = now + crate::typing::EDGE;
+                // Progress about every 20 states (each is 15 ms).
+                let done = t.total - t.states.len();
+                if done % 20 == 0 {
+                    let total = t.total;
+                    self.emit(ServiceEvent::Typing {
+                        done,
+                        total,
+                        finished: false,
+                        error: None,
+                    });
+                }
+            }
+            None => self.stop_typing(None),
+        }
+    }
+
+    /// End typing (done, or `why` it stopped); everything is released.
+    fn stop_typing(&mut self, why: Option<TypingStop>) {
+        let Some(t) = self.typing.take() else { return };
+        // The engine owns the link once the bridge is on (a trigger while
+        // typing): it sends its own state then.
+        if !self.ctl.engine.is_active() {
+            self.link.set_active(false);
+        }
+        self.emit(ServiceEvent::Typing {
+            done: t.total - t.states.len(),
+            total: t.total,
+            finished: true,
+            error: why,
+        });
+    }
+
     fn emit(&self, e: ServiceEvent) {
+        match &e {
+            ServiceEvent::Error(text) => crate::logln!("PS HID Bridge: {text}"),
+            ServiceEvent::Notice(n) => crate::log::note(&format!("{n:?}")),
+            _ => {}
+        }
         (self.sink)(e);
     }
 
@@ -356,15 +480,17 @@ impl Runner {
     }
 
     /// Devices that could not be grabbed or released: one message for the
-    /// GUI, and a line in the log (journal).
+    /// GUI, and a line in the log (journal, see [`Runner::emit`]).
     fn report_grab_problems(&self, msgs: &[InputMsg]) {
         if let Some(text) = input::grab_problems(msgs) {
-            eprintln!("PS HID Bridge: {text}");
-            self.emit(ServiceEvent::Error(text));
+            self.emit(ServiceEvent::Error(text)); // logged there
         }
     }
 
     fn command(&mut self, action: Action) {
+        if matches!(action, Action::On | Action::Toggle) {
+            self.stop_typing(Some(TypingStop::Cancelled));
+        }
         let n = self.ctl.command(action);
         self.notices(n);
         self.apply_requests();
@@ -385,6 +511,7 @@ impl Runner {
                 self.emit(ServiceEvent::Live {
                     text: describe_state(&s),
                     device,
+                    state: s,
                 });
             }
         }
@@ -484,7 +611,7 @@ impl Runner {
         let resyncs = self.inputs.resyncs();
         if resyncs != self.logged_resyncs && self.logged_at.is_none_or(|t| t.elapsed() >= RESYNC_LOG_GAP) {
             self.logged_at = Some(Instant::now());
-            eprintln!(
+            crate::logln!(
                 "PS HID Bridge: input corrected {} time(s) from the kernel's key state ({resyncs} in total); \
                  the kernel had dropped events because the input thread fell behind",
                 resyncs - self.logged_resyncs
@@ -525,6 +652,8 @@ impl Runner {
             cpu_wake: self.cpu.state(),
             adapter: self.adapter.status(),
             counter_error: self.link.counter_error(),
+            profile: self.profile_name(self.ctl.engine.profile()),
+            manual_profile: self.profile_name(self.ctl.engine.manual_profile()),
         };
         if status != self.last_status {
             self.last_status = status.clone();
@@ -532,7 +661,16 @@ impl Runner {
         }
     }
 
-    fn handle_input(&mut self, dev: usize, event: Event, ts_us: Option<u64>) {
+    fn profile_name(&self, index: usize) -> String {
+        self.ctl
+            .engine
+            .profiles()
+            .get(index)
+            .map(|p| p.name.clone())
+            .unwrap_or_default()
+    }
+
+    fn handle_input(&mut self, dev: usize, event: crate::engine::Event, ts_us: Option<u64>) {
         // Releases of keys held since before the recording still belong to
         // the engine (it would keep them pressed otherwise).
         // (Keys of watched keyboards count too: a trigger may be recorded there.)
@@ -558,7 +696,7 @@ impl Runner {
                         let text = normalize_modifiers(&combo.to_text());
                         self.recording = None;
                         self.emit(ServiceEvent::Recorded(text));
-                        self.apply_pending_focus();
+                        self.apply_pending_window();
                     }
                 }
             }
@@ -567,6 +705,9 @@ impl Runner {
         // Forward first; everything below is for the GUI and may wait.
         let notices = self.ctl.handle(event, Instant::now(), ts_us);
         self.apply_requests();
+        if self.typing.is_some() && (self.ctl.engine.is_active() || self.ctl.engine.is_pending()) {
+            self.stop_typing(Some(TypingStop::Cancelled));
+        }
         self.notices(notices);
         if self.identify
             && let Some((_, true)) = event.key()
@@ -581,20 +722,21 @@ impl Runner {
         self.update_live(Some(dev));
     }
 
-    fn focus(&mut self, focused: bool) {
+    fn window(&mut self, info: Option<WindowInfo>) {
+        self.window = info;
         if self.recording.is_some() {
             // Never let the window rule grab while a trigger is recorded.
-            self.pending_focus = Some(focused);
+            self.window_pending = true;
             return;
         }
-        let n = self.ctl.handle(Event::Focus(focused), Instant::now(), None);
+        let n = self.ctl.window(self.window.as_ref());
         self.apply_requests();
         self.notices(n);
     }
 
-    fn apply_pending_focus(&mut self) {
-        if let Some(f) = self.pending_focus.take() {
-            self.focus(f);
+    fn apply_pending_window(&mut self) {
+        if std::mem::take(&mut self.window_pending) {
+            self.window(self.window.clone());
         }
     }
 
@@ -628,7 +770,7 @@ impl Runner {
                         return;
                     }
                     Ok(ServiceCmd::Action(a)) => self.command(a),
-                    Ok(ServiceCmd::Focus(f)) => self.focus(f),
+                    Ok(ServiceCmd::Window(w)) => self.window(w),
                     Ok(ServiceCmd::Record(on)) => {
                         if on {
                             // Never record while the PlayStation gets the keys.
@@ -637,11 +779,15 @@ impl Runner {
                         self.recording = on.then(BTreeSet::new);
                         self.record_pressed.clear();
                         if !on {
-                            self.apply_pending_focus();
+                            self.apply_pending_window();
                         }
                     }
                     Ok(ServiceCmd::Identify(on)) => self.identify = on,
-                    Ok(ServiceCmd::MouseCurve(c)) => self.ctl.engine.set_mouse_curve(c),
+                    Ok(ServiceCmd::Profiles(profiles)) => {
+                        self.ctl.engine.set_profiles(profiles);
+                        // The window's profile, found among the new ones.
+                        self.window(self.window.clone());
+                    }
                     Ok(ServiceCmd::Touchpad(t)) => self.inputs.set_touch_settings(t),
                     Ok(ServiceCmd::PingInterval(d)) => self.link.set_ping_interval(d),
                     Ok(ServiceCmd::KeepCpuAwake(on)) => self.cpu.set_enabled(on),
@@ -655,6 +801,8 @@ impl Runner {
                         // Possibly another adapter on the way there.
                         self.check_network();
                     }
+                    Ok(ServiceCmd::Type(states)) => self.start_typing(states),
+                    Ok(ServiceCmd::CancelTyping) => self.stop_typing(Some(TypingStop::Cancelled)),
                     Ok(ServiceCmd::Devices(list)) => self.devices_listed(list),
                     Ok(ServiceCmd::Network(found)) => {
                         self.net_check_running = false;
@@ -668,13 +816,14 @@ impl Runner {
             }
             // Input (or a wake-up for a command), until the next periodic job
             let now = Instant::now();
-            let timeout = self
-                .next_rescan
-                .min(next_status)
-                .min(self.next_net_check)
-                .saturating_duration_since(now);
+            let mut due = self.next_rescan.min(next_status).min(self.next_net_check);
+            if let Some(t) = &self.typing {
+                due = due.min(t.next_at);
+            }
+            let timeout = due.saturating_duration_since(now);
             self.inputs.wait(timeout, &mut msgs);
             self.handle_msgs(&mut msgs);
+            self.step_typing();
             let now = Instant::now();
             if now >= self.next_rescan {
                 self.rescan();
@@ -761,6 +910,19 @@ mod tests {
         key: [u8; KEY_LEN],
         session_id: u64,
     ) -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicBool>) {
+        let (addr, stop, _) = fake_board_counting(key, session_id);
+        (addr, stop)
+    }
+
+    /// Also counts the INPUT packets it gets.
+    fn fake_board_counting(
+        key: [u8; KEY_LEN],
+        session_id: u64,
+    ) -> (
+        std::net::SocketAddr,
+        Arc<std::sync::atomic::AtomicBool>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
         use crate::crypto::PacketKey;
         use crate::protocol::{Direction, PacketType, Ping, STATUS_USB_MOUNTED};
         let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -768,6 +930,8 @@ mod tests {
         let addr = sock.local_addr().unwrap();
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let s2 = stop.clone();
+        let inputs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let i2 = inputs.clone();
         thread::spawn(move || {
             let key = PacketKey::new(&key);
             let mut buf = [0u8; 256];
@@ -779,6 +943,9 @@ mod tests {
                 let Ok((h, payload)) = key.open(Direction::AppToBoard, &buf[..n]) else {
                     continue;
                 };
+                if h.ptype == PacketType::Input as u8 {
+                    i2.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                }
                 if h.ptype == PacketType::Ping as u8 {
                     let ping = Ping::decode(&payload);
                     let pong = Pong {
@@ -794,7 +961,85 @@ mod tests {
                 }
             }
         });
-        (addr, stop)
+        (addr, stop, inputs)
+    }
+
+    #[test]
+    fn types_text_while_the_bridge_is_off() {
+        let key = [5u8; KEY_LEN];
+        let (board, stop, inputs) = fake_board_counting(key, 77);
+        let (tx, rx) = mpsc::channel();
+        let sink: Sink = Box::new(move |e| {
+            let _ = tx.send(e);
+        });
+        let svc = Service::start(
+            ServiceConfig {
+                config: Config::default(),
+                key,
+                board,
+                counter_store: None,
+                adapter_state: None,
+            },
+            sink,
+        )
+        .unwrap();
+        let wait_for = |want: &dyn Fn(&ServiceEvent) -> bool, within: Duration| -> Option<ServiceEvent> {
+            let end = Instant::now() + within;
+            while let Some(left) = end.checked_duration_since(Instant::now()) {
+                match rx.recv_timeout(left) {
+                    Ok(e) if want(&e) => return Some(e),
+                    Ok(_) => {}
+                    Err(_) => return None,
+                }
+            }
+            None
+        };
+        assert!(
+            wait_for(
+                &|e| matches!(e, ServiceEvent::Status(s) if s.connected),
+                Duration::from_secs(2)
+            )
+            .is_some()
+        );
+        let before = inputs.load(std::sync::atomic::Ordering::Acquire);
+        let states = crate::typing::plan("Hi!", &crate::typing::US).unwrap();
+        let n = states.len();
+        svc.send(ServiceCmd::Type(states));
+        let done = wait_for(
+            &|e| matches!(e, ServiceEvent::Typing { finished: true, .. }),
+            Duration::from_secs(3),
+        );
+        assert_eq!(
+            done,
+            Some(ServiceEvent::Typing {
+                done: n,
+                total: n,
+                finished: true,
+                error: None
+            })
+        );
+        // Every state went out (and a release at the end).
+        let sent = inputs.load(std::sync::atomic::Ordering::Acquire) - before;
+        assert!(sent > n, "{sent} INPUT packets for {n} states");
+
+        // Not while the bridge is on.
+        svc.send(ServiceCmd::Action(Action::On));
+        svc.send(ServiceCmd::Type(
+            crate::typing::plan("x", &crate::typing::US).unwrap(),
+        ));
+        let refused = wait_for(
+            &|e| matches!(e, ServiceEvent::Typing { finished: true, .. }),
+            Duration::from_secs(1),
+        );
+        assert!(matches!(
+            refused,
+            Some(ServiceEvent::Typing {
+                error: Some(TypingStop::BridgeOn),
+                ..
+            })
+        ));
+        drop(svc);
+        stop.store(true, std::sync::atomic::Ordering::Release);
     }
 
     #[test]

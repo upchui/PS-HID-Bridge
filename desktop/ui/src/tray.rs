@@ -7,10 +7,15 @@ use ksni::blocking::TrayMethods;
 use ksni::menu::StandardItem;
 
 use crate::controller::qobject::AppController;
+use crate::i18n::tr;
 
 pub struct BridgeTray {
     pub active: bool,
     pub connected: bool,
+    /// Profile names ("Standard" first) and the one chosen by hand; the
+    /// menu offers them when there is more than one.
+    pub profiles: Vec<String>,
+    pub profile: usize,
     qt: CxxQtThread<AppController>,
 }
 
@@ -18,12 +23,14 @@ pub fn spawn(qt: CxxQtThread<AppController>) -> Option<ksni::blocking::Handle<Br
     let tray = BridgeTray {
         active: false,
         connected: false,
+        profiles: Vec::new(),
+        profile: 0,
         qt,
     };
     match tray.spawn() {
         Ok(h) => Some(h),
         Err(e) => {
-            eprintln!("Tray not available: {e}");
+            pshb_core::logln!("Tray not available: {e}");
             None
         }
     }
@@ -67,13 +74,14 @@ impl ksni::Tray for BridgeTray {
     }
 
     fn title(&self) -> String {
-        if self.active {
-            "PS HID Bridge – bridge on".into()
+        let state = if self.active {
+            tr("bridge on")
         } else if self.connected {
-            "PS HID Bridge – ready".into()
+            tr("ready")
         } else {
-            "PS HID Bridge – board not reachable".into()
-        }
+            tr("board not reachable")
+        };
+        format!("PS HID Bridge – {state}")
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -95,9 +103,9 @@ impl ksni::Tray for BridgeTray {
     }
 
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
-        vec![
+        let mut items = vec![
             StandardItem {
-                label: "Show window".into(),
+                label: tr("Show window"),
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.qt.queue(|obj| obj.show_window_requested());
                 }),
@@ -106,9 +114,9 @@ impl ksni::Tray for BridgeTray {
             .into(),
             StandardItem {
                 label: if self.active {
-                    "Bridge off".into()
+                    tr("Bridge off")
                 } else {
-                    "Bridge on".into()
+                    tr("Bridge on")
                 },
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.qt.queue(|obj| obj.toggle());
@@ -117,22 +125,51 @@ impl ksni::Tray for BridgeTray {
             }
             .into(),
             StandardItem {
-                label: "Release all keys".into(),
+                label: tr("Release all keys"),
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.qt.queue(|obj| obj.release_all());
                 }),
                 ..Default::default()
             }
             .into(),
-            ksni::MenuItem::Separator,
+        ];
+        if self.profiles.len() > 1 {
+            items.push(
+                ksni::menu::SubMenu {
+                    label: tr("Profile"),
+                    submenu: vec![
+                        ksni::menu::RadioGroup {
+                            selected: self.profile,
+                            select: Box::new(|t: &mut Self, i| {
+                                let _ = t.qt.queue(move |obj| obj.choose_profile(i as i32));
+                            }),
+                            options: self
+                                .profiles
+                                .iter()
+                                .map(|p| ksni::menu::RadioItem {
+                                    label: p.clone(),
+                                    ..Default::default()
+                                })
+                                .collect(),
+                        }
+                        .into(),
+                    ],
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+        items.push(ksni::MenuItem::Separator);
+        items.push(
             StandardItem {
-                label: "Quit".into(),
+                label: tr("Quit"),
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.qt.queue(|obj| obj.quit_app());
                 }),
                 ..Default::default()
             }
             .into(),
-        ]
+        );
+        items
     }
 }

@@ -9,7 +9,7 @@ AppPage {
     function us(ms) {
         return Style.us(ms * 1000);
     }
-    title: "Status"
+    title: I18n.tr("Status")
 
     // Fast pings and the board's statistics only while someone looks: not
     // while the window is minimised, and with the bridge on not while it is
@@ -69,31 +69,27 @@ AppPage {
         target: AppController
         function onLiveTextChanged() {
             page.mouseHeldLong = false;
-            if (AppController.liveText.indexOf("mouse:") >= 0)
+            if (AppController.liveMouseHeld)
                 mouseHeldTimer.restart();
             else
                 mouseHeldTimer.stop();
         }
     }
 
-    // "Shift + A · mouse: left" -> ["Shift", "A", "mouse: left"]; nothing
-    // held ("no key", or "no key · mouse: left" without a key) is no chip.
-    function keyChips(text) {
-        if (text === "")
-            return [];
-        return text.split(" · ").map(p => p.split(" + ")).reduce((a, b) => a.concat(b), [])
-                   .filter(c => c !== "no key");
-    }
-    readonly property var liveChips: keyChips(AppController.liveText)
+    // What is held, as chips: ["Shift", "A", "mouse: left"] (in the app's language).
+    readonly property var liveChips: JSON.parse(AppController.liveChipsJson)
 
     function triggerChips() {
-        const actions = { "toggle": "toggle", "on": "on", "off": "off", "pause": "pause", "release-all": "release all" };
+        const actions = { "toggle": I18n.tr("toggle"), "on": I18n.tr("on"), "off": I18n.tr("off"), "pause": I18n.tr("pause"),
+                          "release-all": I18n.tr("release all"), "next-profile": I18n.tr("next profile") };
+        const actionText = a => a.startsWith("profile:") ? I18n.trf("profile %1", a.substring(8).trim()) : actions[a];
         let chips = triggers.filter(t => t.keys !== "").map(t => ({
             keys: t.keys,
-            what: t.kind === "hold" ? "hold" : (t.kind === "double-tap" ? "double tap: " : "") + actions[t.action]
+            what: t.kind === "hold" ? I18n.tr("hold")
+                  : t.kind === "double-tap" ? I18n.trf("double tap: %1", actionText(t.action)) : actionText(t.action)
         }));
         if (AppController.windowRuleEnabled && AppController.windowRule !== "")
-            chips.push({ keys: AppController.windowRule, what: "window active" });
+            chips.push({ keys: AppController.windowRule, what: I18n.tr("window active") });
         return chips;
     }
 
@@ -103,17 +99,27 @@ AppPage {
         visible: AppController.lastError !== ""
         text: AppController.lastError
         actions: AppButton {
-            text: "Dismiss"
+            text: I18n.tr("Dismiss")
             flat: true
             onClicked: AppController.lastError = ""
         }
     }
     Banner {
         kind: "warn"
+        visible: AppController.boardWarning !== ""
+        text: AppController.boardWarning
+        actions: AppButton {
+            text: I18n.tr("Dismiss")
+            flat: true
+            onClicked: AppController.dismissBoardWarning()
+        }
+    }
+    Banner {
+        kind: "warn"
         visible: AppController.counterError !== ""
-        text: "The packet counter cannot be saved (" + AppController.counterError + "). Input still works; "
-              + "free up disk space or fix the folder's permissions, the app keeps trying. Until then, a restart "
-              + "with the computer's clock set back could reuse values that protect your input."
+        text: I18n.trf("The packet counter cannot be saved (%1). Input still works; "
+                       + "free up disk space or fix the folder's permissions, the app keeps trying. Until then, a restart "
+                       + "with the computer's clock set back could reuse values that protect your input.", AppController.counterError)
     }
     Banner {
         // Green for the offer and progress, yellow when something failed.
@@ -121,23 +127,24 @@ AppPage {
         visible: AppController.appUpdateAvailable || AppController.boardUpdateAvailable
                  || AppController.appUpdated || AppController.updateBusy
         text: AppController.updateStatus !== "" ? AppController.updateStatus
-              : "Version " + AppController.latestVersion + " is available"
-                + (AppController.appUpdateAvailable && AppController.boardUpdateAvailable ? " for app and board."
-                   : AppController.appUpdateAvailable ? " for the app." : " for the board.")
+              : AppController.appUpdateAvailable && AppController.boardUpdateAvailable
+              ? I18n.trf("Version %1 is available for app and board.", AppController.latestVersion)
+              : AppController.appUpdateAvailable ? I18n.trf("Version %1 is available for the app.", AppController.latestVersion)
+              : I18n.trf("Version %1 is available for the board.", AppController.latestVersion)
         actions: [
             AppButton {
-                text: "Update app"
+                text: I18n.tr("Update app")
                 visible: AppController.appUpdateAvailable && AppController.canUpdateApp
                 enabled: !AppController.updateBusy
                 onClicked: AppController.updateApp()
             },
             AppButton {
-                text: "Restart now"
+                text: I18n.tr("Restart now")
                 visible: AppController.appUpdated
                 onClicked: AppController.restartApp()
             },
             AppButton {
-                text: "Update board"
+                text: I18n.tr("Update board")
                 visible: AppController.boardUpdateAvailable
                 enabled: !AppController.updateBusy && !AppController.active
                 onClicked: AppController.updateBoard()
@@ -147,16 +154,16 @@ AppPage {
     Banner {
         kind: "warn"
         visible: AppController.adapterMode === "delaying"
-        text: "The network adapter " + AppController.adapterIface + " holds every packet back up to about "
-              + page.us(AppController.adapterDelayMs) + " before sending it, to bundle packets (USB adapter, cdc_ncm). "
-              + "This comes on top of “Input → network” and shows in the round trip. "
-              + "Set up once (administrator password); after that the adapter sends at once while the app runs and bundles again when it is closed, without a password."
+        text: I18n.trf("The network adapter %1 holds every packet back up to about %2 before sending it, to bundle packets (USB adapter, cdc_ncm). "
+                       + "This comes on top of “Input → network” and shows in the round trip. "
+                       + "Set up once (administrator password); after that the adapter sends at once while the app runs and bundles again when it is closed, without a password.",
+                       AppController.adapterIface, page.us(AppController.adapterDelayMs))
               + (AppController.latencySetupMessage !== "" ? "\n" + AppController.latencySetupMessage : "")
         actions: AppButton {
-            text: AppController.latencySetupBusy ? "Setting up …" : "Set up"
+            text: AppController.latencySetupBusy ? I18n.tr("Setting up …") : I18n.tr("Set up")
             enabled: !AppController.latencySetupBusy
             onClicked: AppController.setupLowLatency()
-            Accessible.description: "Asks for the administrator password"
+            Accessible.description: I18n.tr("Asks for the administrator password")
         }
     }
 
@@ -206,11 +213,11 @@ AppPage {
                         color: Style.muted
                         wrapMode: Text.WordWrap
                         text: AppController.active && AppController.devicesOpen === 0
-                              ? "No keyboard or mouse selected: nothing goes to the PlayStation (Input page)."
-                              : AppController.active ? "Mouse and keyboard go to the PlayStation."
-                              : AppController.connected ? "Mouse and keyboard belong to the desktop."
-                              : AppController.boardAddress === "" ? "Set up the board first."
-                              : "Waiting for the board …"
+                              ? I18n.tr("No keyboard or mouse selected: nothing goes to the PlayStation (Input page).")
+                              : AppController.active ? I18n.tr("Mouse and keyboard go to the PlayStation.")
+                              : AppController.connected ? I18n.tr("Mouse and keyboard belong to the desktop.")
+                              : AppController.boardAddress === "" ? I18n.tr("Set up the board first.")
+                              : I18n.tr("Waiting for the board …")
                     }
                 }
                 AppSwitch {
@@ -224,7 +231,7 @@ AppPage {
                         resync.restart();
                     }
                     big: true
-                    Accessible.name: "Bridge"
+                    Accessible.name: I18n.tr("Bridge")
 
                     // A click flips the switch at once, but the bridge may
                     // stay off (e.g. a device that cannot be grabbed), and
@@ -244,7 +251,7 @@ AppPage {
                 visible: AppController.active
                 spacing: 6
                 Controls.Label {
-                    text: "To the PlayStation:"
+                    text: I18n.tr("To the PlayStation:")
                     color: Style.muted
                     height: 26
                     verticalAlignment: Text.AlignVCenter
@@ -270,7 +277,7 @@ AppPage {
                 }
                 Controls.Label {
                     visible: page.liveChips.length === 0
-                    text: "no key"
+                    text: I18n.tr("no key")
                     color: Style.muted
                     height: 26
                     verticalAlignment: Text.AlignVCenter
@@ -280,7 +287,7 @@ AppPage {
                     // At most as wide as the row, so a long device name is cut
                     // off with "…" instead of running out of the box.
                     width: Math.min(implicitWidth, parent.width)
-                    text: "from " + AppController.liveDevice
+                    text: I18n.trf("from %1", AppController.liveDevice)
                     color: Style.muted
                     height: 26
                     verticalAlignment: Text.AlignVCenter
@@ -291,7 +298,7 @@ AppPage {
                 Layout.fillWidth: true
                 visible: AppController.active && page.mouseHeldLong
                 kind: "warn"
-                text: "A mouse button has been held for a few seconds. If you are not pressing it, the mouse or its wireless receiver lost the release: click that button once, or use \"Release all keys\" (also available as a trigger action)."
+                text: I18n.tr("A mouse button has been held for a few seconds. If you are not pressing it, the mouse or its wireless receiver lost the release: click that button once, or use \"Release all keys\" (also available as a trigger action).")
             }
         }
     }
@@ -306,12 +313,13 @@ AppPage {
 
         StatTile {
             icon: "board"
-            label: "Board"
+            label: I18n.tr("Board")
             level: AppController.boardAddress === "" ? "warn" : AppController.connected ? "ok" : "bad"
-            value: AppController.boardAddress === "" ? "Not set up"
-                   : AppController.connected ? "Connected" : "Not reachable"
-            detail: AppController.boardAddress === "" ? "See \"Board\"."
-                    : AppController.boardAddress + (AppController.boardFirmware !== "" ? " · firmware " + AppController.boardFirmware : "")
+            value: AppController.boardAddress === "" ? I18n.tr("Not set up")
+                   : AppController.connected ? I18n.tr("Connected") : I18n.tr("Not reachable")
+            detail: AppController.boardAddress === "" ? I18n.tr("See \"Board\".")
+                    : AppController.boardFirmware !== "" ? I18n.trf("%1 · firmware %2", AppController.boardAddress, AppController.boardFirmware)
+                    : AppController.boardAddress
         }
         StatTile {
             icon: "gamepad"
@@ -319,7 +327,7 @@ AppPage {
             level: AppController.boardUsb === "PlayStation connected" ? "ok"
                    : AppController.boardUsb === "" ? "" : "warn"
             value: Style.playStation(AppController.boardUsb)
-            detail: "USB connection of the board"
+            detail: I18n.tr("USB connection of the board")
         }
         StatTile {
             id: wayTile
@@ -328,16 +336,17 @@ AppPage {
             readonly property bool oneWay: AppController.upP50 >= 0
             readonly property bool roundTrip: AppController.rttP50 >= 0
             icon: "latency"
-            label: "Network latency to the board"
+            label: I18n.tr("Network latency to the board")
             value: oneWay ? page.us(AppController.upP50)
                    : roundTrip ? "≈ " + page.us(AppController.rttP50 / 2) : "–"
-            detail: oneWay
-                    ? "PC → board, median · 95\u00a0% below " + page.us(AppController.upP95)
-                      + (roundTrip ? " · round trip " + page.us(AppController.rttP50) : "")
+            detail: oneWay && roundTrip
+                    ? I18n.trf("PC → board, median · 95\u00a0% below %1 · round trip %2", page.us(AppController.upP95),
+                               page.us(AppController.rttP50))
+                    : oneWay ? I18n.trf("PC → board, median · 95\u00a0% below %1", page.us(AppController.upP95))
                     : roundTrip
-                    ? "half the round trip (exact with newer board firmware) · round trip " + page.us(AppController.rttP50)
-                      + ", 95\u00a0% below " + page.us(AppController.rttP95)
-                    : "measured while connected"
+                    ? I18n.trf("half the round trip (exact with newer board firmware) · round trip %1, 95\u00a0% below %2",
+                               page.us(AppController.rttP50), page.us(AppController.rttP95))
+                    : I18n.tr("measured while connected")
 
             Canvas {
                 id: spark
@@ -375,12 +384,12 @@ AppPage {
         }
         StatTile {
             icon: "keyboard"
-            label: "Input → network"
+            label: I18n.tr("Input → network")
             value: AppController.inputP50 >= 0 ? page.us(AppController.inputP50) : "–"
             detail: AppController.inputP50 >= 0
-                    ? "median · max " + page.us(AppController.inputMax) + " · "
-                      + Style.plural(AppController.packetsPerSecond, "packet/s", "packets/s")
-                    : "measured while the bridge is on"
+                    ? I18n.trf("median · max %1 · %2", page.us(AppController.inputMax),
+                               Style.plural(AppController.packetsPerSecond, I18n.tr("packet/s"), I18n.tr("packets/s")))
+                    : I18n.tr("measured while the bridge is on")
 
             // A Flow, not a row: the pills wrap to the next line instead of
             // running out of the tile.
@@ -390,27 +399,27 @@ AppPage {
                 Pill {
                     visible: AppController.connected
                     level: AppController.realtime ? "ok" : "warn"
-                    text: AppController.realtime ? "real-time priority" : "normal priority"
+                    text: AppController.realtime ? I18n.tr("real-time priority") : I18n.tr("normal priority")
                     help: AppController.realtime ? ""
-                          : "Real-time priority is not available (rtkit or a realtime group is missing, see README). Input still works, with more variance under load."
+                          : I18n.tr("Real-time priority is not available (rtkit or a realtime group is missing, see README). Input still works, with more variance under load.")
                 }
                 Pill {
                     visible: AppController.cpuWakeState === "held" || AppController.cpuWakeState === "not_permitted"
                     level: AppController.cpuWakeState === "held" ? "ok" : "warn"
-                    text: AppController.cpuWakeState === "held" ? "CPU kept awake" : "CPU may sleep deeply"
+                    text: AppController.cpuWakeState === "held" ? I18n.tr("CPU kept awake") : I18n.tr("CPU may sleep deeply")
                     help: AppController.cpuWakeState !== "not_permitted" ? ""
-                          : "While the bridge is on, the app keeps the processor out of deep sleep states, so no input has to wait for a core to wake up first (now and then a few hundred microseconds). This user may not do that yet: set it up on the Latency page (asks for the administrator password)."
+                          : I18n.tr("While the bridge is on, the app keeps the processor out of deep sleep states, so no input has to wait for a core to wake up first (now and then a few hundred microseconds). This user may not do that yet: set it up on the Latency page (asks for the administrator password).")
                 }
                 Pill {
                     level: AppController.devicesBlocked > 0 ? "warn" : AppController.devicesOpen > 0 ? "accent" : ""
-                    text: AppController.devicesBlocked > 0 ? Style.count(AppController.devicesBlocked) + " without access"
-                          : Style.plural(AppController.devicesOpen, "device interface", "device interfaces")
+                    text: AppController.devicesBlocked > 0 ? I18n.trf("%1 without access", Style.count(AppController.devicesBlocked))
+                          : Style.plural(AppController.devicesOpen, I18n.tr("device interface"), I18n.tr("device interfaces"))
                 }
                 Pill {
                     visible: AppController.inputResyncs > 0
                     level: "warn"
-                    text: Style.count(AppController.inputResyncs) + "× input corrected"
-                    help: "The kernel dropped input events because the app fell behind for a moment (or a release went missing). The app compared with the real key state and released or pressed what was lost, so no key stays stuck. If this count rises often, set up real-time priority (see README)."
+                    text: I18n.trf("%1× input corrected", Style.count(AppController.inputResyncs))
+                    help: I18n.tr("The kernel dropped input events because the app fell behind for a moment (or a release went missing). The app compared with the real key state and released or pressed what was lost, so no key stays stuck. If this count rises often, set up real-time priority (see README).")
                 }
             }
         }
@@ -419,10 +428,10 @@ AppPage {
             readonly property bool complete: page.pcUs >= 0 && page.netUs >= 0 && page.fetchUs >= 0
             Layout.columnSpan: tiles.columns
             icon: "gamepad"
-            label: "Input → PlayStation"
+            label: I18n.tr("Input → PlayStation")
             value: complete ? "≈ " + Style.us(page.pcUs + page.netUs + page.fetchUs) : "–"
-            detail: complete ? "typical: from the input reaching this PC to the PlayStation fetching the report"
-                    : "complete while the bridge is on (and the board answers)"
+            detail: complete ? I18n.tr("typical: from the input reaching this PC to the PlayStation fetching the report")
+                    : I18n.tr("complete while the bridge is on (and the board answers)")
             // Only with every part known: a bar of some parts would look
             // like the whole. Each part keeps its colour.
             StageBar {
@@ -430,43 +439,69 @@ AppPage {
                 Layout.topMargin: 4
                 visible: psTile.complete
                 parts: [
-                    { name: "this PC", value: page.pcUs, series: 0 },
-                    { name: AppController.upP50 >= 0 ? "network" : "network (≈ half the round trip)", value: page.netUs, series: 1 },
-                    { name: "board", value: page.boardUs, series: 2 },
-                    { name: "waiting for the PlayStation's poll", value: page.waitUs, series: 3 }
+                    { name: I18n.tr("this PC"), value: page.pcUs, series: 0 },
+                    { name: AppController.upP50 >= 0 ? I18n.tr("network") : I18n.tr("network (≈ half the round trip)"), value: page.netUs,
+                      series: 1 },
+                    { name: I18n.tr("board"), value: page.boardUs, series: 2 },
+                    { name: I18n.tr("waiting for the PlayStation's poll"), value: page.waitUs, series: 3 }
                 ]
             }
-            help: "Medians of each part, added up. This PC: input event to packet sent (last 1000 packets). Network: PC → board, measured with the board's time stamps (last 120 answers: about 24 s while this page is open, it pings five times a second). Board: packet arrived to report ready. Waiting: until the PlayStation fetches the report; it polls once per millisecond. The board's parts count since it started or since \"Start over\" on the Latency page. Not included: the time until this PC fetches the report from the mouse or keyboard (their own USB polling)."
+            help: I18n.tr("Medians of each part, added up. This PC: input event to packet sent (last 1000 packets). Network: PC → board, measured with the board's time stamps (last 120 answers: about 24 s while this page is open, it pings five times a second). Board: packet arrived to report ready. Waiting: until the PlayStation fetches the report; it polls once per millisecond. The board's parts count since it started or since \"Start over\" on the Latency page. Not included: the time until this PC fetches the report from the mouse or keyboard (their own USB polling).")
         }
     }
 
     // ------------------------------------------------------------ actions
     Card {
-        title: "Controls"
+        title: I18n.tr("Controls")
         icon: "bolt"
 
         Flow {
             Layout.fillWidth: true
             spacing: 8
             AppButton {
-                text: "Release all keys"
+                text: I18n.tr("Release all keys")
                 icon.name: "release"
                 icon.color: enabled ? Style.text : Style.disabled
                 enabled: AppController.connected || AppController.active
                 onClicked: AppController.releaseAll()
             }
             AppButton {
-                text: AppController.paused ? "Resume" : "Pause"
+                text: AppController.paused ? I18n.tr("Resume") : I18n.tr("Pause")
                 icon.name: (AppController.paused ? "play" : "pause")
                 icon.color: enabled ? Style.text : Style.disabled
                 enabled: AppController.connected || AppController.active
                 onClicked: AppController.pause()
             }
             AppButton {
-                text: "Reconnect"
+                text: I18n.tr("Reconnect")
                 icon.name: "reconnect"
                 icon.color: Style.text
                 onClicked: AppController.reconnect()
+            }
+        }
+
+        // The profile in use, and a quick choice (with more than one).
+        RowLayout {
+            readonly property var names: JSON.parse(AppController.profilesJson).map(p => p.name)
+            visible: names.length > 1
+            Layout.fillWidth: true
+            spacing: 8
+            Controls.Label {
+                text: I18n.tr("Profile")
+                color: Style.text
+            }
+            Controls.ComboBox {
+                model: parent.names
+                currentIndex: parent.names.indexOf(AppController.activeProfile)
+                onActivated: i => AppController.chooseProfile(i)
+                Accessible.name: I18n.tr("Profile")
+            }
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: AppController.effectiveProfile !== "" && AppController.effectiveProfile !== AppController.activeProfile
+                wrapMode: Text.WordWrap
+                color: Style.muted
+                text: I18n.trf("Now \"%1\", for the window that has the focus.", AppController.effectiveProfile)
             }
         }
 
@@ -474,7 +509,7 @@ AppPage {
             Layout.fillWidth: true
             spacing: 6
             Repeater {
-                model: page.triggerChips().concat([{ keys: "Ctrl+Alt+Shift+Esc", what: "emergency stop" }])
+                model: page.triggerChips().concat([{ keys: "Ctrl+Alt+Shift+Esc", what: I18n.tr("emergency stop") }])
                 delegate: Rectangle {
                     id: chip
                     required property var modelData
@@ -507,4 +542,6 @@ AppPage {
             }
         }
     }
+
+    TypeTextCard {}
 }

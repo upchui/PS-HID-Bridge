@@ -64,12 +64,13 @@ class Sim:
             self.proc.kill()
             raise RuntimeError("simulator did not start within 10 s")
         ready = self.proc.stdout.readline()
-        m = re.match(r"READY (\d+) HTTP (\d+)(?: DISCOVERY (\d+))?", ready)
+        m = re.match(r"READY (\d+) HTTP (\d+)(?: DISCOVERY (\d+))?(?: MDNS (\d+))?", ready)
         if not m:
             raise RuntimeError(f"simulator did not start: {ready!r}")
         self.port = int(m.group(1))
         self.http_port = int(m.group(2))
         self.discovery_port = int(m.group(3) or 0)
+        self.mdns_port = int(m.group(4) or 0)
         self.reader = threading.Thread(target=self._reader, daemon=True)
         self.reader.start()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -460,6 +461,124 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(b["mac"], "02:00:00:51:4d:00")
         self.assertEqual(b["firmware"], VERSION)
         self.assertTrue(b["key_set"])
+
+
+def dns_query(name: str, qtype: int = 1, qid: int = 0x1234) -> bytes:
+    """A plain DNS question (unicast, as from a resolver's own port)."""
+    import struct
+    q = b"".join(bytes([len(label)]) + label.encode() for label in name.split(".")) + b"\0"
+    return struct.pack(">6H", qid, 0, 1, 0, 0, 0) + q + struct.pack(">2H", qtype, 1)
+
+
+class MdnsTests(unittest.TestCase):
+    """mDNS: the board answers as <network name>.local (simulator: unicast)."""
+
+    def setUp(self):
+        self.sim = Sim("--mdns-port", "0", "--http-port", "0", key=KEY)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.settimeout(NO_ANSWER)
+
+    def tearDown(self):
+        self.sock.close()
+        self.sim.close()
+
+    def name_in_use(self, timeout: float = 5) -> str:
+        """Waits for the simulator's "MDNS <name>.local" line (after probing)."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            try:
+                line = self.sim.lines.get(timeout=end - time.monotonic())
+            except queue.Empty:
+                break
+            if line.startswith("MDNS "):
+                return line.split()[1]
+        self.fail("the simulator did not start answering by name")
+
+    def ask(self, data: bytes) -> bytes | None:
+        self.sock.sendto(data, ("127.0.0.1", self.sim.mdns_port))
+        try:
+            return self.sock.recvfrom(2048)[0]
+        except socket.timeout:
+            return None
+
+    def test_answers_its_name(self):
+        name = self.name_in_use()
+        self.assertEqual(name, "ps-hid-bridge-514d00.local")
+        a = self.ask(dns_query(name))
+        self.assertIsNotNone(a)
+        self.assertEqual(a[:2], b"\x12\x34")  # the question's ID
+        self.assertTrue(a[2] & 0x80)  # an answer
+        self.assertGreaterEqual(int.from_bytes(a[6:8], "big"), 1)
+        self.assertIn(bytes([127, 0, 0, 1]), a)
+        # Case does not matter; other names get no answer.
+        self.assertIsNotNone(self.ask(dns_query(name.upper(), qid=7)))
+        self.assertIsNone(self.ask(dns_query("someone-else.local")))
+
+    def test_status_shows_the_name_and_follows_a_rename(self):
+        self.name_in_use()
+        web = Web(self.sim.http_port)
+        self.assertEqual(web.login("ps-hid-bridge")[0], 200)
+        self.assertEqual(web.req("POST", "/api/password", {"old": "ps-hid-bridge", "new": NEW_PW})[0], 200)
+        self.assertEqual(web.req("GET", "/api/status")[1]["local_name"], "ps-hid-bridge-514d00.local")
+        self.assertEqual(web.req("POST", "/api/name", {"name": "Wohnzimmer PS5"})[0], 200)
+        self.assertEqual(self.name_in_use(), "wohnzimmer-ps5.local")
+        self.assertIsNotNone(self.ask(dns_query("wohnzimmer-ps5.local")))
+
+
+class PairTests(unittest.TestCase):
+    """pshb-cli pair: the key from the board with its web password."""
+
+    def setUp(self):
+        if not os.environ.get("PSHB_CLI"):
+            self.skipTest("no --cli given")
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.sim = Sim("--http-port", "0", "--settings", os.path.join(self.tmp, "flash.bin"))
+        self.env = {**os.environ, "XDG_CONFIG_HOME": self.tmp, "XDG_STATE_HOME": self.tmp}
+
+    def tearDown(self):
+        self.sim.close()
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def pair(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([os.environ["PSHB_CLI"], "--config", os.path.join(self.tmp, "config.toml"),
+                               "pair", "--board", f"127.0.0.1:{self.sim.port}",
+                               "--http-port", str(self.sim.http_port), *args],
+                              capture_output=True, text=True, timeout=30, env=self.env)
+
+    def stored_key(self) -> bytes:
+        with open(os.path.join(self.tmp, "ps-hid-bridge", "psk")) as f:
+            return bytes.fromhex(f.read().strip())
+
+    def test_pair_with_the_factory_password(self):
+        # The browser is logged in meanwhile: pairing must not end its session.
+        browser = Web(self.sim.http_port)
+        self.assertEqual(browser.login("ps-hid-bridge")[0], 200)
+
+        r = self.pair("--password", "ps-hid-bridge")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("factory password", r.stderr)
+        r = self.pair("--password", "wrong-password")
+        self.assertIn("Wrong password", r.stderr)
+
+        r = self.pair("--password", "ps-hid-bridge", "--new-password", NEW_PW)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        key = self.stored_key()
+        self.sim.key = key
+        self.assertIsNotNone(self.sim.ping())
+
+        # Pairing again with the own password makes another key.
+        r = self.pair("--password", NEW_PW)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        key2 = self.stored_key()
+        self.assertNotEqual(key, key2)
+        self.sim.key = key2
+        self.assertIsNotNone(self.sim.ping())
+        # The app logged out each time: a fresh browser login still finds a free session.
+        again = Web(self.sim.http_port)
+        self.assertEqual(again.login(NEW_PW)[0], 200)
+        self.assertEqual(again.req("GET", "/api/status")[0], 200)
 
 
 class FilterTests(unittest.TestCase):

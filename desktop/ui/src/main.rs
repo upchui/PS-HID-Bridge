@@ -8,7 +8,7 @@
 //!                          (select only a virtual device in the settings)
 
 mod controller;
-mod focus;
+mod i18n;
 mod notify;
 mod tray;
 mod window_icon;

@@ -27,8 +27,10 @@ use pshb_core::rt;
 use pshb_core::script;
 use pshb_core::transport::{KeyState, Link, LinkConfig};
 use pshb_core::trigger::{Action, Trigger};
+use pshb_core::typing;
 use pshb_core::update::{self, Version};
 use pshb_core::usbflash::{self, Image};
+use pshb_core::window;
 
 #[derive(Parser)]
 #[command(name = "pshb-cli", version = pshb_core::VERSION, about = "PS HID Bridge – command line")]
@@ -125,6 +127,45 @@ enum Command {
         /// Hold this long, then release everything
         #[arg(long, default_value_t = 100)]
         hold_ms: u64,
+    },
+    /// Type text on the PlayStation (the bridge must be off in the app)
+    Type {
+        #[command(flatten)]
+        board: BoardArgs,
+        /// The text; "-" reads it from standard input
+        text: String,
+        /// Keyboard language set on the PlayStation: us, uk or de (default:
+        /// from the settings, else from the system language)
+        #[arg(long)]
+        layout: Option<String>,
+    },
+    /// Take a new key from the board with its web password and store it
+    /// (replaces the key on the board: other PCs need the new one)
+    Pair {
+        /// Board address (default: from the settings)
+        #[arg(long)]
+        board: Option<String>,
+        /// The board's web password; "-" reads it from standard input
+        #[arg(long)]
+        password: String,
+        /// New web password, needed while the board has its factory password
+        #[arg(long)]
+        new_password: Option<String>,
+        /// Port of the board's web interface
+        #[arg(long, default_value_t = 80)]
+        http_port: u16,
+    },
+    /// Write a report for troubleshooting (versions, system, settings
+    /// without the key, devices, board status, recent messages)
+    Diag {
+        #[command(flatten)]
+        board: BoardArgs,
+        /// Write it to this file instead of standard output
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Port of the board's web interface
+        #[arg(long, default_value_t = 80)]
+        http_port: u16,
     },
     /// Show and change settings
     Config {
@@ -223,6 +264,8 @@ impl FlashImage {
     }
 }
 
+// (Parsed once per run: the size of `Set` does not matter.)
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum ConfigCmd {
     /// Show the current settings
@@ -237,8 +280,8 @@ enum ConfigCmd {
         /// Replace all triggers with one toggle combination, e.g. "Ctrl+Alt+P"
         #[arg(long)]
         hotkey: Option<String>,
-        /// Window rule on or off (desktop app, KDE Plasma): forward while the
-        /// matching window has the focus
+        /// Window rule on or off: forward while the matching window has the
+        /// focus (KDE Plasma, Hyprland, Sway, i3, niri, X11)
         #[arg(long, value_enum)]
         window_rule_enabled: Option<OnOff>,
         /// Window rule pattern: part of the window class, title or desktop file
@@ -248,10 +291,26 @@ enum ConfigCmd {
         /// Physical keyboard type: iso (e.g. German, UK) or ansi (e.g. US)
         #[arg(long, value_enum)]
         keyboard: Option<KeyboardType>,
+        /// The profile whose mouse settings the options below change
+        /// (default: "Standard")
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
+        /// The profile in use (chosen by hand)
+        #[arg(long, value_name = "NAME")]
+        active_profile: Option<String>,
         #[arg(long)]
         sensitivity: Option<f64>,
         #[arg(long)]
         accel: Option<f64>,
+        /// Up and down reversed
+        #[arg(long, value_enum)]
+        invert_y: Option<OnOff>,
+        /// Vertical sensitivity relative to the horizontal one (1.0 = the same)
+        #[arg(long, value_name = "FACTOR")]
+        y_ratio: Option<f64>,
+        /// Factor on the wheel's notches (0.5 = one step per two notches)
+        #[arg(long, value_name = "FACTOR")]
+        wheel_speed: Option<f64>,
         /// Touchpads and touchscreens: factor on the motion (1.0 = as designed)
         #[arg(long, value_name = "FACTOR")]
         touchpad_speed: Option<f64>,
@@ -395,6 +454,23 @@ fn notice_text(n: Notice) -> &'static str {
         Notice::Resumed => "Resumed.",
         Notice::Emergency => "Emergency stop: devices released.",
         Notice::ReleasedAll => "All keys released.",
+        Notice::ProfileChanged => "Profile changed.",
+    }
+}
+
+/// A notice for the terminal; a profile change names the profile.
+fn notice_line(ctl: &Controller, n: Notice) -> String {
+    match n {
+        Notice::ProfileChanged => {
+            let e = &ctl.engine;
+            let name = e
+                .profiles()
+                .get(e.profile())
+                .map(|p| p.name.as_str())
+                .unwrap_or("?");
+            format!("Profile: {name}.")
+        }
+        _ => notice_text(n).to_string(),
     }
 }
 
@@ -518,8 +594,8 @@ fn cmd_run(
 
     let waker = Arc::new(Waker::new().map_err(|e| e.to_string())?);
     let guard = GrabGuard::default();
-    let mut inputs =
-        InputSet::open(&selected, waker, guard.clone()).map_err(|e| format!("Opening device: {e}"))?;
+    let mut inputs = InputSet::open(&selected, waker.clone(), guard.clone())
+        .map_err(|e| format!("Opening device: {e}"))?;
     inputs.set_touch_settings(ctx.config.touchpad.settings());
     // Every other keyboard is only watched: triggers and the emergency stop
     // work there too, nothing of it is forwarded.
@@ -539,6 +615,31 @@ fn cmd_run(
     let watchdog = Watchdog::start(link.clone(), guard, Duration::from_secs(1));
     let mut ctl = Controller::new(Engine::new(ecfg), link.clone());
     let realtime = rt::make_current_thread_realtime(rt::PRIORITY);
+
+    // The focused window, for the window rule and profiles that follow one.
+    let (window_tx, window_rx) = std::sync::mpsc::channel();
+    let wants_window =
+        ctx.config.window_rule_active() || ctx.config.profiles.iter().any(|p| !p.window.trim().is_empty());
+    let _window = if wants_window {
+        let w = waker.clone();
+        match window::detect().and_then(|b| {
+            window::Watcher::start(b, move |info| {
+                let _ = window_tx.send(info);
+                w.wake();
+            })
+        }) {
+            Ok(watcher) => {
+                println!("Windows: from {}.", watcher.backend().name());
+                Some(watcher)
+            }
+            Err(e) => {
+                eprintln!("Window rule and window profiles not available: {e}.");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     println!(
         "Ready. Toggle: {}. Emergency stop: Ctrl+Alt+Shift+Esc. Quit: Ctrl+C.",
@@ -594,7 +695,7 @@ fn cmd_run(
                 }
                 if problems.iter().any(|m| matches!(m, InputMsg::GrabFailed { .. })) {
                     for n in ctl.command(Action::Off) {
-                        println!("{}", notice_text(n));
+                        println!("{}", notice_line(ctl, n));
                     }
                 }
             }
@@ -615,12 +716,18 @@ fn cmd_run(
     while !STOP.load(Ordering::Acquire) {
         watchdog.feed();
         inputs.wait(Duration::from_millis(100), &mut msgs);
+        while let Ok(info) = window_rx.try_recv() {
+            for n in ctl.window(info.as_ref()) {
+                println!("{}", notice_line(&ctl, n));
+            }
+            apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu);
+        }
         let mut grab_failed = Vec::new();
         for m in std::mem::take(&mut msgs) {
             match m {
                 InputMsg::Event { event, ts_us, .. } => {
                     for n in ctl.handle(event, Instant::now(), ts_us) {
-                        println!("{}", notice_text(n));
+                        println!("{}", notice_line(&ctl, n));
                     }
                     apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu);
                 }
@@ -648,7 +755,7 @@ fn cmd_run(
                 eprintln!("{text}");
             }
             for n in ctl.command(Action::Off) {
-                println!("{}", notice_text(n));
+                println!("{}", notice_line(&ctl, n));
             }
             apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu);
         }
@@ -680,7 +787,7 @@ fn cmd_run(
         if watchdog.take_fired() {
             eprintln!("Watchdog: the main loop hung, devices were released.");
             for n in ctl.command(Action::Off) {
-                println!("{}", notice_text(n));
+                println!("{}", notice_line(&ctl, n));
             }
             apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu);
         }
@@ -736,7 +843,7 @@ fn cmd_replay(ctx: &Ctx, board: &BoardArgs, file: &Path, hotkey: Option<&str>) -
     for step in steps {
         thread::sleep(step.delay);
         for n in ctl.handle(step.event, Instant::now(), None) {
-            println!("{}", notice_text(n));
+            println!("{}", notice_line(&ctl, n));
         }
     }
     thread::sleep(Duration::from_millis(50));
@@ -796,6 +903,108 @@ fn cmd_send(
     thread::sleep(Duration::from_millis(hold_ms));
     link.set_active(false);
     thread::sleep(Duration::from_millis(20));
+    Ok(())
+}
+
+fn read_arg_or_stdin(value: &str) -> Result<String, String> {
+    if value != "-" {
+        return Ok(value.to_string());
+    }
+    let mut s = String::new();
+    std::io::stdin()
+        .read_to_string(&mut s)
+        .map_err(|e| e.to_string())?;
+    Ok(s.strip_suffix('\n').unwrap_or(&s).to_string())
+}
+
+fn cmd_type(ctx: &Ctx, board: &BoardArgs, text: &str, layout: Option<&str>) -> Result<(), String> {
+    let text = read_arg_or_stdin(text)?;
+    let layout = match layout {
+        Some(id) => {
+            typing::layout(id).ok_or_else(|| format!("Unknown keyboard language \"{id}\" (us, uk, de)"))?
+        }
+        None => typing::layout_or_default(&ctx.config.ps_layout),
+    };
+    let states = typing::plan(&text, layout).map_err(|missing| {
+        format!(
+            "The keyboard language \"{}\" has no key for: {}",
+            layout.id,
+            missing.iter().collect::<String>()
+        )
+    })?;
+    let link = connect(ctx, board, Duration::from_secs(1))?;
+    let st = link.status().board;
+    if !st.is_some_and(|p| {
+        p.status & protocol::STATUS_USB_MOUNTED != 0 && p.status & protocol::STATUS_USB_SUSPENDED == 0
+    }) {
+        return Err("The PlayStation is off, asleep or not connected to the board.".into());
+    }
+    link.set_active(true);
+    for s in states {
+        link.set_state(s, None);
+        thread::sleep(typing::EDGE);
+    }
+    link.set_active(false);
+    thread::sleep(Duration::from_millis(30));
+    println!("Typed {} characters ({}).", text.chars().count(), layout.name);
+    Ok(())
+}
+
+fn cmd_pair(
+    ctx: &Ctx,
+    board: Option<&str>,
+    password: &str,
+    new_password: Option<&str>,
+    http_port: u16,
+) -> Result<(), String> {
+    let address = board.unwrap_or(&ctx.config.board).to_string();
+    let host = resolve(&address)?.ip().to_string();
+    let password = read_arg_or_stdin(password)?;
+    let key = update::pair(&host, http_port, &password, new_password).map_err(|e| match e {
+        update::PairError::WrongPassword => "Wrong password.".to_string(),
+        update::PairError::LockedOut(m) => format!("Too many wrong passwords: {m}"),
+        update::PairError::NeedsNewPassword => {
+            "The board still has its factory password: pass a new one with --new-password.".to_string()
+        }
+        update::PairError::NewPasswordRefused(m) => format!("New password refused: {m}"),
+        update::PairError::Other(m) => m,
+    })?;
+    config::save_psk(&config::psk_path(), &key)?;
+    if board.is_some() {
+        let mut c = ctx.config.clone();
+        c.board = address.clone();
+        c.save(&ctx.config_path)?;
+    }
+    println!(
+        "Paired with {address}: the board made a new key, stored in {}.",
+        config::psk_path().display()
+    );
+    Ok(())
+}
+
+fn cmd_diag(ctx: &Ctx, board: &BoardArgs, output: Option<&Path>, http_port: u16) -> Result<(), String> {
+    let mut config = ctx.config.clone();
+    if let Some(b) = &board.board {
+        config.board = b.clone();
+    }
+    let text = pshb_core::diagnostics::report(&pshb_core::diagnostics::ReportInput {
+        config: &config,
+        program: "pshb-cli",
+        windows: match window::detect() {
+            Ok(b) => b.name().to_string(),
+            Err(e) => e,
+        },
+        status: None,
+        key: load_key(board).ok(),
+        http_port,
+    });
+    match output {
+        Some(path) => {
+            std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+            println!("Written: {}", path.display());
+        }
+        None => print!("{text}"),
+    }
     Ok(())
 }
 
@@ -1177,8 +1386,13 @@ fn cmd_config(ctx: &mut Ctx, cmd: &ConfigCmd) -> Result<(), String> {
             window_rule_enabled,
             window_rule,
             keyboard,
+            profile,
+            active_profile,
             sensitivity,
             accel,
+            invert_y,
+            y_ratio,
+            wheel_speed,
             touchpad_speed,
             tap_to_click,
             natural_scroll,
@@ -1208,11 +1422,37 @@ fn cmd_config(ctx: &mut Ctx, cmd: &ConfigCmd) -> Result<(), String> {
             if let Some(k) = keyboard {
                 c.iso_keyboard = matches!(k, KeyboardType::Iso);
             }
+            let index = match profile {
+                Some(name) => c
+                    .profile_index(name)
+                    .ok_or_else(|| format!("No profile named \"{name}\""))?,
+                None => 0,
+            };
+            if let Some(name) = active_profile {
+                let i = c
+                    .profile_index(name)
+                    .ok_or_else(|| format!("No profile named \"{name}\""))?;
+                c.active_profile = if i == 0 {
+                    String::new()
+                } else {
+                    c.profiles[i - 1].name.clone()
+                };
+            }
+            let m = c.profile_mouse_mut(index);
             if let Some(s) = sensitivity {
-                c.mouse.sensitivity = config::check_range("--sensitivity", *s, config::SENSITIVITY_RANGE)?;
+                m.sensitivity = config::check_range("--sensitivity", *s, config::SENSITIVITY_RANGE)?;
             }
             if let Some(a) = accel {
-                c.mouse.accel = config::check_range("--accel", *a, config::ACCEL_RANGE)?;
+                m.accel = config::check_range("--accel", *a, config::ACCEL_RANGE)?;
+            }
+            if let Some(on) = invert_y {
+                m.invert_y = matches!(on, OnOff::On);
+            }
+            if let Some(r) = y_ratio {
+                m.y_ratio = config::check_range("--y-ratio", *r, config::Y_RATIO_RANGE)?;
+            }
+            if let Some(w) = wheel_speed {
+                m.wheel_speed = config::check_range("--wheel-speed", *w, config::WHEEL_SPEED_RANGE)?;
             }
             if let Some(s) = touchpad_speed {
                 c.touchpad.speed = config::check_range("--touchpad-speed", *s, config::TOUCH_SPEED_RANGE)?;
@@ -1301,6 +1541,24 @@ fn main() -> ExitCode {
             dy,
             hold_ms,
         } => cmd_send(&ctx, board, keys, mods, buttons, *dx, *dy, *hold_ms),
+        Command::Type { board, text, layout } => cmd_type(&ctx, board, text, layout.as_deref()),
+        Command::Pair {
+            board,
+            password,
+            new_password,
+            http_port,
+        } => cmd_pair(
+            &ctx,
+            board.as_deref(),
+            password,
+            new_password.as_deref(),
+            *http_port,
+        ),
+        Command::Diag {
+            board,
+            output,
+            http_port,
+        } => cmd_diag(&ctx, board, output.as_deref(), *http_port),
         Command::Config { cmd } => cmd_config(&mut ctx, cmd),
         Command::Update {
             board,

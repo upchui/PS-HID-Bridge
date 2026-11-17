@@ -5,12 +5,12 @@ import PSHIDBridge
 
 AppPage {
     id: page
-    title: "Set up PS HID Bridge"
+    title: I18n.tr("Set up PS HID Bridge")
 
     signal finished()
 
     property int step: 0
-    readonly property var titles: ["Welcome", "Board", "Devices", "Trigger", "Test"]
+    readonly property var titles: [I18n.tr("Welcome"), I18n.tr("Board"), I18n.tr("Devices"), I18n.tr("Trigger"), I18n.tr("Test")]
     property string boardError: ""
     property string devicesError: ""
 
@@ -33,24 +33,24 @@ AppPage {
     footer: [
         Controls.Label {
             Layout.fillWidth: true
-            text: "Step " + (page.step + 1) + " of " + page.titles.length
+            text: I18n.trf("Step %1 of %2", page.step + 1, page.titles.length)
             color: Style.muted
         },
         // Run again from the sidebar: the way back without going through
         // every step.
         AppButton {
-            text: "Close"
+            text: I18n.tr("Close")
             flat: true
             visible: AppController.setupDone
             onClicked: page.finished()
         },
         AppButton {
-            text: "Back"
+            text: I18n.tr("Back")
             enabled: page.step > 0
             onClicked: page.step--
         },
         AppButton {
-            text: page.step === page.titles.length - 1 ? "Finish" : "Next"
+            text: page.step === page.titles.length - 1 ? I18n.tr("Finish") : I18n.tr("Next")
             highlighted: true
             onClicked: {
                 if (page.step === 1 && page.boardChanged()) {
@@ -60,11 +60,11 @@ AppPage {
                     psk.text = "";
                 } else if (page.step === 1 && AppController.boardAddress === "") {
                     // Without a board nothing could reach the PlayStation.
-                    page.boardError = "Please enter the board's address and key.";
+                    page.boardError = I18n.tr("Please enter the board's address and key.");
                     return;
                 }
                 if (page.step === 2 && deviceList.selectedCount === 0) {
-                    page.devicesError = "Please select at least one keyboard or mouse: only selected devices go to the PlayStation.";
+                    page.devicesError = I18n.tr("Please select at least one keyboard or mouse: only selected devices go to the PlayStation.");
                     return;
                 }
                 if (page.step === 3 && !triggers.save())
@@ -145,15 +145,24 @@ AppPage {
         ColumnLayout {
             spacing: Style.gap
             Card {
-                title: "Welcome"
+                title: I18n.tr("Welcome")
                 icon: "gamepad"
-                subtitle: "Control the PlayStation with this computer's mouse and keyboard while Remote Play shows the picture."
+                subtitle: I18n.tr("Control the PlayStation with this computer's mouse and keyboard while Remote Play shows the picture.")
+                // Language names in their own language.
+                actions: Segmented {
+                    value: AppController.language
+                    model: [
+                        { value: "en", text: "English" },
+                        { value: "de", text: "Deutsch" }
+                    ]
+                    onActivated: v => AppController.setAppLanguage(v)
+                }
 
                 Repeater {
                     model: [
-                        ["board", "The board with firmware, at the PlayStation's USB port and connected to the network."],
-                        ["key", "The key from the board's web interface (Security → Generate new key)."],
-                        ["gamepad", "On the PlayStation: the keyboard language of your keyboard, and USB power in rest mode on."]
+                        ["board", I18n.tr("The board with firmware, at the PlayStation's USB port and connected to the network.")],
+                        ["key", I18n.tr("The board's web password, or the key from its web interface (Security → Generate new key).")],
+                        ["gamepad", I18n.tr("On the PlayStation: the keyboard language of your keyboard, and USB power in rest mode on.")]
                     ]
                     delegate: RowLayout {
                         required property var modelData
@@ -175,12 +184,12 @@ AppPage {
                 }
             }
             Card {
-                title: "No firmware on the board yet?"
+                title: I18n.tr("No firmware on the board yet?")
                 icon: "usb"
-                subtitle: "Install it from here over USB."
+                subtitle: I18n.tr("Install it from here over USB.")
                 actions: AppButton {
                     id: usbToggle
-                    text: checked ? "Hide" : "Install via USB"
+                    text: checked ? I18n.tr("Hide") : I18n.tr("Install via USB")
                     checkable: true
                 }
                 // Loaded on demand (it watches for the board); always in
@@ -199,9 +208,9 @@ AppPage {
         ColumnLayout {
             spacing: Style.gap
             Card {
-                title: "Board"
+                title: I18n.tr("Board")
                 icon: "network"
-                subtitle: "Pick it from the boards found in this network, or enter the address your router lists for ps-hid-bridge-…; the key comes from its web interface."
+                subtitle: I18n.tr("Pick it from the boards found in this network, or enter the address your router lists for ps-hid-bridge-…; then paste the key from its web interface, or let the app get it with the web password.")
 
                 BoardFinder {
                     id: finder
@@ -219,7 +228,7 @@ AppPage {
                     columnSpacing: 12
                     rowSpacing: 8
                     Controls.Label {
-                        text: "Address"
+                        text: I18n.tr("Address")
                         color: Style.text
                     }
                     Controls.TextField {
@@ -227,10 +236,10 @@ AppPage {
                         Layout.fillWidth: true
                         Layout.maximumWidth: 360
                         text: AppController.boardAddress
-                        placeholderText: "e.g. 192.168.1.50"
+                        placeholderText: I18n.tr("e.g. 192.168.1.50")
                     }
                     Controls.Label {
-                        text: "Key"
+                        text: I18n.tr("Key")
                         color: Style.text
                     }
                     Controls.TextField {
@@ -238,16 +247,21 @@ AppPage {
                         Layout.fillWidth: true
                         Layout.maximumWidth: 360
                         echoMode: TextInput.Password
-                        placeholderText: AppController.pskSet ? "stored – fill in only to change it" : "64 hex digits"
+                        placeholderText: AppController.pskSet ? I18n.tr("stored – fill in only to change it") : I18n.tr("64 hex digits")
                     }
                 }
                 AppButton {
-                    text: "Connect"
+                    text: I18n.tr("Connect")
                     onClicked: {
                         page.boardError = AppController.saveBoard(address.text, psk.text);
                         if (page.boardError === "")
                             psk.text = "";
                     }
+                }
+                PairBox {
+                    Layout.fillWidth: true
+                    address: address.text
+                    keySet: finder.boards.some(b => b.address === address.text.trim() && b.key_set)
                 }
                 Banner {
                     kind: "error"
@@ -258,10 +272,10 @@ AppPage {
                     kind: AppController.connected ? "ok" : AppController.lastError !== "" ? "warn" : "info"
                     visible: page.boardError === "" && AppController.boardAddress !== ""
                     text: AppController.connected
-                          ? "Board connected (firmware " + AppController.boardFirmware + "). PlayStation: "
-                            + Style.playStation(AppController.boardUsb).toLowerCase() + "."
+                          ? I18n.trf("Board connected (firmware %1). PlayStation: %2.", AppController.boardFirmware,
+                                     Style.playStationInText(AppController.boardUsb))
                           : AppController.lastError !== "" ? AppController.lastError
-                          : "Waiting for an answer from the board … Are address and key correct?"
+                          : I18n.tr("Waiting for an answer from the board … Are address and key correct?")
                 }
             }
         }
@@ -270,9 +284,9 @@ AppPage {
         ColumnLayout {
             spacing: Style.gap
             Card {
-                title: "Keyboard and mouse"
+                title: I18n.tr("Keyboard and mouse")
                 icon: "input"
-                subtitle: "Select what should go to the PlayStation."
+                subtitle: I18n.tr("Select what should go to the PlayStation.")
                 DeviceList {
                     id: deviceList
                     Layout.fillWidth: true
@@ -285,7 +299,7 @@ AppPage {
                 }
             }
             Card {
-                title: "Keyboard type"
+                title: I18n.tr("Keyboard type")
                 icon: "keyboard"
                 KeyboardTypeChooser {}
             }
@@ -295,9 +309,9 @@ AppPage {
         ColumnLayout {
             spacing: Style.gap
             Card {
-                title: "Switching"
+                title: I18n.tr("Switching")
                 icon: "bolt"
-                subtitle: "How you switch between desktop and PlayStation. Emergency stop, always: Ctrl+Alt+Shift+Esc."
+                subtitle: I18n.tr("How you switch between desktop and PlayStation. Emergency stop, always: Ctrl+Alt+Shift+Esc.")
                 TriggerEditor {
                     id: triggers
                     Layout.fillWidth: true
@@ -309,9 +323,9 @@ AppPage {
         ColumnLayout {
             spacing: Style.gap
             Card {
-                title: "Try it"
+                title: I18n.tr("Try it")
                 icon: "play"
-                subtitle: "Press the trigger: you see here what reaches the PlayStation. Press it again to switch off."
+                subtitle: I18n.tr("Press the trigger: you see here what reaches the PlayStation. Press it again to switch off.")
 
                 Controls.Label {
                     Layout.fillWidth: true
@@ -326,10 +340,10 @@ AppPage {
                     columns: 2
                     columnSpacing: 16
                     rowSpacing: 6
-                    Controls.Label { text: "To the PlayStation"; color: Style.muted }
+                    Controls.Label { text: I18n.tr("To the PlayStation"); color: Style.muted }
                     Controls.Label {
                         Layout.fillWidth: true
-                        text: AppController.active ? (AppController.liveText !== "" ? AppController.liveText : "no key") : "–"
+                        text: AppController.active ? (AppController.liveText !== "" ? AppController.liveText : I18n.tr("no key")) : "–"
                         color: Style.text
                         font.weight: Font.DemiBold
                         wrapMode: Text.WordWrap
@@ -339,7 +353,7 @@ AppPage {
                         text: AppController.boardUsb !== "" ? Style.playStation(AppController.boardUsb) : "–"
                         color: Style.text
                     }
-                    Controls.Label { text: "Round trip"; color: Style.muted }
+                    Controls.Label { text: I18n.tr("Round trip"); color: Style.muted }
                     Controls.Label {
                         text: AppController.rttMs >= 0 ? Style.us(AppController.rttMs * 1000) : "–"
                         color: Style.text

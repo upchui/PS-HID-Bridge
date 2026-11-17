@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::parse_key_hex;
-use crate::engine::EngineConfig;
-use crate::keymap::Keymap;
+use crate::engine::{EngineConfig, EngineProfile, STANDARD_PROFILE};
+use crate::keymap::{self, Keymap};
 use crate::mouse::MouseCurve;
 use crate::protocol::{KEY_LEN, UDP_PORT_DEFAULT};
 use crate::touch::TouchSettings;
@@ -45,8 +45,9 @@ impl Default for TriggerConfig {
 }
 
 impl TriggerConfig {
-    pub fn to_trigger(&self) -> Result<Trigger, String> {
-        let action = Action::parse(&self.action)?;
+    /// `profiles`: the profile names, for "profile:<name>" actions.
+    pub fn to_trigger(&self, profiles: &[&str]) -> Result<Trigger, String> {
+        let action = Action::parse_with_profiles(&self.action, profiles)?;
         let kind = match self.kind.as_str() {
             "combo" => TriggerKind::Combo(Combo::parse_trigger(&self.keys)?),
             "hold" => TriggerKind::Hold(Combo::parse_trigger(&self.keys)?),
@@ -72,6 +73,12 @@ pub struct MouseConfig {
     pub sensitivity: f64,
     pub accel: f64,
     pub threshold: f64,
+    /// Up and down reversed.
+    pub invert_y: bool,
+    /// Vertical sensitivity relative to the horizontal one.
+    pub y_ratio: f64,
+    /// Factor on the wheel's notches.
+    pub wheel_speed: f64,
     /// Settings this version does not know (written by a newer one): kept
     /// and written back as they are.
     #[serde(flatten)]
@@ -93,7 +100,22 @@ impl MouseConfig {
         if !ok(self.accel, false) || !ok(self.threshold, false) {
             return Err("Mouse acceleration and threshold must not be negative".into());
         }
+        if !ok(self.y_ratio, true) || !ok(self.wheel_speed, true) {
+            return Err("Vertical ratio and wheel speed must be above 0".into());
+        }
         Ok(())
+    }
+
+    pub fn curve(&self) -> MouseCurve {
+        MouseCurve {
+            sensitivity: self.sensitivity,
+            accel: self.accel,
+            threshold: self.threshold,
+            invert_y: self.invert_y,
+            y_ratio: self.y_ratio,
+            wheel: self.wheel_speed,
+            ..MouseCurve::default()
+        }
     }
 }
 
@@ -104,9 +126,78 @@ impl Default for MouseConfig {
             sensitivity: c.sensitivity,
             accel: c.accel,
             threshold: c.threshold,
+            invert_y: c.invert_y,
+            y_ratio: c.y_ratio,
+            wheel_speed: c.wheel,
             extra: toml::Table::new(),
         }
     }
+}
+
+/// One remapped key or button: `from` (physical) reaches the PlayStation as
+/// `to`; `to` = "none" sends nothing for it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemapConfig {
+    /// e.g. "Mouse4", "CAPSLOCK", "Ctrl" (both Ctrl keys)
+    pub from: String,
+    /// e.g. "F", "LEFTCTRL", "MouseMiddle", "none"
+    pub to: String,
+    /// Settings this version does not know (written by a newer one): kept
+    /// and written back as they are.
+    #[serde(flatten)]
+    pub extra: toml::Table,
+}
+
+impl RemapConfig {
+    /// Physical codes and what they become (None: nothing).
+    pub fn parse(&self, keymap: Keymap) -> Result<(Vec<u16>, Option<u16>), String> {
+        let from = remap_codes(&self.from)?;
+        let to = match self.to.trim().to_ascii_lowercase().as_str() {
+            "" | "none" | "off" => None,
+            _ => {
+                let code = remap_codes(&self.to)?[0];
+                let forwarded = keymap::modifier_bit(code).is_some()
+                    || keymap::button_bit(code).is_some()
+                    || keymap.usage(code).is_some();
+                if !forwarded {
+                    return Err(format!(
+                        "\"{}\" cannot be sent to the PlayStation",
+                        self.to.trim()
+                    ));
+                }
+                Some(code)
+            }
+        };
+        Ok((from, to))
+    }
+}
+
+/// Codes of a single key or button name ("Ctrl" stands for both Ctrl keys).
+fn remap_codes(name: &str) -> Result<Vec<u16>, String> {
+    let c = Combo::parse(name.trim())?;
+    match c.0.as_slice() {
+        [one] => Ok(one.0.clone()),
+        _ => Err(format!("\"{}\" is more than one key", name.trim())),
+    }
+}
+
+/// A profile besides "Standard" (whose settings are `[mouse]` and `[[remap]]`
+/// at the top of the file, as before profiles existed).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProfileConfig {
+    pub name: String,
+    /// Applies while a window matching this has the focus ("" = only when
+    /// chosen by hand or by a trigger).
+    pub window: String,
+    pub mouse: MouseConfig,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub remap: Vec<RemapConfig>,
+    /// Settings this version does not know (written by a newer one): kept
+    /// and written back as they are.
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 
 /// Touchpads and touchscreens (see [`crate::touch`]).
@@ -171,6 +262,15 @@ pub struct Config {
     pub window_rule_enabled: bool,
     pub window_rule: String,
     pub mouse: MouseConfig,
+    /// Remapped keys of the profile "Standard".
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub remap: Vec<RemapConfig>,
+    /// Further profiles.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<ProfileConfig>,
+    /// The profile chosen by hand or by a trigger ("" = "Standard").
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub active_profile: String,
     pub touchpad: TouchpadConfig,
     /// ISO keyboard (German): `#'` key sends HID 0x32.
     pub iso_keyboard: bool,
@@ -180,6 +280,12 @@ pub struct Config {
     pub update_check: bool,
     /// Look of the app: "system" (follow the desktop), "light" or "dark".
     pub appearance: String,
+    /// Language of the app: "en" or "de".
+    pub language: String,
+    /// Keyboard language set on the PlayStation, for typing text there
+    /// (crate::typing): "de", "us", "uk" …; "" = from the system language.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub ps_layout: String,
     /// Keep the CPU out of deep sleep states while the bridge is on (faster
     /// reaction to input, a few watts more; see crate::lowlat::CpuWake).
     pub keep_cpu_awake: bool,
@@ -202,11 +308,16 @@ impl Default for Config {
             window_rule_enabled: false,
             window_rule: DEFAULT_WINDOW_RULE.into(),
             mouse: MouseConfig::default(),
+            remap: Vec::new(),
+            profiles: Vec::new(),
+            active_profile: String::new(),
             touchpad: TouchpadConfig::default(),
             iso_keyboard: true,
             setup_done: false,
             update_check: true,
             appearance: "system".into(),
+            language: "en".into(),
+            ps_layout: String::new(),
             keep_cpu_awake: true,
             extra: toml::Table::new(),
         }
@@ -221,6 +332,8 @@ pub const DEFAULT_WINDOW_RULE: &str = "chiaki-ng";
 pub const SENSITIVITY_RANGE: (f64, f64) = (0.1, 8.0);
 pub const ACCEL_RANGE: (f64, f64) = (0.0, 1.0);
 pub const TOUCH_SPEED_RANGE: (f64, f64) = (0.1, 8.0);
+pub const Y_RATIO_RANGE: (f64, f64) = (0.25, 4.0);
+pub const WHEEL_SPEED_RANGE: (f64, f64) = (0.25, 4.0);
 
 /// `value` in `range`, as a message for the option `name` otherwise.
 pub fn check_range(name: &str, value: f64, range: (f64, f64)) -> Result<f64, String> {
@@ -249,7 +362,7 @@ impl Config {
         config.normalize();
         let unknown = config.unknown_keys();
         if !unknown.is_empty() {
-            eprintln!(
+            crate::logln!(
                 "{}: settings this version does not know are kept: {}",
                 path.display(),
                 unknown.join(", ")
@@ -265,6 +378,16 @@ impl Config {
         keys.extend(self.mouse.extra.keys().map(|k| format!("mouse.{k}")));
         for t in &self.triggers {
             keys.extend(t.extra.keys().map(|k| format!("triggers.{k}")));
+        }
+        for r in &self.remap {
+            keys.extend(r.extra.keys().map(|k| format!("remap.{k}")));
+        }
+        for p in &self.profiles {
+            keys.extend(p.extra.keys().map(|k| format!("profiles.{k}")));
+            keys.extend(p.mouse.extra.keys().map(|k| format!("profiles.mouse.{k}")));
+            for r in &p.remap {
+                keys.extend(r.extra.keys().map(|k| format!("profiles.remap.{k}")));
+            }
         }
         keys
     }
@@ -292,10 +415,14 @@ impl Config {
         if !["system", "light", "dark"].contains(&self.appearance.as_str()) {
             self.appearance = "system".into();
         }
+        if !["en", "de"].contains(&self.language.as_str()) {
+            self.language = "en".into();
+        }
         for t in &mut self.triggers {
             if let Ok(combo) = Combo::parse(&t.keys) {
                 t.keys = combo.to_text();
             }
+            // ("profile:<name>" stays as written: the name is not in the action.)
             if let Ok(action) = Action::parse(&t.action) {
                 t.action = action.as_str().into();
             }
@@ -308,29 +435,135 @@ impl Config {
     }
 
     pub fn engine_config(&self) -> Result<EngineConfig, String> {
-        self.mouse.validate()?;
         self.touchpad.validate()?;
+        let names = self.profile_names();
         Ok(EngineConfig {
             triggers: self
                 .triggers
                 .iter()
-                .map(TriggerConfig::to_trigger)
+                .map(|t| t.to_trigger(&names))
                 .collect::<Result<_, _>>()?,
             window_rule: self.window_rule_active(),
-            keymap: Keymap {
-                iso: self.iso_keyboard,
-            },
-            mouse: self.mouse_curve(),
+            window_pattern: self.window_rule.trim().to_string(),
+            keymap: self.keymap(),
+            profiles: self.engine_profiles()?,
+            profile: self.active_profile_index(),
         })
     }
 
-    pub fn mouse_curve(&self) -> MouseCurve {
-        MouseCurve {
-            sensitivity: self.mouse.sensitivity,
-            accel: self.mouse.accel,
-            threshold: self.mouse.threshold,
-            ..MouseCurve::default()
+    pub fn keymap(&self) -> Keymap {
+        Keymap {
+            iso: self.iso_keyboard,
         }
+    }
+
+    /// "Standard", then the further profiles.
+    pub fn profile_names(&self) -> Vec<&str> {
+        std::iter::once(STANDARD_PROFILE)
+            .chain(self.profiles.iter().map(|p| p.name.as_str()))
+            .collect()
+    }
+
+    /// Index of `active_profile` (0, "Standard", if there is no such profile).
+    pub fn active_profile_index(&self) -> usize {
+        self.profile_index(&self.active_profile).unwrap_or(0)
+    }
+
+    /// Index of the profile called `name` (ignoring case; "" = "Standard").
+    pub fn profile_index(&self, name: &str) -> Option<usize> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Some(0);
+        }
+        self.profile_names()
+            .iter()
+            .position(|n| n.to_lowercase() == name.to_lowercase())
+    }
+
+    /// Mouse settings of the profile with this index (0 = "Standard").
+    pub fn profile_mouse(&self, index: usize) -> &MouseConfig {
+        match index.checked_sub(1).and_then(|i| self.profiles.get(i)) {
+            Some(p) => &p.mouse,
+            None => &self.mouse,
+        }
+    }
+
+    pub fn profile_mouse_mut(&mut self, index: usize) -> &mut MouseConfig {
+        match index.checked_sub(1) {
+            Some(i) if i < self.profiles.len() => &mut self.profiles[i].mouse,
+            _ => &mut self.mouse,
+        }
+    }
+
+    pub fn profile_remap(&self, index: usize) -> &[RemapConfig] {
+        match index.checked_sub(1).and_then(|i| self.profiles.get(i)) {
+            Some(p) => &p.remap,
+            None => &self.remap,
+        }
+    }
+
+    pub fn profile_remap_mut(&mut self, index: usize) -> &mut Vec<RemapConfig> {
+        match index.checked_sub(1) {
+            Some(i) if i < self.profiles.len() => &mut self.profiles[i].remap,
+            _ => &mut self.remap,
+        }
+    }
+
+    /// Names must be set and differ (ignoring case), "Standard" is taken.
+    pub fn check_profile_name(&self, name: &str, except: Option<usize>) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("A profile needs a name".into());
+        }
+        if name.len() > 40 {
+            return Err("Profile names have at most 40 characters".into());
+        }
+        let taken = self
+            .profile_names()
+            .iter()
+            .enumerate()
+            .any(|(i, n)| Some(i) != except && n.to_lowercase() == name.to_lowercase());
+        if taken {
+            return Err(format!("There is already a profile named \"{name}\""));
+        }
+        Ok(())
+    }
+
+    /// Every profile for the engine; also checks names and remapped keys.
+    pub fn engine_profiles(&self) -> Result<Vec<EngineProfile>, String> {
+        let keymap = self.keymap();
+        let remap = |list: &[RemapConfig], profile: &str| -> Result<_, String> {
+            let mut map = std::collections::BTreeMap::new();
+            for r in list {
+                let (from, to) = r
+                    .parse(keymap)
+                    .map_err(|e| format!("Profile \"{profile}\": {e}"))?;
+                for f in from {
+                    map.insert(f, to);
+                }
+            }
+            Ok(map)
+        };
+        self.mouse.validate()?;
+        let mut out = vec![EngineProfile {
+            name: STANDARD_PROFILE.into(),
+            window: String::new(),
+            mouse: self.mouse.curve(),
+            remap: remap(&self.remap, STANDARD_PROFILE)?,
+        }];
+        for (i, p) in self.profiles.iter().enumerate() {
+            self.check_profile_name(&p.name, Some(i + 1))?;
+            p.mouse
+                .validate()
+                .map_err(|e| format!("Profile \"{}\": {e}", p.name))?;
+            out.push(EngineProfile {
+                name: p.name.trim().to_string(),
+                window: p.window.trim().to_string(),
+                mouse: p.mouse.curve(),
+                remap: remap(&p.remap, &p.name)?,
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -538,6 +771,134 @@ mod tests {
         assert!(c.engine_config().is_err());
         c.mouse.accel = 0.0;
         assert!(c.engine_config().is_ok());
+        c.mouse.wheel_speed = 0.0;
+        assert!(c.engine_config().is_err());
+    }
+
+    #[test]
+    fn older_settings_load_unchanged_and_mean_one_profile() {
+        let text = "board = \"192.168.1.50\"\n[mouse]\nsensitivity = 1.5\naccel = 0.0\nthreshold = 2.0\n";
+        let c = Config::parse(text).unwrap();
+        assert!(c.unknown_keys().is_empty());
+        assert_eq!(c.mouse.y_ratio, 1.0);
+        assert!(!c.mouse.invert_y);
+        let ec = c.engine_config().unwrap();
+        assert_eq!(ec.profiles.len(), 1);
+        assert_eq!(ec.profiles[0].name, STANDARD_PROFILE);
+        assert_eq!(ec.profiles[0].mouse.sensitivity, 1.5);
+        assert_eq!(ec.profile, 0);
+        // Nothing about profiles is written while there are none.
+        let saved = toml::to_string_pretty(&c).unwrap();
+        assert!(!saved.contains("profiles") && !saved.contains("remap") && !saved.contains("active_profile"));
+    }
+
+    #[test]
+    fn profiles_and_remapping() {
+        let dir = temp("profiles");
+        let path = dir.join("config.toml");
+        let mut c = Config::default();
+        c.remap.push(RemapConfig {
+            from: "CAPSLOCK".into(),
+            to: "Ctrl".into(),
+            ..Default::default()
+        });
+        c.profiles.push(ProfileConfig {
+            name: "Shooter".into(),
+            window: "chiaki".into(),
+            mouse: MouseConfig {
+                invert_y: true,
+                ..Default::default()
+            },
+            remap: vec![
+                RemapConfig {
+                    from: "Mouse4".into(),
+                    to: "F".into(),
+                    ..Default::default()
+                },
+                RemapConfig {
+                    from: "Ctrl".into(),
+                    to: "none".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        c.active_profile = "shooter".into();
+        c.triggers.push(TriggerConfig {
+            keys: "F9".into(),
+            action: "profile:Shooter".into(),
+            ..Default::default()
+        });
+        c.save(&path).unwrap();
+        let back = Config::load(&path).unwrap();
+        assert_eq!(back, c);
+        assert!(back.unknown_keys().is_empty());
+        // "profile:<name>" is kept as written.
+        assert_eq!(back.triggers[1].action, "profile:Shooter");
+
+        let ec = back.engine_config().unwrap();
+        assert_eq!(ec.profiles.len(), 2);
+        assert_eq!(ec.profile, 1);
+        assert_eq!(ec.triggers[1].action, Action::Profile(1));
+        assert_eq!(
+            ec.profiles[0].remap.get(&58),
+            Some(&Some(crate::trigger::KEY_LEFTCTRL))
+        );
+        let shooter = &ec.profiles[1];
+        assert_eq!(shooter.window, "chiaki");
+        assert!(shooter.mouse.invert_y);
+        assert_eq!(shooter.remap.get(&keymap::BTN_SIDE), Some(&Some(33))); // KEY_F
+        // "Ctrl" stands for both Ctrl keys.
+        assert_eq!(shooter.remap.get(&crate::trigger::KEY_LEFTCTRL), Some(&None));
+        assert_eq!(shooter.remap.get(&crate::trigger::KEY_RIGHTCTRL), Some(&None));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn profile_mistakes_are_refused() {
+        let mut c = Config::default();
+        c.triggers[0].action = "profile:Racing".into();
+        assert!(c.engine_config().unwrap_err().contains("Racing"));
+        c.triggers[0].action = "toggle".into();
+
+        c.profiles.push(ProfileConfig {
+            name: "standard".into(),
+            ..Default::default()
+        });
+        assert!(
+            c.engine_config().is_err(),
+            "the name of the first profile is taken"
+        );
+        c.profiles[0].name = " ".into();
+        assert!(c.engine_config().is_err());
+        c.profiles[0].name = "Racing".into();
+        assert!(c.engine_config().is_ok());
+        assert!(c.check_profile_name("RACING", None).is_err());
+        assert!(c.check_profile_name("RACING", Some(1)).is_ok(), "its own name");
+
+        c.remap.push(RemapConfig {
+            from: "Ctrl+A".into(),
+            to: "B".into(),
+            ..Default::default()
+        });
+        assert!(c.engine_config().is_err(), "one key only");
+        c.remap[0].from = "A".into();
+        c.remap[0].to = "Nonsense".into();
+        assert!(c.engine_config().is_err());
+        c.remap[0].to = "#164".into(); // play/pause: no key the PlayStation gets
+        assert!(c.engine_config().unwrap_err().contains("cannot be sent"));
+        c.remap[0].to = "".into();
+        assert_eq!(c.engine_config().unwrap().profiles[0].remap.get(&30), Some(&None));
+    }
+
+    #[test]
+    fn unknown_active_profile_means_standard() {
+        let c = Config {
+            active_profile: "gone".into(),
+            ..Default::default()
+        };
+        assert_eq!(c.active_profile_index(), 0);
+        assert_eq!(c.engine_config().unwrap().profile, 0);
     }
 
     #[test]

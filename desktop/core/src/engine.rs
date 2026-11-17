@@ -16,14 +16,22 @@
 //! * Keyboards that are not selected are only watched ([`Event::TriggerKey`]):
 //!   their keys count for triggers and the emergency stop, but never reach
 //!   the PlayStation and never delay an activation (they are not grabbed).
+//! * Profiles ([`EngineProfile`]) carry the mouse settings and a remapping of
+//!   keys and buttons. The remapping applies on the way out only: triggers
+//!   and the emergency stop always see the physical keys. A key keeps the
+//!   target it got when it went down until it is released, so switching
+//!   profiles never leaves anything pressed on the PlayStation.
+//! * The effective profile is the one the focused window asks for (see
+//!   [`Engine::window`]), else the one chosen by hand or by a trigger.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use crate::keymap::{self, Keymap};
 use crate::mouse::{MouseCurve, MouseFilter};
 use crate::transport::KeyState;
 use crate::trigger::{Action, Combo, Trigger, TriggerKind, emergency_combo};
+use crate::window::{self, WindowInfo};
 
 pub const REL_X: u16 = 0x00;
 pub const REL_Y: u16 = 0x01;
@@ -64,6 +72,8 @@ pub enum Notice {
     Resumed,
     Emergency,
     ReleasedAll,
+    /// Another profile applies (by a trigger or the focused window).
+    ProfileChanged,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,14 +93,58 @@ pub enum Effect {
     Notice(Notice),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub triggers: Vec<Trigger>,
     /// A window rule is configured (Focus events drive activation).
     pub window_rule: bool,
+    /// Its pattern (see [`window::matches`]), for [`Engine::window`].
+    pub window_pattern: String,
     pub keymap: Keymap,
-    pub mouse: MouseCurve,
+    /// At least one; the first is "Standard".
+    pub profiles: Vec<EngineProfile>,
+    /// The profile chosen by hand at the start.
+    pub profile: usize,
 }
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            triggers: Vec::new(),
+            window_rule: false,
+            window_pattern: String::new(),
+            keymap: Keymap::default(),
+            profiles: vec![EngineProfile::default()],
+            profile: 0,
+        }
+    }
+}
+
+/// Mouse settings and remapped keys that apply together.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EngineProfile {
+    pub name: String,
+    /// Applies while a window matching this pattern has the focus ("" =
+    /// only by hand or by a trigger).
+    pub window: String,
+    pub mouse: MouseCurve,
+    /// Physical code -> code sent instead (None: not sent at all).
+    pub remap: BTreeMap<u16, Option<u16>>,
+}
+
+impl Default for EngineProfile {
+    fn default() -> Self {
+        Self {
+            name: STANDARD_PROFILE.into(),
+            window: String::new(),
+            mouse: MouseCurve::default(),
+            remap: BTreeMap::new(),
+        }
+    }
+}
+
+/// Name of the built-in first profile.
+pub const STANDARD_PROFILE: &str = "Standard";
 
 #[derive(Default)]
 struct DoubleTapState {
@@ -123,12 +177,28 @@ pub struct Engine {
     sent: Option<KeyState>,
     rel: [i32; 4],
     mouse: MouseFilter,
+    /// Profile chosen by hand or by a trigger.
+    manual_profile: usize,
+    /// Profile the focused window asks for (overrides `manual_profile`).
+    window_profile: Option<usize>,
+    /// Target of each forwarded key, fixed when it went down.
+    targets: BTreeMap<u16, Option<u16>>,
+    /// The focused window as last reported.
+    last_window: Option<WindowInfo>,
+    /// A profile was chosen by hand since the focus last moved: the window's
+    /// profile does not apply until it moves again.
+    hand_picked: bool,
 }
 
 impl Engine {
     pub fn new(cfg: EngineConfig) -> Self {
+        let mut cfg = cfg;
+        if cfg.profiles.is_empty() {
+            cfg.profiles.push(EngineProfile::default());
+        }
+        let manual_profile = cfg.profile.min(cfg.profiles.len() - 1);
         let n = cfg.triggers.len();
-        let mouse = MouseFilter::new(cfg.mouse);
+        let mouse = MouseFilter::new(cfg.profiles[manual_profile].mouse);
         Self {
             emergency: emergency_combo(),
             pressed: Vec::new(),
@@ -147,6 +217,11 @@ impl Engine {
             sent: None,
             rel: [0; 4],
             mouse,
+            manual_profile,
+            window_profile: None,
+            targets: BTreeMap::new(),
+            last_window: None,
+            hand_picked: false,
             cfg,
         }
     }
@@ -163,8 +238,63 @@ impl Engine {
         self.paused
     }
 
-    pub fn set_mouse_curve(&mut self, curve: MouseCurve) {
-        self.mouse.curve = curve;
+    /// Index of the profile in effect.
+    pub fn profile(&self) -> usize {
+        self.window_profile.unwrap_or(self.manual_profile)
+    }
+
+    /// Index of the profile chosen by hand or by a trigger.
+    pub fn manual_profile(&self) -> usize {
+        self.manual_profile
+    }
+
+    pub fn profiles(&self) -> &[EngineProfile] {
+        &self.cfg.profiles
+    }
+
+    /// New settings for the profiles. Keys held keep their targets until
+    /// released. The window's profile is found again by [`Self::window`].
+    pub fn set_profiles(&mut self, profiles: Vec<EngineProfile>) {
+        if profiles.is_empty() {
+            return;
+        }
+        self.manual_profile = self.manual_profile.min(profiles.len() - 1);
+        self.window_profile = self.window_profile.filter(|i| *i < profiles.len());
+        self.cfg.profiles = profiles;
+        self.mouse.curve = self.cfg.profiles[self.profile()].mouse;
+    }
+
+    /// The focused window (None: no window, or not known), on every change
+    /// and after new settings: picks the profile that asks for it, then
+    /// applies the window rule.
+    pub fn window(&mut self, info: Option<&WindowInfo>, now: Instant) -> Vec<Effect> {
+        let mut fx = Vec::new();
+        if info != self.last_window.as_ref() {
+            self.last_window = info.cloned();
+            self.hand_picked = false;
+        }
+        let wanted = info.filter(|_| !self.hand_picked).and_then(|w| {
+            self.cfg
+                .profiles
+                .iter()
+                .position(|p| window::matches(&p.window, w))
+        });
+        self.switch_profile(self.manual_profile, wanted, &mut fx);
+        let focus =
+            self.cfg.window_rule && info.is_some_and(|w| window::matches(&self.cfg.window_pattern, w));
+        fx.extend(self.handle(Event::Focus(focus), now));
+        fx
+    }
+
+    fn switch_profile(&mut self, manual: usize, window: Option<usize>, fx: &mut Vec<Effect>) {
+        let before = self.profile();
+        self.manual_profile = manual;
+        self.window_profile = window;
+        let now = self.profile();
+        self.mouse.curve = self.cfg.profiles[now].mouse;
+        if now != before {
+            fx.push(Effect::Notice(Notice::ProfileChanged));
+        }
     }
 
     /// Apply an action from outside (GUI button, tray menu).
@@ -196,7 +326,10 @@ impl Engine {
                 let [dx, dy, wheel, pan] = std::mem::take(&mut self.rel);
                 if self.active && (dx | dy | wheel | pan) != 0 {
                     let (dx, dy) = self.mouse.apply(dx, dy);
-                    fx.push(Effect::Motion(dx, dy, wheel, pan));
+                    let (wheel, pan) = self.mouse.apply_wheel(wheel, pan);
+                    if (dx | dy | wheel | pan) != 0 {
+                        fx.push(Effect::Motion(dx, dy, wheel, pan));
+                    }
                 }
             }
             Event::Focus(f) => {
@@ -235,6 +368,14 @@ impl Engine {
             return;
         }
         list.push(code);
+        if !watched {
+            let target = self.cfg.profiles[self.profile()]
+                .remap
+                .get(&code)
+                .copied()
+                .unwrap_or(Some(code));
+            self.targets.insert(code, target);
+        }
         let all = self.all_pressed();
 
         if self.emergency.contains(code) && self.emergency.satisfied(&all) {
@@ -293,6 +434,7 @@ impl Engine {
                 list.remove(pos);
                 if !watched {
                     self.suppressed.remove(&code);
+                    self.targets.remove(&code);
                 }
             }
             // A forgotten key let go: it may end a trigger's latch.
@@ -398,6 +540,7 @@ impl Engine {
                     .filter(|c| !self.suppressed.contains(c))
                     .collect();
                 self.pressed.retain(|c| self.suppressed.contains(c));
+                self.targets.retain(|c, _| self.pressed.contains(c));
                 self.forgotten.extend(forgotten.iter().copied());
                 fx.push(Effect::ReleaseAll);
                 if !forgotten.is_empty() {
@@ -406,6 +549,18 @@ impl Engine {
                 fx.push(Effect::Notice(Notice::ReleasedAll));
                 self.sent = Some(KeyState::default());
                 self.update_hold();
+            }
+            // Chosen by hand: also over a window's profile, until the
+            // focus moves to another window.
+            Action::Profile(i) => {
+                let i = (i as usize).min(self.cfg.profiles.len() - 1);
+                self.hand_picked = true;
+                self.switch_profile(i, None, fx);
+            }
+            Action::NextProfile => {
+                let next = (self.profile() + 1) % self.cfg.profiles.len();
+                self.hand_picked = true;
+                self.switch_profile(next, None, fx);
             }
         }
     }
@@ -426,6 +581,7 @@ impl Engine {
                 self.active = false;
                 self.sent = None;
                 self.rel = [0; 4];
+                self.mouse.reset();
                 fx.push(Effect::SetActive(false));
                 fx.push(Effect::Grab(false));
                 fx.push(Effect::Notice(Notice::Deactivated));
@@ -453,11 +609,17 @@ impl Engine {
             if self.suppressed.contains(&code) {
                 continue;
             }
+            let Some(code) = self.targets.get(&code).copied().unwrap_or(Some(code)) else {
+                continue; // switched off in its profile
+            };
             if let Some(bit) = keymap::modifier_bit(code) {
                 s.mods |= bit;
             } else if let Some(bit) = keymap::button_bit(code) {
                 s.buttons |= bit;
-            } else if let Some(u) = self.cfg.keymap.usage(code) {
+            } else if let Some(u) = self.cfg.keymap.usage(code)
+                && !keys.contains(&u)
+            {
+                // (Two keys remapped to the same one count once.)
                 keys.push(u);
             }
         }
@@ -1014,5 +1176,202 @@ mod tests {
         let mut t = T::new(vec![], false);
         assert!(t.e.command(Action::On).contains(&Effect::Grab(true)));
         assert!(t.e.command(Action::Off).contains(&Effect::Grab(false)));
+    }
+
+    const CAPSLOCK: u16 = 58;
+    const F: u16 = 33;
+    const BTN_SIDE: u16 = crate::keymap::BTN_SIDE;
+
+    fn profile(name: &str, window: &str, remap: &[(u16, Option<u16>)]) -> EngineProfile {
+        EngineProfile {
+            name: name.into(),
+            window: window.into(),
+            mouse: MouseCurve::default(),
+            remap: remap.iter().copied().collect(),
+        }
+    }
+
+    /// Bridge on (by command), with these profiles and triggers.
+    fn with_profiles(triggers: Vec<Trigger>, profiles: Vec<EngineProfile>) -> T {
+        let mut t = T {
+            e: Engine::new(EngineConfig {
+                triggers,
+                window_rule: false,
+                profiles,
+                ..Default::default()
+            }),
+            now: Instant::now(),
+        };
+        assert!(t.e.command(Action::On).contains(&Effect::Grab(true)));
+        t
+    }
+
+    fn notices(fx: &[Effect]) -> Vec<Notice> {
+        fx.iter()
+            .filter_map(|e| match e {
+                Effect::Notice(n) => Some(*n),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn remapped_keys_and_buttons() {
+        let mut t = with_profiles(
+            vec![],
+            vec![profile(
+                "Standard",
+                "",
+                &[
+                    (CAPSLOCK, Some(KEY_LEFTCTRL)),
+                    (BTN_SIDE, Some(F)),
+                    (W, None),
+                    (A, Some(BTN_LEFT)),
+                ],
+            )],
+        );
+        assert_eq!(states(&t.down(CAPSLOCK))[0].mods, 0x01);
+        t.up(CAPSLOCK);
+        let s = states(&t.down(BTN_SIDE))[0];
+        assert_eq!(
+            (s.keys[0], s.buttons),
+            (0x09, 0),
+            "Mouse4 sends F, not the side button"
+        );
+        t.up(BTN_SIDE);
+        // Switched off: nothing changes on the PlayStation.
+        assert!(states(&t.down(W)).is_empty());
+        assert_eq!(states(&t.down(A))[0].buttons, 0x01, "a key can click");
+    }
+
+    #[test]
+    fn two_keys_on_one_target_count_once() {
+        let mut t = with_profiles(vec![], vec![profile("Standard", "", &[(R, Some(F))])]);
+        t.down(F);
+        let fx = t.down(R);
+        assert!(states(&fx).is_empty(), "F is already held");
+        let s = states(&t.up(F));
+        assert!(s.is_empty(), "R still holds F");
+        assert_eq!(states(&t.up(R))[0].keys, [0; 6]);
+    }
+
+    #[test]
+    fn triggers_and_emergency_see_the_physical_keys() {
+        let mut t = with_profiles(
+            vec![Trigger::combo("Mouse4", Action::Toggle).unwrap()],
+            vec![profile("Standard", "", &[(BTN_SIDE, Some(F)), (ESC, Some(A))])],
+        );
+        assert!(t.down(BTN_SIDE).contains(&Effect::Grab(false)));
+        t.up(BTN_SIDE);
+        t.down(BTN_SIDE);
+        // (On waits until everything is released.)
+        assert!(t.up(BTN_SIDE).contains(&Effect::Grab(true)));
+        t.down(KEY_LEFTCTRL);
+        t.down(KEY_LEFTALT);
+        t.down(KEY_LEFTSHIFT);
+        let fx = t.down(ESC);
+        assert!(notices(&fx).contains(&Notice::Emergency));
+        assert!(fx.contains(&Effect::Grab(false)));
+    }
+
+    #[test]
+    fn a_held_key_keeps_its_target_across_a_profile_switch() {
+        let mut t = with_profiles(
+            vec![Trigger::combo("F9", Action::NextProfile).unwrap()],
+            vec![
+                profile("Standard", "", &[]),
+                profile("Shooter", "", &[(A, Some(F))]),
+            ],
+        );
+        assert_eq!(states(&t.down(A))[0].keys[0], 0x04);
+        let fx = t.tap(67); // F9
+        assert_eq!(notices(&fx), vec![Notice::ProfileChanged]);
+        assert_eq!(t.e.profile(), 1);
+        // A is still held as A; released, then pressed again it is F.
+        assert!(states(&t.up(A))[0].keys == [0; 6]);
+        assert_eq!(states(&t.down(A))[0].keys[0], 0x09);
+        // ... and stays F after switching back until released.
+        t.tap(67);
+        assert_eq!(t.e.profile(), 0);
+        assert_eq!(states(&t.up(A))[0].keys, [0; 6]);
+        assert_eq!(states(&t.down(A))[0].keys[0], 0x04);
+    }
+
+    #[test]
+    fn profiles_follow_the_window() {
+        let mut t = with_profiles(
+            vec![Trigger::combo("F9", Action::Profile(0)).unwrap()],
+            vec![
+                profile("Standard", "", &[]),
+                profile("Stream", "chiaki", &[(A, Some(F))]),
+            ],
+        );
+        let chiaki = WindowInfo::new("Stream", "chiaki-ng", "");
+        let other = WindowInfo::new("Terminal", "foot", "");
+        let fx = t.e.window(chiaki.as_ref(), t.now);
+        assert_eq!(notices(&fx), vec![Notice::ProfileChanged]);
+        assert_eq!((t.e.profile(), t.e.manual_profile()), (1, 0));
+        assert_eq!(states(&t.down(A))[0].keys[0], 0x09);
+        t.up(A);
+        // Chosen by hand: wins over the window until the focus moves.
+        t.tap(67);
+        assert_eq!(t.e.profile(), 0);
+        t.e.window(chiaki.as_ref(), t.now);
+        assert_eq!(
+            t.e.profile(),
+            0,
+            "the same window again: the choice by hand stays"
+        );
+        t.e.window(other.as_ref(), t.now);
+        assert_eq!(t.e.profile(), 0);
+        t.e.window(chiaki.as_ref(), t.now);
+        assert_eq!(t.e.profile(), 1);
+        t.e.window(None, t.now);
+        assert_eq!(t.e.profile(), 0);
+    }
+
+    #[test]
+    fn window_rule_by_window() {
+        let mut t = T {
+            e: Engine::new(EngineConfig {
+                window_rule: true,
+                window_pattern: "chiaki".into(),
+                ..Default::default()
+            }),
+            now: Instant::now(),
+        };
+        let fx =
+            t.e.window(WindowInfo::new("Stream", "chiaki-ng", "").as_ref(), t.now);
+        assert!(fx.contains(&Effect::Grab(true)));
+        let fx = t.e.window(WindowInfo::new("x", "firefox", "").as_ref(), t.now);
+        assert!(fx.contains(&Effect::Grab(false)));
+    }
+
+    #[test]
+    fn profile_mouse_settings_apply() {
+        let mut shooter = profile("Shooter", "", &[]);
+        shooter.mouse.invert_y = true;
+        shooter.mouse.wheel = 2.0;
+        let mut t = with_profiles(vec![], vec![profile("Standard", "", &[]), shooter]);
+        let motion = |t: &mut T| {
+            t.ev(Event::Rel {
+                axis: REL_Y,
+                value: 3,
+            });
+            t.ev(Event::Rel {
+                axis: REL_WHEEL,
+                value: 1,
+            });
+            t.ev(Event::Sync)
+        };
+        assert_eq!(motion(&mut t), vec![Effect::Motion(0, 3, 1, 0)]);
+        t.e.command(Action::Profile(1));
+        assert_eq!(motion(&mut t), vec![Effect::Motion(0, -3, 2, 0)]);
+        // New settings for the same profiles keep the one in use.
+        let mut slower = profile("Shooter", "", &[]);
+        slower.mouse.wheel = 0.5;
+        t.e.set_profiles(vec![profile("Standard", "", &[]), slower]);
+        assert_eq!(t.e.profile(), 1);
+        assert_eq!(motion(&mut t), vec![Effect::Motion(0, 3, 0, 0)]);
     }
 }

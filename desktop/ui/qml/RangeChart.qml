@@ -51,7 +51,7 @@ ColumnLayout {
     Controls.Label {
         Layout.fillWidth: true
         Layout.bottomMargin: 2
-        text: "median · 99\u00a0% · slowest"
+        text: I18n.tr("median · 99\u00a0% · slowest")
         color: Style.muted
         font.pointSize: Style.fontSize * 0.85
         horizontalAlignment: Text.AlignRight
@@ -134,7 +134,9 @@ ColumnLayout {
                     hoverEnabled: true
                 }
                 Controls.ToolTip.visible: hover.containsMouse
-                Controls.ToolTip.text: `${row.modelData.label}: median ${chart.fmt(row.modelData.p50)}, 99\u00a0% below ${chart.fmt(row.modelData.p99)}, fastest ${chart.fmt(row.modelData.min)}, slowest ${chart.fmt(row.modelData.max)} (${Style.plural(row.modelData.n, "time", "times")})`
+                Controls.ToolTip.text: I18n.trf("%1: median %2, 99\u00a0% below %3, fastest %4, slowest %5 (%6)", row.modelData.label,
+                                                chart.fmt(row.modelData.p50), chart.fmt(row.modelData.p99), chart.fmt(row.modelData.min),
+                                                chart.fmt(row.modelData.max), Style.plural(row.modelData.n, I18n.tr("time"), I18n.tr("times")))
             }
             Controls.Label {
                 Layout.row: 0

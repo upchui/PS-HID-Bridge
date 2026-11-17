@@ -16,12 +16,18 @@ ColumnLayout {
     property string error: ""
 
     readonly property var kinds: [
-        { value: "combo", text: "Combination" },
-        { value: "hold", text: "Hold" },
-        { value: "double-tap", text: "Double tap" }
+        { value: "combo", text: I18n.tr("Combination") },
+        { value: "hold", text: I18n.tr("Hold") },
+        { value: "double-tap", text: I18n.tr("Double tap") }
     ]
+    // The fixed actions, then one per profile besides "Standard"'s first
+    // place (with more than one profile).
+    readonly property var profileNames: JSON.parse(AppController.profilesJson).map(p => p.name)
     readonly property var actionValues: ["toggle", "on", "off", "pause", "release-all"]
-    readonly property var actionTexts: ["Toggle", "Switch on", "Switch off", "Pause", "Release all"]
+        .concat(profileNames.length > 1 ? ["next-profile"].concat(profileNames.map(n => "profile:" + n)) : [])
+    readonly property var actionTexts: [I18n.tr("Toggle"), I18n.tr("Switch on"), I18n.tr("Switch off"), I18n.tr("Pause"),
+                                        I18n.tr("Release all")]
+        .concat(profileNames.length > 1 ? [I18n.tr("Next profile")].concat(profileNames.map(n => I18n.trf("Profile \"%1\"", n))) : [])
 
     // kind, keys, action, window_ms, and `raw`: the whole entry as read
     // (settings a newer version wrote are kept).
@@ -65,7 +71,7 @@ ColumnLayout {
         const complete = all.filter(t => t.keys.trim() !== "");
         error = AppController.setTriggers(JSON.stringify(complete));
         if (error === "" && complete.length < all.length)
-            error = "A trigger without keys is not saved yet: enter or record its keys.";
+            error = I18n.tr("A trigger without keys is not saved yet: enter or record its keys.");
         return error === "";
     }
 
@@ -127,9 +133,9 @@ ColumnLayout {
                         flat: true
                         icon.name: "trash"
                         icon.color: Style.muted
-                        Accessible.name: "Remove trigger"
+                        Accessible.name: I18n.tr("Remove trigger")
                         Controls.ToolTip.visible: hovered
-                        Controls.ToolTip.text: "Remove"
+                        Controls.ToolTip.text: I18n.tr("Remove")
                         onClicked: {
                             // Keep a running recording on its row: stop it if
                             // that row goes, follow it if an earlier one goes.
@@ -152,7 +158,7 @@ ColumnLayout {
                         Layout.fillWidth: true
                         visible: !row.recording
                         text: row.keys
-                        placeholderText: "e.g. Ctrl+Alt+P or Mouse5"
+                        placeholderText: I18n.tr("e.g. Ctrl+Alt+P or Mouse5")
                         onEditingFinished: if (text !== row.keys) editor.setField(row.index, "keys", text)
                     }
                     // While recording: the instruction in full (a placeholder
@@ -160,12 +166,12 @@ ColumnLayout {
                     Controls.Label {
                         Layout.fillWidth: true
                         visible: row.recording
-                        text: "Press the keys or the mouse button, then release …"
+                        text: I18n.tr("Press the keys or the mouse button, then release …")
                         color: Style.accent
                         wrapMode: Text.WordWrap
                     }
                     AppButton {
-                        text: row.recording ? "Stop" : "Record"
+                        text: row.recording ? I18n.tr("Stop") : I18n.tr("Record")
                         icon.name: "record"
                         icon.color: row.recording ? Style.accentText : Style.bad
                         highlighted: row.recording
@@ -184,7 +190,7 @@ ColumnLayout {
                 RowLayout {
                     spacing: 8
                     Controls.Label {
-                        text: row.kind === "hold" ? "The bridge is on while these keys are held." : "Action"
+                        text: row.kind === "hold" ? I18n.tr("The bridge is on while these keys are held.") : I18n.tr("Action")
                         color: Style.muted
                     }
                     Controls.ComboBox {
@@ -200,16 +206,16 @@ ColumnLayout {
                     wrapMode: Text.WordWrap
                     color: Style.muted
                     font.pointSize: Style.fontSize * 0.9
-                    text: "The desktop never sees this key let go and keeps it pressed afterwards. "
-                          + "Use a key on a device that is not selected (e.g. a second keyboard), "
-                          + "or one the desktop does not need."
+                    text: I18n.tr("The desktop never sees this key let go and keeps it pressed afterwards. "
+                                  + "Use a key on a device that is not selected (e.g. a second keyboard), "
+                                  + "or one the desktop does not need.")
                 }
             }
         }
     }
 
     AppButton {
-        text: "Add trigger"
+        text: I18n.tr("Add trigger")
         icon.name: "plus"
         icon.color: Style.text
         onClicked: triggerModel.append({ kind: "combo", keys: "", action: "toggle", window_ms: 300, raw: "{}" })

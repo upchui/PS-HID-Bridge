@@ -12,6 +12,8 @@ import PSHIDBridge
 //   --demo-width N         window width in px (default 1008)
 //   --demo-theme T         light or dark (default light)
 //   --demo-state S         busy or plain (plain: as after a fresh start)
+//   --demo-lang L          en or de (default en); with de the demo texts
+//                          made in Rust (status, messages) are German too
 Main {
     function demoArg(name, fallback) {
         const a = Qt.application.arguments;
@@ -22,19 +24,26 @@ Main {
     width: Number(demoArg("--demo-width", "1008"))
 
     Component.onCompleted: {
+        // First: switching the language sets the status text again.
+        AppController.setAppLanguage(demoArg("--demo-lang", "en"));
         AppController.appearance = demoArg("--demo-theme", "light");
         if (demoArg("--demo-state", "busy") !== "busy")
             return;
+        // A text the app makes in Rust, in the chosen language.
+        const de = demoArg("--demo-lang", "en") === "de";
+        const t = (en, german) => de ? german : en;
         const C = AppController;
         C.setupDone = true;
         C.connected = true;
         C.active = true;
-        C.statusText = "Please release all keys on the keyboard first";
+        C.statusText = t("Please release all keys on the keyboard first",
+                         "Bitte zuerst alle Tasten auf der Tastatur loslassen");
         C.boardAddress = "192.168.178.123:45045";
         C.boardName = "Wohnzimmer PS5 – Gästezimmer";
         C.boardMac = "02:68:9d:96:c3:3d";
         C.renameLevel = "ok";
-        C.renameMessage = "Renamed. In your router and the browser the board is now called wohnzimmer-ps5-gaestezimmer.";
+        C.renameMessage = t("Renamed. In your router and the browser the board is now called wohnzimmer-ps5-gaestezimmer.",
+                            "Umbenannt. Im Router und im Browser heißt das Board jetzt wohnzimmer-ps5-gaestezimmer.");
         C.foundBoardsJson = JSON.stringify([
             { name: "Wohnzimmer PS5 – Gästezimmer", address: "192.168.178.123:45045", ip: "192.168.178.123",
               mac: "02:68:9d:96:c3:3d", firmware: "1.0.123", key_set: true, current: true },
@@ -63,23 +72,34 @@ Main {
         C.devicesOpen = 1;
         C.devicesBlocked = 0;
         C.inputResyncs = 12345;
-        C.liveText = "Ctrl + Shift + Alt + AltGr + right Super + W + A + D · mouse: left + right + middle";
+        C.liveText = t("Ctrl + Shift + Alt + AltGr + right Super + W + A + D · mouse: left, right, middle",
+                       "Strg + Umschalt + Alt + AltGr + Super rechts + W + A + D · Maus: links, rechts, Mitte");
+        C.liveChipsJson = JSON.stringify(de
+            ? ["Strg", "Umschalt", "Alt", "AltGr", "Super rechts", "W", "A", "D", "Maus: links, rechts, Mitte"]
+            : ["Ctrl", "Shift", "Alt", "AltGr", "right Super", "W", "A", "D", "mouse: left, right, middle"]);
+        C.liveMouseHeld = true;
         C.liveDevice = "Micro-Star INT'L CO., LTD. MSI VERSA PRO WIRELESS Gaming Mouse";
         C.adapterIface = "enp0s20f0u4u1c2";
         C.adapterMode = "delaying";
         C.adapterDelayMs = 0.4;
-        C.lastError = "Window rule not available: the KWin script could not be loaded (org.kde.KWin.Scripting: no such object)";
-        C.saveError = "Settings could not be saved: /home/someone/.config/ps-hid-bridge/config.toml: No space left on device (os error 28). Changes apply only until the app closes.";
+        // The cause comes from pshb-core or the system: English in both.
+        C.lastError = t("Window rule and window profiles not available: ", "Fensterregel und Fensterprofile nicht verfügbar: ")
+                      + "the KWin script could not be loaded (org.kde.KWin.Scripting: no such object)";
+        C.saveError = t("Settings could not be saved: /home/someone/.config/ps-hid-bridge/config.toml: No space left on device (os error 28). Changes apply only until the app closes.",
+                        "Die Einstellungen konnten nicht gespeichert werden: /home/someone/.config/ps-hid-bridge/config.toml: No space left on device (os error 28). Änderungen gelten nur, bis die App geschlossen wird.");
         C.counterError = "No space left on device (os error 28)";
         C.latestVersion = "1.10.123";
         C.appUpdateAvailable = true;
         C.boardUpdateAvailable = true;
         C.canUpdateApp = false;
         C.updateLevel = "warn";
-        C.updateStatus = "Board update failed: the board did not answer within 30 s (HTTP 192.168.178.123:80)";
-        C.accessMessage = "Rule installed, but no access yet: unplug and replug the devices, or log out and in again.";
+        C.updateStatus = t("Board update failed: the board did not answer within 30 s (HTTP 192.168.178.123:80)",
+                           "Board-Update fehlgeschlagen: Das Board hat nicht innerhalb von 30 s geantwortet (HTTP 192.168.178.123:80)");
+        C.accessMessage = t("Rule installed, but no access yet: unplug and replug the devices, or log out and in again.",
+                            "Regel installiert, aber noch kein Zugriff: Steck die Geräte aus und wieder ein, oder melde dich ab und wieder an.");
         C.otherKeyboardsBlocked = 3;
         C.windowRuleAvailable = true;
+        C.windowBackend = "KDE Plasma";
         C.windowRuleEnabled = true;
         C.windowRule = "chiaki-ng, org.chiaki.chiaki-ng, PlayStation Remote Play";
         C.triggersJson = JSON.stringify([
@@ -87,9 +107,12 @@ Main {
             { kind: "double-tap", keys: "RIGHTCTRL", action: "release-all", window_ms: 300 },
             { kind: "hold", keys: "Mouse5+Mouse4+LEFTMETA", action: "pause", window_ms: 300 }
         ]);
-        C.latencySetupMessage = "The administrator password was not entered (polkit): nothing was changed.";
-        C.clockMessage = "The board restarts with the new clock speeds; it is back in a few seconds.";
-        C.usbStatus = "No board in BOOTSEL mode found: hold the BOOTSEL button while plugging it in.";
+        C.latencySetupMessage = t("The administrator password was not entered (polkit): nothing was changed.",
+                                  "Das Administratorpasswort wurde nicht eingegeben (polkit): Es wurde nichts geändert.");
+        C.clockMessage = t("The board restarts with the new clock speeds; it is back in a few seconds.",
+                           "Das Board startet mit den neuen Taktfrequenzen neu; es ist in ein paar Sekunden zurück.");
+        C.usbStatus = t("No board in BOOTSEL mode found: hold the BOOTSEL button while plugging it in.",
+                        "Kein Board im BOOTSEL-Modus gefunden: Halte die BOOTSEL-Taste beim Einstecken gedrückt.");
         C.boardInfoJson = JSON.stringify(boardInfo());
     }
 

@@ -19,7 +19,7 @@ With the key, all of this is refused. You create the key once in the board's web
 
 | Threat | Protection |
 |---|---|
-| Input from other devices in the network | Every packet is encrypted and authenticated with the key; the board silently drops anything else (and only counts it, see the "Status" tab). |
+| Input from other devices in the network | Every packet is encrypted and authenticated with the key; the board silently drops anything else (and only counts it, see the "Status" tab; the app warns when those counts rise while it sends). |
 | Reading your keystrokes | The input is encrypted on its way to the board. |
 | Replaying recorded packets | Every packet carries a counter that must grow; the board also starts a new session at every restart, so packets from before are worthless. |
 | A forged firmware update | An update over the network needs the web password, or a signature made with the key over the exact file; the board checks it before it writes anything. |
@@ -28,10 +28,10 @@ With the key, all of this is refused. You create the key once in the board's web
 
 ## What it does not protect against
 
-- **Someone who can use your PC account.** The key is stored there (`~/.config/ps-hid-bridge/psk`, readable by your user only); whoever can run programs as you can also use the key. Protect your PC account as usual.
-- **Someone who records the network traffic while you use the web interface.** The web interface uses plain HTTP in the local network (see [Why the web interface uses HTTP](#why-the-web-interface-uses-http)): your web password, and the key when it is shown after "Generate new key", are visible to whoever captures that traffic at that moment. Generate the key at a time and place where you trust the network (e.g. with the PC and the board on your own router). The input itself is always encrypted, independently of this.
+- **Someone who can use your PC account.** The key is stored there (`~/.config/ps-hid-bridge/psk`, readable by your user only); whoever can run programs as you can also use the key. Protect your PC account as usual. The diagnostics report ("Save diagnostics", `pshb-cli diag`) never contains the key, nor text typed with "Type text".
+- **Someone who records the network traffic while you use the web interface.** The web interface uses plain HTTP in the local network (see [Why the web interface uses HTTP](#why-the-web-interface-uses-http)): your web password, and the key when it is shown after "Generate new key", are visible to whoever captures that traffic at that moment. The same holds for the app's "Get the key" (and `pshb-cli pair`): it logs in with the web password and receives the new key over plain HTTP, exactly as the browser does. Generate or get the key at a time and place where you trust the network (e.g. with the PC and the board on your own router). The input itself is always encrypted, independently of this.
 - **Someone with the board in their hands.** BOOTSEL and USB allow a factory reset or new firmware; physical access is not protected.
-- **Being seen.** Every device in the network can find the board: it registers its name with the router, serves its login page, and answers the app's search (UDP port 45046, see [SPEC.md](../protocol/SPEC.md#discovery)) with its name, MAC address, firmware version, input port, whether a key is set and whether its address is static. Nothing in that answer lets anyone send input or change a setting. It answers at most 16 searches per second and never with more bytes than it was asked with, so it cannot be used to flood a third party.
+- **Being seen.** Every device in the network can find the board: it registers its name with the router, answers to it as `<name>.local` (mDNS, with its web interface announced as `_http._tcp`), serves its login page, and answers the app's search (UDP port 45046, see [SPEC.md](../protocol/SPEC.md#discovery)) with its name, MAC address, firmware version, input port, whether a key is set and whether its address is static. Nothing in that answer lets anyone send input or change a setting. It answers at most 16 searches per second and never with more bytes than it was asked with, so it cannot be used to flood a third party.
 - **Disruption.** Nothing can stop a device in the network from sending junk to the board. The board drops it cheaply, before any decryption, but a flood can still delay your input.
 
 ## When something goes wrong
@@ -56,7 +56,7 @@ The web interface is only for setting things up: password, key, network, firmwar
 
 - **HTTPS needs a certificate**, and a device in a home network has no domain name a certificate could be issued for. A self-made certificate makes every browser show a red warning page at every visit, and teaches you to click such warnings away, which is worse than the risk it would remove.
 - **Settings and input are separate ways.** The password guards the settings only. Your input never goes through the web interface: it goes its own way, encrypted with the key (UDP, see [protocol.md](protocol.md)).
-- **The app never sends the password.** It reads the board's status, sets its clock and installs firmware with the key, through signed one-time requests that are worthless when recorded.
+- **The app sends the password only to get the key.** It reads the board's status, sets its clock and installs firmware with the key, through signed one-time requests that are worthless when recorded. Only "Get the key" logs in with the password (once, then it logs out again), because that is what the key is guarded by.
 - **Guessing is slow:** after three wrong passwords the address they came from has to wait, growing to 64 seconds, so guessing runs at about one try a minute; addresses beyond the eight the board keeps apart share one count. Choose a password that is not easy to guess.
 - **To read the traffic, someone has to be in your network already**, and capture it at the moment you log in or generate the key. If that is a concern (a shared network), set the board up where you trust the network.
 

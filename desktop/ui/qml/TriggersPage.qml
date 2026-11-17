@@ -4,8 +4,8 @@ import QtQuick.Layouts
 import PSHIDBridge
 
 AppPage {
-    title: "Triggers"
-    subtitle: "How you switch between the desktop and the PlayStation. Changes are saved right away (a trigger once it has keys)."
+    title: I18n.tr("Triggers")
+    subtitle: I18n.tr("How you switch between the desktop and the PlayStation. Changes are saved right away (a trigger once it has keys).")
 
     Component.onCompleted: AppController.refreshDevices()
 
@@ -15,11 +15,14 @@ AppPage {
     Banner {
         kind: "warn"
         visible: AppController.otherKeyboardsBlocked > 0
-        text: "Triggers and the emergency stop work on every keyboard, also on ones that are not selected. "
-              + (AppController.otherKeyboardsBlocked === 1 ? "1 keyboard cannot" : AppController.otherKeyboardsBlocked + " keyboards cannot")
-              + " be read yet; the app sets up access once (administrator password)."
+        text: AppController.otherKeyboardsBlocked === 1
+              ? I18n.tr("Triggers and the emergency stop work on every keyboard, also on ones that are not selected. "
+                        + "1 keyboard cannot be read yet; the app sets up access once (administrator password).")
+              : I18n.trf("Triggers and the emergency stop work on every keyboard, also on ones that are not selected. "
+                         + "%1 keyboards cannot be read yet; the app sets up access once (administrator password).",
+                         AppController.otherKeyboardsBlocked)
         actions: AppButton {
-            text: AppController.accessBusy ? "Setting up …" : "Set up access"
+            text: AppController.accessBusy ? I18n.tr("Setting up …") : I18n.tr("Set up access")
             enabled: !AppController.accessBusy
             onClicked: AppController.installAccess()
         }
@@ -31,26 +34,26 @@ AppPage {
     }
 
     Card {
-        title: "Keys and mouse buttons"
+        title: I18n.tr("Keys and mouse buttons")
         icon: "bolt"
-        help: "Combination: fires as soon as all keys are pressed. Hold: the bridge is on only while the keys stay pressed. Double tap: a single key pressed twice quickly."
+        help: I18n.tr("Combination: fires as soon as all keys are pressed. Hold: the bridge is on only while the keys stay pressed. Double tap: a single key pressed twice quickly.")
         TriggerEditor {
             Layout.fillWidth: true
         }
     }
 
     Card {
-        title: "Window rule"
+        title: I18n.tr("Window rule")
         icon: "eye"
         subtitle: AppController.windowRuleAvailable
-                  ? "On by itself while a matching window is active (e.g. the Remote Play window)."
-                  : "Needs KDE Plasma (KWin); not available on this desktop."
-        help: "The bridge switches on while a window is active whose title, program or desktop file contains this text, and off when it loses the focus. \"chiaki-ng\" matches the Remote Play window."
+                  ? I18n.trf("On by itself while a matching window is active (e.g. the Remote Play window). Windows from: %1.", AppController.windowBackend)
+                  : I18n.trf("Not available here: %1. It works on KDE Plasma, Hyprland, Sway, i3, niri and X11 desktops.", AppController.windowBackend)
+        help: I18n.tr("The bridge switches on while a window is active whose title, program or desktop file contains this text, and off when it loses the focus. \"chiaki-ng\" matches the Remote Play window.")
         actions: AppSwitch {
             enabled: AppController.windowRuleAvailable
             checked: AppController.windowRuleEnabled
             onToggled: AppController.setWindowRuleOn(checked)
-            Accessible.name: "Window rule"
+            Accessible.name: I18n.tr("Window rule")
         }
 
         Controls.TextField {
@@ -67,7 +70,7 @@ AppPage {
     }
 
     Card {
-        title: "Emergency stop"
+        title: I18n.tr("Emergency stop")
         icon: "warning"
         iconColor: Style.warn
         RowLayout {
@@ -88,7 +91,7 @@ AppPage {
             }
             Controls.Label {
                 Layout.fillWidth: true
-                text: "Always releases mouse and keyboard and every key on the PlayStation."
+                text: I18n.tr("Always releases mouse and keyboard and every key on the PlayStation.")
                 color: Style.muted
                 wrapMode: Text.WordWrap
             }

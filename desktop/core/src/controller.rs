@@ -10,6 +10,7 @@ use crate::engine::{Effect, Engine, Event, Notice};
 use crate::input::GrabGuard;
 use crate::transport::{KeyState, Link};
 use crate::trigger::Action;
+use crate::window::WindowInfo;
 
 pub struct Controller {
     pub engine: Engine,
@@ -64,6 +65,12 @@ impl Controller {
 
     pub fn command(&mut self, action: Action) -> Vec<Notice> {
         let fx = self.engine.command(action);
+        self.apply(fx, None)
+    }
+
+    /// The focused window changed (see [`Engine::window`]).
+    pub fn window(&mut self, info: Option<&WindowInfo>) -> Vec<Notice> {
+        let fx = self.engine.window(info, Instant::now());
         self.apply(fx, None)
     }
 

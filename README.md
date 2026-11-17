@@ -45,7 +45,7 @@ Optional:
 
 - A Remote Play client such as chiaki-ng, for the picture on the PC. The bridge itself does not need it.
 - rtkit for real-time priority (desktops with PipeWire usually have it).
-- KDE Plasma for the [window rule](#window-rule) (bridge on while a certain window has the focus).
+- For the [window rule](#window-rule) (bridge on while a certain window has the focus): KDE Plasma, Hyprland, Sway, i3, niri or another desktop on X11; not GNOME on Wayland.
 - Only to build it yourself: Docker, make and git (see [Building](docs/development.md#building)).
 
 ### Compatibility and limits
@@ -57,7 +57,7 @@ Optional:
 - **Keyboards:** up to six keys at once reach the PlayStation, plus Ctrl, Shift, Alt and Super; with more, it reacts like any USB keyboard that ran out of keys. Keyboards with full rollover work the same way.
 - **Touchpads and touchscreens** work as a mouse, see [below](#touchpads-and-touchscreens).
 - **Not forwarded:** game controllers (they keep working through Remote Play) and graphics tablets.
-- **PC:** 64-bit Linux on x86_64 or ARM64 (aarch64); no 32-bit systems. The window rule needs KDE Plasma.
+- **PC:** 64-bit Linux on x86_64 or ARM64 (aarch64); no 32-bit systems. The window rule works on KDE Plasma, Hyprland, Sway, i3, niri and X11 desktops, not on GNOME with Wayland.
 - **Board:** only the WIZnet W5500-EVB-Pico2, connected by network cable (it has no Wi-Fi). Tested with a PlayStation 5.
 
 ## Quick start
@@ -69,12 +69,12 @@ Station by station, as in [How it works](#how-it-works).
 1. **Get the files:** download them from the [latest release](https://github.com/upchui/PS-HID-Bridge/releases/latest), or build them yourself with `make submodules && make all` (see [Building](docs/development.md#building); the first run takes long because of Qt).
 2. **Flash the board:** hold BOOTSEL and plug the board into the PC via USB; the drive `RP2350` appears. First copy `ps-hid-bridge-pt.uf2` onto it (the board comes back as a drive afterwards), then `ps-hid-bridge.uf2`. Or let the app do it (setup wizard or "Firmware & updates" → "Install via USB").
    The first file is the partition table: it divides the board's memory into two places for the firmware and one for your settings. An update over the network then goes into the free place, and if the new firmware does not start properly, the board returns to the previous one. Without it, every update overwrites the running firmware.
-3. **Connect the board:** network cable, USB to the PlayStation. Find its address with `pshb-cli discover` or in the app (setup wizard or "Board" → "Search"), or look it up in your router (`ps-hid-bridge-XXXXXX`), and open it in the browser.
-4. **Web interface:** log in with `ps-hid-bridge`, set your own password, generate a key under "Security".
+3. **Connect the board:** network cable, USB to the PlayStation. Find its address with `pshb-cli discover` or in the app (setup wizard or "Board" → "Search"), or look it up in your router (`ps-hid-bridge-XXXXXX`), and open it in the browser; `http://ps-hid-bridge-XXXXXX.local` works too where the network passes mDNS.
+4. **Web interface:** log in with `ps-hid-bridge`, set your own password, generate a key under "Security". Or skip this: the app's wizard gets the key itself with the web password ("Get the key", see [Board](#using-the-app)).
 
 **Station 1, the PC:**
 
-5. **App:** start the AppImage for your processor, `PS-HID-Bridge-x86_64.AppImage` (Intel, AMD) or `PS-HID-Bridge-aarch64.AppImage` (ARM64). The wizard asks for the board address and key, the devices, the keyboard type and the trigger.
+5. **App:** start the AppImage for your processor, `PS-HID-Bridge-x86_64.AppImage` (Intel, AMD) or `PS-HID-Bridge-aarch64.AppImage` (ARM64). The wizard asks for the board address and key (pasted, or taken from the board with its web password), the devices, the keyboard type and the trigger.
 
 **Station 3, the PlayStation:**
 
@@ -84,15 +84,15 @@ Every commit on `main` becomes a release on the [releases page](https://github.c
 
 ## Using the app
 
-The AppImage runs on current Linux systems under Wayland and X11. It follows the desktop's light or dark mode; the switch at the bottom of the sidebar picks light, automatic or dark. Changes are saved as soon as they are valid; only the board's address and key wait for "Save and connect" (in the wizard: "Next").
+The AppImage runs on current Linux systems under Wayland and X11. It follows the desktop's light or dark mode; the switch at the bottom of the sidebar picks light, automatic or dark, the one next to it the language (English or Deutsch). Changes are saved as soon as they are valid; only the board's address and key wait for "Save and connect" (in the wizard: "Next").
 
 - **Wizard** on first start: welcome (with the firmware install over USB for a new board) → board (the boards found in the network to pick from, address, key, connection test) → devices and keyboard type → trigger → live test that shows what reaches the PlayStation. "Run setup again" in the sidebar starts it again.
-- **Status:** bridge on/off, the keys that currently go to the PlayStation, the board and the PlayStation (connected or in rest mode), the network latency to the board and how long the PC takes with your input. The tile "Input → PlayStation" adds up the whole way from your input to the PlayStation fetching it. Plus "Release all keys", "Pause" and "Reconnect".
-- **Input:** keyboards, mice, touchpads and touchscreens, grouped per device, selected ones first; "Identify" marks the device you are typing on. The keyboard type (ISO or ANSI), mouse sensitivity and acceleration with a curve preview (the default is the raw values), and the touchpad settings.
-- **Triggers:** how you switch between desktop and PlayStation: a key combination, a mouse button (`Mouse4`, `Mouse5`), *Hold* (bridge on only while pressed) or *Double tap* (while the bridge is on, both taps also reach the PlayStation); each with the action Toggle, Switch on, Switch off, Pause or Release all (lets go of everything on the PlayStation, also a button the mouse still reports held). "Record" takes over the combination you press. Also the window rule (see below).
-- **Board:** the boards in the network ("Search"; a tap takes one's address), address and key, connection state, "Open web interface", and the board's name (shown in the search; your router and the browser get a network name made from it, e.g. `wohnzimmer-ps5`). If the board gets another address from the router, the app finds it again by its MAC address and switches over by itself, also while the bridge is on.
+- **Status:** bridge on/off, the keys that currently go to the PlayStation, the board and the PlayStation (connected or in rest mode), the network latency to the board and how long the PC takes with your input. The tile "Input → PlayStation" adds up the whole way from your input to the PlayStation fetching it. Plus "Release all keys", "Pause" and "Reconnect", and [typing text](#typing-text) on the PlayStation. A warning appears when the board refuses packets from somewhere else: another PC with an old key, or a second PC with the same key.
+- **Input:** keyboards, mice, touchpads and touchscreens, grouped per device, selected ones first; "Identify" marks the device you are typing on. The keyboard type (ISO or ANSI), the [profiles](#profiles-and-remapped-keys) with their mouse settings (sensitivity and acceleration with a curve preview, vertical speed, inverted vertical axis, wheel speed; the default is the raw values) and remapped keys, and the touchpad settings.
+- **Triggers:** how you switch between desktop and PlayStation: a key combination, a mouse button (`Mouse4`, `Mouse5`), *Hold* (bridge on only while pressed) or *Double tap* (while the bridge is on, both taps also reach the PlayStation); each with the action Toggle, Switch on, Switch off, Pause, Release all (lets go of everything on the PlayStation, also a button the mouse still reports held), a certain profile or the next profile. "Record" takes over the combination you press. Also the window rule (see below).
+- **Board:** the boards in the network ("Search"; a tap takes one's address), address and key, connection state, "Open web interface", and the board's name (shown in the search; your router and the browser get a network name made from it, e.g. `wohnzimmer-ps5`). If the board gets another address from the router, the app finds it again by its MAC address and switches over by itself, also while the bridge is on. "Get the key" takes the key from the board with its web password, instead of copying it from the web interface (on a new board the app asks for your own password first); the board makes a new key then, so another PC with the old one needs it too.
 - **Latency:** what the board measures on its way from the network to the PlayStation (see [docs/latency.md](docs/latency.md)), and its clock speed; "Start over" resets the statistics.
-- **Firmware & updates:** installed and newest version of app and board firmware, and "Install via USB".
+- **Firmware & updates:** installed and newest version of app and board firmware, "Install via USB", and "Save diagnostics": one text file with versions, system, settings (without the key), devices, what the board says about itself and the app's recent messages, to attach to a bug report.
 - **Tray icon:** grey = board not reachable, blue = ready, green = bridge on. A click toggles; its menu has "Bridge on/off", "Show window", "Release all keys" and "Quit". A notification appears when the bridge switches.
 - **Screen stays on:** while the bridge is on, the app keeps the screen from dimming and locking, although the desktop sees no input meanwhile.
 - **Emergency stop:** `Ctrl+Alt+Shift+Esc` always releases mouse and keyboard at once and lets go of everything on the PlayStation. This combination cannot be switched off.
@@ -116,6 +116,24 @@ The board sends key **positions**, not characters, just like a real USB keyboard
 
 The type only matters for the key next to Enter (`#'` on a German keyboard, `\|` on a US keyboard). Every other key is the same for both types.
 
+### Profiles and remapped keys
+
+A profile holds the mouse settings and a list of remapped keys, e.g. one per game. "Standard" always exists; "Input" → "Profiles" adds more (a copy of the one shown), renames and removes them.
+
+- **Remapped keys:** a key or mouse button reaches the PlayStation as another one, or not at all, e.g. the mouse's side button as `F` when a game does not let you bind it, or `CAPSLOCK` as `Ctrl`. Type the key names (as on a US keyboard: `F`, `SPACE`, `LEFTSHIFT`; `Ctrl` stands for both Ctrl keys) or record them; "…" offers the mouse buttons and "Nothing". Triggers and the emergency stop always see the real keys.
+- **Mouse:** besides sensitivity and acceleration, the vertical speed (relative to the horizontal one), an inverted vertical axis and the wheel speed (0.5 = one step per two notches). These three apply to touchpads too.
+- **Choosing a profile:** "Use" on the Input page, the tray menu ("Profile"), or a trigger with the action "Profile …" or "Next profile". A key held while the profile changes keeps its old meaning until you let go of it, so nothing stays pressed on the PlayStation.
+- **A profile for a window:** with a window pattern (like the [window rule](#window-rule)'s), the profile applies by itself while that window has the focus, and the one chosen by hand again when the focus moves on. Choosing another profile by hand wins until the focus moves to another window.
+- Adding, renaming or removing a profile switches the bridge off (the app restarts its connection); changing a profile's settings does not.
+
+### Typing text
+
+"Type text on the PlayStation" on the Status page types a text as key presses, e.g. a long password from your password manager or a message: paste it, put the cursor into the PlayStation's text field, switch the bridge off, then "Type".
+
+- **Keyboard language:** as with a real keyboard, the PlayStation turns key positions into characters with its own keyboard language, so choose the same one in the card (English (US), English (UK) or Deutsch; the default follows your system's language). Characters that language has no key for are named before anything is typed. Accented letters such as `é` are typed with the dead key, as you would.
+- The text is hidden while you type it in (the eye shows it), not stored and not logged. Switching the bridge on stops typing.
+- From the command line: `pshb-cli type "text"` (see [docs/advanced-setup.md](docs/advanced-setup.md)).
+
 ### Touchpads and touchscreens
 
 The PlayStation knows a mouse only, so the app turns your fingers into mouse input:
@@ -130,11 +148,13 @@ Many laptop touchpads appear twice ("… Mouse" and "… Touchpad") as one entry
 
 ### Window rule
 
-The window rule switches the bridge on by itself while a certain window has the focus, and off again when the focus moves elsewhere. It needs KDE Plasma.
+The window rule switches the bridge on by itself while a certain window has the focus, and off again when the focus moves elsewhere. It works on KDE Plasma (with a small KWin script), Hyprland, Sway and i3, niri, and on every desktop with X11; the Triggers page shows which one the app found. GNOME on Wayland tells applications nothing about the focused window, so the rule is not available there.
 
 - **Off by default.** Switch it on under "Triggers" → "Window rule".
 - The pattern is matched against the window title, the program and the desktop file name, ignoring case. The default `chiaki-ng` matches the Remote Play window of chiaki-ng.
 - "Pause" suspends the rule until the next window change; "Switch off" overrides it while the window keeps the focus.
+- `pshb-cli run` follows the window rule too.
+- [Profiles](#profiles-and-remapped-keys) can follow a window the same way.
 
 ### Device access
 
@@ -190,6 +210,8 @@ The board's side, stage by stage with measurements and clock speeds: [docs/laten
 - [The status page warns about the network adapter](docs/troubleshooting.md#the-status-page-warns-about-the-network-adapter)
 - [The board went back to the previous firmware after an update](docs/troubleshooting.md#the-board-went-back-to-the-previous-firmware-after-an-update)
 - [The search finds no board](docs/troubleshooting.md#the-search-finds-no-board)
+- [The status page warns about refused packets](docs/troubleshooting.md#the-status-page-warns-about-refused-packets)
+- [Reporting a problem](docs/troubleshooting.md#reporting-a-problem): "Save diagnostics" on "Firmware & updates"
 - **Forgot the web password:** hold the board's BOOTSEL button for 5 seconds while it runs, then let go. It restarts with factory settings (password, key and network settings are erased); set it up again from step 4 of the [Quick start](#quick-start).
 
 ## More documentation

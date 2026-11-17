@@ -16,8 +16,8 @@ Flow {
         id: choice
         value: AppController.isoKeyboard ? "iso" : "ansi"
         model: [
-            { value: "iso", text: "ISO · 105 keys" },
-            { value: "ansi", text: "ANSI · 104 keys" }
+            { value: "iso", text: I18n.tr("ISO · 105 keys") },
+            { value: "ansi", text: I18n.tr("ANSI · 104 keys") }
         ]
         onActivated: v => AppController.setKeyboardType(v === "iso")
     }
@@ -26,12 +26,12 @@ Flow {
         spacing: 8
         Controls.Label {
             anchors.verticalCenter: parent.verticalCenter
-            text: AppController.isoKeyboard ? "e.g. German, UK, French" : "e.g. US"
+            text: AppController.isoKeyboard ? I18n.tr("e.g. German, UK, French") : I18n.tr("e.g. US")
             color: Style.muted
         }
         HelpHint {
             anchors.verticalCenter: parent.verticalCenter
-            text: "ISO keyboards have an L-shaped Enter key and an extra key next to the left Shift. The PlayStation receives key positions, not characters: set its keyboard language to the layout printed on your keyboard."
+            text: I18n.tr("ISO keyboards have an L-shaped Enter key and an extra key next to the left Shift. The PlayStation receives key positions, not characters: set its keyboard language to the layout printed on your keyboard.")
         }
     }
 }

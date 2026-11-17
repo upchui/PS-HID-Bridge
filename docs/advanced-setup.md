@@ -4,7 +4,7 @@ Everything the [README](../README.md) leaves out for everyday use: the command l
 
 ## Command line tool
 
-`pshb-cli` (in the release as `pshb-cli-x86_64-linux` and `pshb-cli-aarch64-linux` for ARM64, built as `out/pshb-cli`) does what the app does, without a user interface and without the window rule. `pshb-cli run` also keeps the screen on while the bridge is on.
+`pshb-cli` (in the release as `pshb-cli-x86_64-linux` and `pshb-cli-aarch64-linux` for ARM64, built as `out/pshb-cli`) does what the app does, without a user interface. `pshb-cli run` also keeps the screen on while the bridge is on, and follows the window rule and the profiles' windows like the app.
 
 ```sh
 pshb-cli list-devices                              # keyboards, mice, touchpads, touchscreens with access status
@@ -13,12 +13,19 @@ pshb-cli board --name "Living room"                # give the board a name ("" =
 pshb-cli config set --board 192.168.1.50 --device 046d:c52b --device "G Pro"
 pshb-cli config set --keyboard ansi                # keyboard type: the key next to Enter sends HID 0x32 (iso) or 0x31 (ansi)
 pshb-cli config set --touchpad-speed 1.5 --tap-to-click on --natural-scroll off
-pshb-cli config set --window-rule-enabled on --window-rule chiaki-ng   # used by the desktop app
+pshb-cli config set --window-rule-enabled on --window-rule chiaki-ng   # bridge on while that window has the focus
+pshb-cli config set --sensitivity 1.5 --invert-y on --y-ratio 0.8 --wheel-speed 0.5   # mouse of the profile "Standard"
+pshb-cli config set --profile Shooter --sensitivity 2   # ... of another profile
+pshb-cli config set --active-profile Shooter       # the profile in use
 pshb-cli config set-psk <64 hex digits>            # store the key
+pshb-cli pair --password <web password>            # let the board make a new key and store it ("-": read the password from stdin)
+pshb-cli pair --password ps-hid-bridge --new-password <own one>   # a new board: set its password first
 pshb-cli config show                               # current settings
 pshb-cli ping                                      # connection and board status
 pshb-cli run                                       # forward; toggle with Ctrl+Alt+P
 pshb-cli run --stats                               # also print the input latency every 5 s
+pshb-cli type "text"                               # type text on the PlayStation ("-": from stdin; --layout us|uk|de)
+pshb-cli diag --output report.md                   # the diagnostics report (as "Save diagnostics" in the app)
 pshb-cli update --check                            # installed and newest versions (also of the board)
 pshb-cli update                                    # replace pshb-cli with the newest release
 pshb-cli update --firmware                         # install the newest firmware on the board
@@ -28,6 +35,8 @@ pshb-cli board --cpu 200 --spi fast                # set the clock speeds (the b
 pshb-cli flash                                     # first installation over USB (BOOTSEL), see below
 pshb-cli flash --image erase                       # recovery images: firmware, hidtest, hidtest-mouse8, erase
 ```
+
+`pshb-cli type` and `pshb-cli pair` take the key and the board's address like `ping`; `type` refuses while the app runs with the same key (the bridge is the app's then: use its "Type text" card). Profiles, their windows and remapped keys are edited in the app or in the settings file (below).
 
 Key names in combinations follow the **position on a US keyboard** (`Z` is the `Y` key on a German keyboard). Modifiers: `Ctrl`, `Alt`, `AltGr`, `Shift`, `Super`; mouse buttons: `Mouse4`, `Mouse5`, `MouseMiddle`. The German names of earlier versions (`Strg`, `Umschalt`, `Maus4` …) are still accepted.
 
@@ -48,6 +57,38 @@ focus on              # window rule: the window has the focus
 ## Settings and key files
 
 Settings: `~/.config/ps-hid-bridge/config.toml`, key: `~/.config/ps-hid-bridge/psk` (readable by the user only). The app and `pshb-cli` share them.
+
+Profiles in the settings file: `[mouse]` and `[[remap]]` at the top are the profile "Standard" (as before profiles existed, so older versions still read them); every further profile is a `[[profiles]]` table:
+
+```toml
+active_profile = "Shooter"      # chosen by hand ("" = Standard)
+language = "de"                 # the app's language: en or de
+ps_layout = "de"                # keyboard language of the PlayStation, for typing text ("" = from the system)
+
+[mouse]
+sensitivity = 1.0
+accel = 0.0
+threshold = 2.0
+invert_y = false
+y_ratio = 1.0                   # vertical speed relative to the horizontal one
+wheel_speed = 1.0
+
+[[remap]]                       # in the profile "Standard"
+from = "CAPSLOCK"
+to = "Ctrl"
+
+[[profiles]]
+name = "Shooter"
+window = "chiaki-ng"            # applies while that window has the focus ("" = only by hand)
+[profiles.mouse]
+sensitivity = 2.0
+invert_y = true
+[[profiles.remap]]
+from = "Mouse4"
+to = "F"                        # "none": the key reaches the PlayStation not at all
+```
+
+A trigger chooses a profile with `action = "profile:Shooter"` or `action = "next-profile"`.
 
 The project used to be called PS5 HID Bridge: settings, key and packet counter under the old name (`~/.config/ps5-hid-bridge`, `~/.local/state/ps5-hid-bridge`) move to the new folders on the first start, and "Set up access" replaces the old udev rule file.
 
@@ -85,7 +126,7 @@ Open it by the board's address or its name `ps-hid-bridge-XXXXXX` (also with the
 
 ### Network and LED
 
-The board gets an address via DHCP and registers as `ps-hid-bridge-XXXXXX` (last six digits of the MAC address), or under the network name made from the name you give it (web interface "Network" → "Board name", the app's "Board" page, or `pshb-cli board --name "Living room"`): "Wohnzimmer PS5" becomes `wohnzimmer-ps5`. The router learns a new name at once, with a lease renewal; the board answers to both names in the browser. It receives input on UDP port 45045 and answers the app's search on UDP port 45046 ([SPEC.md](../protocol/SPEC.md#discovery)). The app remembers the MAC address of the board it uses (`board_mac` in the settings) and, when the board no longer answers at its address, looks for it in the network and takes its new address, also while the bridge is on: it stays on and sends to the new address.
+The board gets an address via DHCP and registers as `ps-hid-bridge-XXXXXX` (last six digits of the MAC address), or under the network name made from the name you give it (web interface "Network" → "Board name", the app's "Board" page, or `pshb-cli board --name "Living room"`): "Wohnzimmer PS5" becomes `wohnzimmer-ps5`. The router learns a new name at once, with a lease renewal; the board answers to both names in the browser. It also answers as `http://<network name>.local` (mDNS, e.g. `http://wohnzimmer-ps5.local`) and announces its web interface as an `_http._tcp` service under its board name; the web interface's Status tab shows that address under "Also at". If another device in the network already uses the name, the board takes its default name (`ps-hid-bridge-XXXXXX.local`); if both are taken, it answers to neither and tries again every minute. UDP port 5353 (mDNS) cannot be the input port. It receives input on UDP port 45045 and answers the app's search on UDP port 45046 ([SPEC.md](../protocol/SPEC.md#discovery)). The app remembers the MAC address of the board it uses (`board_mac` in the settings) and, when the board no longer answers at its address, looks for it in the network and takes its new address, also while the bridge is on: it stays on and sends to the new address.
 
 LED: blinks slowly = no USB host, blinks fast = USB present but no IP yet, steady = ready (flickers briefly on input).
 

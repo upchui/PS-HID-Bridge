@@ -44,20 +44,21 @@ ColumnLayout {
             hoverEnabled: true
         }
         Controls.ToolTip.visible: hover.containsMouse
-        Controls.ToolTip.text: `Armed ${Style.us(meter.lead)} before the poll, at least ${Style.us(meter.floor)} (of a 1 ms frame)`
+        Controls.ToolTip.text: I18n.trf("Armed %1 before the poll, at least %2 (of a 1 ms frame)", Style.us(meter.lead),
+                                        Style.us(meter.floor))
     }
     RowLayout {
         Layout.fillWidth: true
         spacing: 12
         Controls.Label {
             Layout.fillWidth: true
-            text: `armed ${Style.us(meter.lead)} before the poll · at least ${Style.us(meter.floor)} (mark)`
+            text: I18n.trf("armed %1 before the poll · at least %2 (mark)", Style.us(meter.lead), Style.us(meter.floor))
             color: Style.muted
             wrapMode: Text.WordWrap
         }
         Controls.Label {
             Layout.alignment: Qt.AlignTop
-            text: "1\u00a0ms frame"
+            text: I18n.tr("1\u00a0ms frame")
             color: Style.muted
         }
     }

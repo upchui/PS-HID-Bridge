@@ -104,7 +104,7 @@ fn persist(path: &Path, floor: u64) -> io::Result<()> {
 fn warn(e: &io::Error) {
     // Not fatal: the clock-based counter keeps working; only a clock going
     // backwards across restarts is no longer covered.
-    eprintln!("Warning: could not save the packet counter: {e}");
+    crate::logln!("Warning: could not save the packet counter: {e}");
 }
 
 /// How long a lock that seems taken is tried again (see [`lock`]).

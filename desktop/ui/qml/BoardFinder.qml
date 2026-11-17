@@ -30,15 +30,15 @@ ColumnLayout {
         spacing: 8
         Controls.Label {
             Layout.fillWidth: true
-            text: AppController.discoverBusy ? "Looking for boards in the network …"
-                  : finder.boards.length === 1 ? "1 board in the network"
-                  : finder.boards.length > 1 ? finder.boards.length + " boards in the network – pick yours"
-                  : "Find the board in this network."
+            text: AppController.discoverBusy ? I18n.tr("Looking for boards in the network …")
+                  : finder.boards.length === 1 ? I18n.tr("1 board in the network")
+                  : finder.boards.length > 1 ? I18n.trf("%1 boards in the network – pick yours", finder.boards.length)
+                  : I18n.tr("Find the board in this network.")
             color: Style.muted
             elide: Text.ElideRight
         }
         AppButton {
-            text: AppController.discoverBusy ? "Searching …" : "Search"
+            text: AppController.discoverBusy ? I18n.tr("Searching …") : I18n.tr("Search")
             icon.name: "network"
             icon.color: enabled ? Style.text : Style.disabled
             enabled: !AppController.discoverBusy
@@ -49,9 +49,9 @@ ColumnLayout {
     Controls.Label {
         Layout.fillWidth: true
         visible: finder.searched && !AppController.discoverBusy && finder.boards.length === 0
-        text: "No board answered. Is it plugged in and connected to this network? Boards with older "
-              + "firmware do not answer the search: enter the address by hand (your router lists the "
-              + "board as ps-hid-bridge-…)."
+        text: I18n.tr("No board answered. Is it plugged in and connected to this network? Boards with older "
+                      + "firmware do not answer the search: enter the address by hand (your router lists the "
+                      + "board as ps-hid-bridge-…).")
         color: Style.muted
         wrapMode: Text.WordWrap
     }
@@ -99,7 +99,8 @@ ColumnLayout {
                     }
                     Controls.Label {
                         Layout.fillWidth: true
-                        text: row.modelData.address + " · firmware " + row.modelData.firmware + " · " + row.modelData.mac
+                        text: I18n.trf("%1 · firmware %2 · %3", row.modelData.address, row.modelData.firmware,
+                                       row.modelData.mac)
                         color: Style.muted
                         font.pointSize: Style.fontSize * 0.9
                         elide: Text.ElideRight
@@ -108,17 +109,17 @@ ColumnLayout {
                 Pill {
                     visible: !row.modelData.key_set
                     level: "warn"
-                    text: "no key yet"
+                    text: I18n.tr("no key yet")
                 }
                 Pill {
                     visible: row.modelData.current
                     level: AppController.connected ? "ok" : ""
-                    text: AppController.connected ? "connected" : "in use"
+                    text: AppController.connected ? I18n.tr("connected") : I18n.tr("in use")
                 }
                 Pill {
                     visible: row.chosen && !row.modelData.current
                     level: "accent"
-                    text: "selected"
+                    text: I18n.tr("selected")
                 }
             }
         }

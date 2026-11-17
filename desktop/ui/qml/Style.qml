@@ -86,8 +86,13 @@ QtObject {
     /// The board's USB state ("PlayStation in rest mode", …) in short, as
     /// on the Status page.
     function playStation(usb) {
-        return usb === "" ? "Unknown" : usb === "PlayStation connected" ? "Connected"
-             : usb === "PlayStation in rest mode" ? "Rest mode" : "Not connected";
+        return usb === "" ? I18n.tr("Unknown") : usb === "PlayStation connected" ? I18n.tr("Connected")
+             : usb === "PlayStation in rest mode" ? I18n.tr("Rest mode") : I18n.tr("Not connected");
+    }
+    /// The same within a sentence ("PlayStation: rest mode.").
+    function playStationInText(usb) {
+        return usb === "" ? I18n.tr("unknown") : usb === "PlayStation connected" ? I18n.tr("connected")
+             : usb === "PlayStation in rest mode" ? I18n.tr("rest mode") : I18n.tr("not connected");
     }
     /// "1 packet", "12 345 packets".
     function plural(n, one, many) {

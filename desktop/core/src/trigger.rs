@@ -108,6 +108,10 @@ pub enum Action {
     /// While paused nothing is forwarded, even if the window rule matches.
     Pause,
     ReleaseAll,
+    /// Use the profile with this index (written "profile:<name>").
+    Profile(u16),
+    /// Use the next profile (after the last one the first).
+    NextProfile,
 }
 
 impl Action {
@@ -118,8 +122,23 @@ impl Action {
             "off" | "aus" => Self::Off,
             "pause" | "pausieren" => Self::Pause,
             "release" | "release-all" | "loslassen" => Self::ReleaseAll,
+            "next-profile" => Self::NextProfile,
             _ => return Err(format!("Unknown action \"{s}\"")),
         })
+    }
+
+    /// Like [`Action::parse`], and "profile:<name>" for one of `profiles`
+    /// (the name ignoring case).
+    pub fn parse_with_profiles(s: &str, profiles: &[&str]) -> Result<Self, String> {
+        let Some(name) = s.trim().strip_prefix("profile:") else {
+            return Self::parse(s);
+        };
+        let name = name.trim();
+        profiles
+            .iter()
+            .position(|p| p.eq_ignore_ascii_case(name) || p.to_lowercase() == name.to_lowercase())
+            .map(|i| Self::Profile(i as u16))
+            .ok_or_else(|| format!("No profile named \"{name}\""))
     }
 
     pub fn as_str(self) -> &'static str {
@@ -129,6 +148,9 @@ impl Action {
             Self::Off => "off",
             Self::Pause => "pause",
             Self::ReleaseAll => "release-all",
+            // The name is in the settings ("profile:<name>").
+            Self::Profile(_) => "profile",
+            Self::NextProfile => "next-profile",
         }
     }
 }
@@ -201,5 +223,31 @@ mod tests {
         assert_eq!(Action::parse("Toggle").unwrap(), Action::Toggle);
         assert_eq!(Action::parse(Action::Pause.as_str()).unwrap(), Action::Pause);
         assert!(Action::parse("x").is_err());
+        assert_eq!(Action::parse("next-profile").unwrap(), Action::NextProfile);
+    }
+
+    #[test]
+    fn profile_actions() {
+        let names = ["Standard", "Shooter", "Größe"];
+        assert_eq!(
+            Action::parse_with_profiles("profile:shooter", &names).unwrap(),
+            Action::Profile(1)
+        );
+        assert_eq!(
+            Action::parse_with_profiles("profile:GRÖSSE", &names).ok(),
+            None,
+            "ß is no SS"
+        );
+        assert_eq!(
+            Action::parse_with_profiles("profile:größe", &names).unwrap(),
+            Action::Profile(2)
+        );
+        assert!(Action::parse_with_profiles("profile:Racing", &names).is_err());
+        assert_eq!(
+            Action::parse_with_profiles("toggle", &names).unwrap(),
+            Action::Toggle
+        );
+        // Without the list a profile cannot be named.
+        assert!(Action::parse("profile:Shooter").is_err());
     }
 }

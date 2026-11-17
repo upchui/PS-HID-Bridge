@@ -11,9 +11,11 @@ Test status, building, continuous integration, testing without a board, screensh
 | Firmware: USB HID (keyboard, mouse with 5 buttons, both wheels) | ✅ real hardware, host tests |
 | Firmware: network (W5500, DHCP/static IP), encrypted protocol, failsafe | ✅ real hardware, simulator |
 | Board web interface (password, key, network, update) | ✅ real hardware, simulator |
+| mDNS (`<name>.local`, DNS-SD) | simulator, host tests; real network still to check (checklist 12) |
 | Firmware update over the network (A/B with fallback) | ✅ real hardware, simulator |
 | Command line tool `pshb-cli` | ✅ |
 | Desktop app (Kirigami, setup wizard, triggers, tray) | ✅ real hardware, offscreen self-test |
+| Profiles, remapped keys, mouse options, window backends, typing text, pairing, diagnostics, German UI | unit tests, simulator, offscreen self-test in both languages; real hardware still to check (checklist 13–16) |
 
 ## Building
 
@@ -101,6 +103,11 @@ For a new board or a bigger firmware change. The order is chosen so that each st
 9. "Latency of the input path" in the web interface while moving the mouse in a game: "Packet → report ready" around 52–56 µs (median), "Packet → fetched by the PlayStation" around 0.5–0.7 ms; "Missed polls" close to 0 and the lead around 100–150 µs ("Polls the PlayStation skipped" about 1 % is the host's doing). "Decrypting one packet" should say "optimised for this CPU". Compare with `-DPSHB_MOUSE_LATE_ARM=OFF` (reports filled right after the previous fetch, median about 1 ms). Also check after the PlayStation wakes from rest mode that no old keystrokes arrive, and that logging in to the web interface works (it needs the larger core 1 stack).
 10. First installation from the app ("Firmware & updates" → "Install via USB" → "First installation") on a board that still has no firmware, and "Erase everything" followed by another first installation.
 11. Firmware update from the app: bridge off, "Update board" on the Status page (or `pshb-cli update --firmware --file out/ps-hid-bridge.uf2`). The board restarts and the app then shows the new firmware version. A wrong key must be refused ("Signature does not match").
+12. mDNS: `avahi-resolve -n <network name>.local` and `ping` from the PC, `http://<network name>.local` in the browser (also from a phone), `avahi-browse -rt _http._tcp` lists the board; after renaming it, the new name within a few seconds. With an IGMP-snooping switch: still found after 10 minutes. "Latency of the input path" unchanged while a phone keeps browsing `.local` names.
+13. Remapped keys and profiles in a game: a mouse side button remapped to a key, a profile that follows chiaki-ng's window, a profile switch by trigger while a remapped key is held (it must not stay pressed).
+14. Typing text into a PlayStation text field with its keyboard language set to German: `@`, umlauts, `é` (dead key), `^` alone; and with US English.
+15. Pairing: "Get the key" on a board after a factory reset (asks for an own password first), then on a board that has a key; the browser stays logged in or can log in again.
+16. Window rule on Hyprland, Sway or an X11 desktop besides KDE Plasma (the Triggers page names the backend).
 
 ## Directories
 

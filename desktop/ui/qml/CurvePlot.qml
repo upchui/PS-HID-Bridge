@@ -21,6 +21,7 @@ Canvas {
     readonly property color axis: Style.border
     readonly property color label: Style.muted
     readonly property color line: Style.accent
+    readonly property string speedText: I18n.tr("speed")
 
     onSensitivityChanged: requestPaint()
     onLineChanged: requestPaint()
@@ -29,6 +30,7 @@ Canvas {
     onHeightChanged: requestPaint()
     onLabelChanged: requestPaint()
     onAxisChanged: requestPaint()
+    onSpeedTextChanged: requestPaint()
 
     onPaint: {
         const ctx = getContext("2d");
@@ -48,7 +50,7 @@ Canvas {
 
         ctx.fillStyle = plot.label;
         ctx.font = (Style.fontSize * 0.85).toFixed(1) + "pt sans-serif";  // the app's size, not fixed pixels
-        ctx.fillText("speed", w - 4 - ctx.measureText("speed").width, h - 8);
+        ctx.fillText(speedText, w - 4 - ctx.measureText(speedText).width, h - 8);
         ctx.fillText("× " + top.toFixed(1), 2, 12);
         ctx.fillText("1×", 6, y(1) + 4);
 

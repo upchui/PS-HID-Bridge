@@ -18,11 +18,11 @@ ColumnLayout {
     Component.onDestruction: AppController.usbWatch(false)
 
     readonly property var images: [
-        { value: "first-install", text: "First installation (partition table + firmware)" },
-        { value: "firmware", text: "Firmware only" },
-        { value: "hidtest", text: "HID test image (no network, mouse moves in a square)" },
-        { value: "hidtest-mouse8", text: "HID test image with 8-bit mouse axes" },
-        { value: "erase", text: "Erase everything (firmware and settings)" }
+        { value: "first-install", text: I18n.tr("First installation (partition table + firmware)") },
+        { value: "firmware", text: I18n.tr("Firmware only") },
+        { value: "hidtest", text: I18n.tr("HID test image (no network, mouse moves in a square)") },
+        { value: "hidtest-mouse8", text: I18n.tr("HID test image with 8-bit mouse axes") },
+        { value: "erase", text: I18n.tr("Erase everything (firmware and settings)") }
     ]
 
     component Step: RowLayout {
@@ -65,17 +65,17 @@ ColumnLayout {
 
     Step {
         number: 1
-        text: "Hold BOOTSEL on the board and connect it to this PC via USB (not to the PlayStation)."
+        text: I18n.tr("Hold BOOTSEL on the board and connect it to this PC via USB (not to the PlayStation).")
         Pill {
             level: AppController.usbBoardFound ? "ok" : ""
             icon: AppController.usbBoardFound ? "check" : "usb"
-            text: AppController.usbBoardFound ? "Board found (drive RP2350)" : "Waiting for the board …"
+            text: AppController.usbBoardFound ? I18n.tr("Board found (drive RP2350)") : I18n.tr("Waiting for the board …")
         }
     }
 
     Step {
         number: 2
-        text: "Choose what to install."
+        text: I18n.tr("Choose what to install.")
         Controls.ComboBox {
             id: imageBox
             Layout.fillWidth: true
@@ -100,7 +100,7 @@ ColumnLayout {
                 Layout.fillWidth: true
                 elide: Text.ElideMiddle
                 color: Style.muted
-                text: root.file === "" ? "Files from the newest release"
+                text: root.file === "" ? I18n.tr("Files from the newest release")
                       : decodeURIComponent(root.file.replace(/^file:\/\//, ""))
             }
         }
@@ -108,11 +108,11 @@ ColumnLayout {
             Layout.fillWidth: true
             spacing: 8
             AppButton {
-                text: "Choose file …"
+                text: I18n.tr("Choose file …")
                 onClicked: fileDialog.open()
             }
             AppButton {
-                text: "Newest release"
+                text: I18n.tr("Newest release")
                 visible: root.file !== ""
                 onClicked: root.file = ""
             }
@@ -121,21 +121,21 @@ ColumnLayout {
 
     Step {
         number: 3
-        text: "Install. The board restarts by itself afterwards."
+        text: I18n.tr("Install. The board restarts by itself afterwards.")
         Banner {
             kind: "warn"
             visible: root.confirmErase
-            text: "This erases the board's firmware and settings."
+            text: I18n.tr("This erases the board's firmware and settings.")
             actions: [
                 AppButton {
-                    text: "Erase"
+                    text: I18n.tr("Erase")
                     onClicked: {
                         root.confirmErase = false;
                         AppController.usbFlash("erase", ""); // never an own file
                     }
                 },
                 AppButton {
-                    text: "Cancel"
+                    text: I18n.tr("Cancel")
                     flat: true
                     onClicked: root.confirmErase = false
                 }
@@ -144,7 +144,7 @@ ColumnLayout {
         RowLayout {
             spacing: 8
             AppButton {
-                text: "Install"
+                text: I18n.tr("Install")
                 highlighted: true
                 icon.name: "usb"
                 icon.color: enabled ? Style.accent : Style.disabled
@@ -157,7 +157,7 @@ ColumnLayout {
                 }
             }
             AppButton {
-                text: "Cancel"
+                text: I18n.tr("Cancel")
                 visible: AppController.usbBusy
                 onClicked: AppController.usbCancel()
             }
@@ -179,8 +179,8 @@ ColumnLayout {
 
     FileDialog {
         id: fileDialog
-        title: "UF2 file for the board"
-        nameFilters: ["UF2 files (*.uf2)"]
+        title: I18n.tr("UF2 file for the board")
+        nameFilters: [I18n.tr("UF2 files (*.uf2)")]
         onAccepted: root.file = selectedFile.toString()
     }
 }

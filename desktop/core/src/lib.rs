@@ -10,12 +10,14 @@ pub mod config;
 pub mod controller;
 pub mod counter;
 pub mod crypto;
+pub mod diagnostics;
 pub mod discover;
 pub mod engine;
 pub mod idle;
 pub mod input;
 pub mod keymap;
 pub mod lockfile;
+pub mod log;
 pub mod lowlat;
 pub mod mouse;
 pub mod oneway;
@@ -26,9 +28,11 @@ pub mod service;
 pub mod touch;
 pub mod transport;
 pub mod trigger;
+pub mod typing;
 pub mod update;
 #[cfg(feature = "udisks")]
 pub mod usbflash;
+pub mod window;
 
 /// Version of the desktop software (shared by the CLI and the GUI):
 /// MAJOR.MINOR.PATCH, passed in by the Makefile as PSHB_VERSION

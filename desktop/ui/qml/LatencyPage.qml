@@ -8,8 +8,8 @@ import PSHIDBridge
 // with the key (signed requests), every 2 seconds while the page is open.
 AppPage {
     id: page
-    title: "Latency"
-    subtitle: "Measured by the board itself, from the network chip's interrupt to the report the PlayStation fetches; at the end, what this PC adds."
+    title: I18n.tr("Latency")
+    subtitle: I18n.tr("Measured by the board itself, from the network chip's interrupt to the report the PlayStation fetches; at the end, what this PC adds.")
 
     readonly property var info: {
         try {
@@ -69,7 +69,7 @@ AppPage {
 
     actions: [
         AppButton {
-            text: "Start over"
+            text: I18n.tr("Start over")
             icon.name: "reconnect"
             flat: true
             enabled: page.have && !page.stale
@@ -80,22 +80,22 @@ AppPage {
     Banner {
         kind: "warn"
         visible: AppController.boardInfoError !== ""
-        text: "The board did not answer: " + AppController.boardInfoError
-              + (page.have ? "\nThe values below are its last answer." : "")
+        text: page.have ? I18n.trf("The board did not answer: %1\nThe values below are its last answer.", AppController.boardInfoError)
+              : I18n.trf("The board did not answer: %1", AppController.boardInfoError)
     }
     Banner {
         kind: "info"
         visible: !page.have && AppController.boardInfoError === ""
-        text: AppController.boardAddress === "" ? "Set up the board first." : "Asking the board …"
+        text: AppController.boardAddress === "" ? I18n.tr("Set up the board first.") : I18n.tr("Asking the board …")
     }
 
     // ---- the headline: packet -> report ready
     Card {
         visible: page.have
         opacity: page.stale ? 0.5 : 1
-        title: "Packet → report ready"
+        title: I18n.tr("Packet → report ready")
         icon: "latency"
-        help: "From the network chip's interrupt for a packet until its input is in the state the next USB report carries. Median: half of the packets were faster."
+        help: I18n.tr("From the network chip's interrupt for a packet until its input is in the state the next USB report carries. Median: half of the packets were faster.")
         // The lines go under the big number when the card is narrow.
         GridLayout {
             Layout.fillWidth: true
@@ -114,7 +114,8 @@ AppPage {
                 Controls.Label {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
-                    text: page.d.ready_n ? `99\u00a0% below ${page.us(page.d.ready_p99)} · slowest ${page.us(page.d.ready_max)}` : "no input yet"
+                    text: page.d.ready_n ? I18n.trf("99\u00a0% below %1 · slowest %2", page.us(page.d.ready_p99), page.us(page.d.ready_max))
+                          : I18n.tr("no input yet")
                     color: Style.muted
                 }
                 Controls.Label {
@@ -122,7 +123,8 @@ AppPage {
                     wrapMode: Text.WordWrap
                     visible: text !== ""
                     text: page.d.ready1_n
-                        ? `not queued behind another packet: median ${page.us(page.d.ready1_p50)}, 99\u00a0% below ${page.us(page.d.ready1_p99)}`
+                        ? I18n.trf("not queued behind another packet: median %1, 99\u00a0% below %2",
+                                   page.us(page.d.ready1_p50), page.us(page.d.ready1_p99))
                         : ""
                     color: Style.muted
                 }
@@ -130,7 +132,9 @@ AppPage {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     visible: text !== ""
-                    text: page.d.ready_n ? `${Style.plural(page.d.ready_n, "packet", "packets")} since the start or the last reset` : ""
+                    text: page.d.ready_n ? I18n.trf("%1 since the start or the last reset",
+                                                    Style.plural(page.d.ready_n, I18n.tr("packet"), I18n.tr("packets")))
+                          : ""
                     color: Style.muted
                 }
             }
@@ -146,28 +150,30 @@ AppPage {
         rowSpacing: Style.gap
         StatTile {
             icon: "gamepad"
-            label: "PlayStation fetch"
+            label: I18n.tr("PlayStation fetch")
             value: page.d.usb_n ? page.us(page.d.usb_p50) : "–"
-            detail: page.d.usb_n ? `median · 99\u00a0% below ${page.us(page.d.usb_p99)}` : "no reports yet"
+            detail: page.d.usb_n ? I18n.trf("median · 99\u00a0% below %1", page.us(page.d.usb_p99)) : I18n.tr("no reports yet")
         }
         StatTile {
             icon: "network"
-            label: "Bus wait"
+            label: I18n.tr("Bus wait")
             value: page.d.bus_n ? page.us(page.d.bus_max) : "–"
-            detail: "longest wait for the SPI bus"
+            detail: I18n.tr("longest wait for the SPI bus")
         }
         StatTile {
             icon: "target"
-            label: "Missed polls"
+            label: I18n.tr("Missed polls")
             level: (page.d.mouse_misses || 0) > 0 ? "warn" : ""
             value: page.d.mouse_fetches ? page.n(page.d.mouse_misses) : "–"
-            detail: page.d.mouse_fetches ? `of ${Style.plural(page.d.mouse_fetches, "report", "reports")} (${page.pct(page.d.mouse_misses, page.d.mouse_fetches)})` : ""
+            detail: page.d.mouse_fetches ? I18n.trf("of %1 (%2)", Style.plural(page.d.mouse_fetches, I18n.tr("report"), I18n.tr("reports")),
+                                                    page.pct(page.d.mouse_misses, page.d.mouse_fetches))
+                    : ""
         }
         StatTile {
             icon: "key"
-            label: "Decryption"
+            label: I18n.tr("Decryption")
             value: page.d.crypto_avg_ns ? (page.d.crypto_avg_ns / 1000).toFixed(1) + "\u00a0µs" : "–"
-            detail: page.d.crypto_fast ? "optimised for this CPU, both cores" : "portable code"
+            detail: page.d.crypto_fast ? I18n.tr("optimised for this CPU, both cores") : I18n.tr("portable code")
         }
     }
 
@@ -175,17 +181,17 @@ AppPage {
     Card {
         visible: page.have && (page.d.ready_n || 0) > 0
         opacity: page.stale ? 0.5 : 1
-        title: "Where the time goes"
-        subtitle: "A typical packet: the median of every stage."
+        title: I18n.tr("Where the time goes")
+        subtitle: I18n.tr("A typical packet: the median of every stage.")
         icon: "status"
-        help: "Noticed: interrupt until the main loop sees it. Network chip: waiting for the SPI bus. Reading: the datagram over SPI, while both cores already compute its keystream. Checking: tag check, decryption and applying the input."
+        help: I18n.tr("Noticed: interrupt until the main loop sees it. Network chip: waiting for the SPI bus. Reading: the datagram over SPI, while both cores already compute its keystream. Checking: tag check, decryption and applying the input.")
         StageBar {
             Layout.fillWidth: true
             parts: [
-                { name: "noticed", value: page.d.detect_p50 || 0 },
-                { name: "network chip free", value: page.d.bus_p50 || 0 },
-                { name: "reading + keystream", value: page.d.spi_p50 || 0 },
-                { name: "checking + applying", value: page.d.handle_p50 || 0 }
+                { name: I18n.tr("noticed"), value: page.d.detect_p50 || 0 },
+                { name: I18n.tr("network chip free"), value: page.d.bus_p50 || 0 },
+                { name: I18n.tr("reading + keystream"), value: page.d.spi_p50 || 0 },
+                { name: I18n.tr("checking + applying"), value: page.d.handle_p50 || 0 }
             ]
         }
     }
@@ -194,18 +200,18 @@ AppPage {
     Card {
         visible: page.have && (page.d.ready_n || 0) > 0
         opacity: page.stale ? 0.5 : 1
-        title: "Spread per stage"
-        subtitle: "Bar: fastest to 99 %. Dot: median. Mark: slowest (▸ beyond the scale)."
+        title: I18n.tr("Spread per stage")
+        subtitle: I18n.tr("Bar: fastest to 99 %. Dot: median. Mark: slowest (▸ beyond the scale).")
         icon: "latency"
         RangeChart {
             Layout.fillWidth: true
             rows: [
-                page.stage("ready", "Packet → report ready"),
-                page.stage("ready1", "… not queued behind another"),
-                page.stage("detect", "… noticed by the board"),
-                page.stage("bus", "… network chip free"),
-                page.stage("spi", "… reading + keystream"),
-                page.stage("handle", "… checking + applying")
+                page.stage("ready", I18n.tr("Packet → report ready")),
+                page.stage("ready1", I18n.tr("… not queued behind another")),
+                page.stage("detect", I18n.tr("… noticed by the board")),
+                page.stage("bus", I18n.tr("… network chip free")),
+                page.stage("spi", I18n.tr("… reading + keystream")),
+                page.stage("handle", I18n.tr("… checking + applying"))
             ].filter(r => r.n > 0)
         }
     }
@@ -214,15 +220,15 @@ AppPage {
     Card {
         visible: page.have && (page.d.mouse_fetches || 0) > 0
         opacity: page.stale ? 0.5 : 1
-        title: "Mouse reports and the PlayStation"
-        subtitle: "The PlayStation fetches a report once per millisecond; the board fills it shortly before."
+        title: I18n.tr("Mouse reports and the PlayStation")
+        subtitle: I18n.tr("The PlayStation fetches a report once per millisecond; the board fills it shortly before.")
         icon: "mouse"
-        help: "Missed poll: motion was waiting in time, yet its report went out a frame later because the board was busy. Skipped by the PlayStation: the report was ready, the PlayStation fetched it a frame later; the board cannot change that and does not react to it."
+        help: I18n.tr("Missed poll: motion was waiting in time, yet its report went out a frame later because the board was busy. Skipped by the PlayStation: the report was ready, the PlayStation fetched it a frame later; the board cannot change that and does not react to it.")
         RangeChart {
             Layout.fillWidth: true
             rows: [
-                page.stage("usb", "Packet → fetched"),
-                page.stage("armed", "Report filled → fetched")
+                page.stage("usb", I18n.tr("Packet → fetched")),
+                page.stage("armed", I18n.tr("Report filled → fetched"))
             ].filter(r => r.n > 0)
         }
         LeadMeter {
@@ -235,9 +241,11 @@ AppPage {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
             color: Style.muted
-            text: `Missed polls: ${page.n(page.d.mouse_misses)} of ${page.n(page.d.mouse_fetches)} (${page.pct(page.d.mouse_misses, page.d.mouse_fetches)}) · `
-                + `skipped by the PlayStation: ${page.n(page.d.mouse_host_skips)} (${page.pct(page.d.mouse_host_skips, page.d.mouse_fetches)}) · `
-                + `motion that waited for a report already filled: ${page.pct(page.d.mouse_waits, page.d.mouse_inputs)}`
+            text: I18n.trf("Missed polls: %1 of %2 (%3) · skipped by the PlayStation: %4 (%5) · "
+                           + "motion that waited for a report already filled: %6",
+                           page.n(page.d.mouse_misses), page.n(page.d.mouse_fetches),
+                           page.pct(page.d.mouse_misses, page.d.mouse_fetches), page.n(page.d.mouse_host_skips),
+                           page.pct(page.d.mouse_host_skips, page.d.mouse_fetches), page.pct(page.d.mouse_waits, page.d.mouse_inputs))
         }
     }
 
@@ -245,20 +253,22 @@ AppPage {
     Card {
         visible: page.have
         opacity: page.stale ? 0.5 : 1
-        title: "Clock speed"
-        subtitle: page.clk.cpu_hz ? `now: processor ${(page.clk.cpu_hz / 1e6).toFixed(0)} MHz, network chip ${(page.clk.spi_hz / 1e6).toFixed(1)} MHz` : ""
+        title: I18n.tr("Clock speed")
+        subtitle: page.clk.cpu_hz ? I18n.trf("now: processor %1 MHz, network chip %2 MHz", (page.clk.cpu_hz / 1e6).toFixed(0),
+                                             (page.clk.spi_hz / 1e6).toFixed(1))
+                  : ""
         icon: "bolt"
-        help: "Faster clocks shorten the input path by a few microseconds (about 52 → 40 µs from packet to report ready). 200 MHz is beyond the processor's rating: if the board does not run stably, it restarts by itself within 10 s and goes back to 150 MHz. The fast SPI clock is checked at every start."
+        help: I18n.tr("Faster clocks shorten the input path by a few microseconds (about 52 → 40 µs from packet to report ready). 200 MHz is beyond the processor's rating: if the board does not run stably, it restarts by itself within 10 s and goes back to 150 MHz. The fast SPI clock is checked at every start.")
 
         Banner {
             kind: "warn"
             visible: page.clk.cpu_fell_back === true
-            text: "200 MHz did not run stably on this board, so it runs at 150 MHz again."
+            text: I18n.tr("200 MHz did not run stably on this board, so it runs at 150 MHz again.")
         }
         Banner {
             kind: "warn"
             visible: page.clk.spi_fast_failed === true
-            text: "The fast SPI clock failed its self-test; the network chip runs at the standard clock."
+            text: I18n.tr("The fast SPI clock failed its self-test; the network chip runs at the standard clock.")
         }
         // Label and choice side by side, or the choice below its label when
         // the card is too narrow for both.
@@ -267,25 +277,25 @@ AppPage {
             columns: width > 480 ? 2 : 1
             columnSpacing: 16
             rowSpacing: 10
-            Controls.Label { text: "Processor"; color: Style.text }
+            Controls.Label { text: I18n.tr("Processor"); color: Style.text }
             Segmented {
                 id: cpuChoice
                 value: page.pendingCpu !== "" ? page.pendingCpu : String(page.clk.cpu_mhz || 150)
-                model: [{ value: "150", text: "150 MHz (rated)" }, { value: "200", text: "200 MHz (overclocked)" }]
+                model: [{ value: "150", text: I18n.tr("150 MHz (rated)") }, { value: "200", text: I18n.tr("200 MHz (overclocked)") }]
                 onActivated: v => page.pendingCpu = v
             }
-            Controls.Label { text: "Network chip (SPI)"; color: Style.text }
+            Controls.Label { text: I18n.tr("Network chip (SPI)"); color: Style.text }
             Segmented {
                 id: spiChoice
                 value: page.pendingSpi !== "" ? page.pendingSpi : page.clk.spi_fast ? "fast" : "standard"
-                model: [{ value: "standard", text: "Standard (25 MHz)" }, { value: "fast", text: "Fast (33–37.5 MHz)" }]
+                model: [{ value: "standard", text: I18n.tr("Standard (25 MHz)") }, { value: "fast", text: I18n.tr("Fast (33–37.5 MHz)") }]
                 onActivated: v => page.pendingSpi = v
             }
         }
         RowLayout {
             spacing: 12
             AppButton {
-                text: "Apply"
+                text: I18n.tr("Apply")
                 highlighted: true
                 enabled: !AppController.clockBusy && !AppController.active && !page.stale
                         && (cpuChoice.value !== String(page.clk.cpu_mhz) || (spiChoice.value === "fast") !== page.clk.spi_fast)
@@ -295,68 +305,74 @@ AppPage {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: Style.muted
-                text: AppController.active ? "Switch the bridge off first: the board restarts." : AppController.clockMessage
+                text: AppController.active ? I18n.tr("Switch the bridge off first: the board restarts.") : AppController.clockMessage
             }
         }
     }
 
     // ---- this PC: what happens before the packet reaches the network
     Card {
-        title: "This PC"
+        title: I18n.tr("This PC")
         subtitle: AppController.inputP50 >= 0
-                  ? `input → network: median ${Style.us(AppController.inputP50 * 1000)} · max ${Style.us(AppController.inputMax * 1000)}`
-                  : "input → network is measured while the bridge is on"
+                  ? I18n.trf("input → network: median %1 · max %2", Style.us(AppController.inputP50 * 1000),
+                             Style.us(AppController.inputMax * 1000))
+                  : I18n.tr("input → network is measured while the bridge is on")
         icon: "network"
-        help: "Before the board sees a packet, this PC has to notice the input and send it. Two things in the system can add more than the board's whole input path: USB network adapters that hold packets back to bundle them (about 1 ms), and now and then a core that has to wake up from a deep sleep state first (a few hundred µs)."
+        help: I18n.tr("Before the board sees a packet, this PC has to notice the input and send it. Two things in the system can add more than the board's whole input path: USB network adapters that hold packets back to bundle them (about 1 ms), and now and then a core that has to wake up from a deep sleep state first (a few hundred µs).")
 
         GridLayout {
             Layout.fillWidth: true
             columns: 2
             columnSpacing: 16
             rowSpacing: 10
-            Controls.Label { text: "Network latency to the board"; color: Style.text }
+            Controls.Label { text: I18n.tr("Network latency to the board"); color: Style.text }
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: Style.muted
                 text: AppController.upP50 >= 0
-                      ? `PC → board: median ${Style.us(AppController.upP50 * 1000)} · 95\u00a0% below ${Style.us(AppController.upP95 * 1000)} (measured with the board's time stamps)`
+                      ? I18n.trf("PC → board: median %1 · 95\u00a0% below %2 (measured with the board's time stamps)",
+                                 Style.us(AppController.upP50 * 1000), Style.us(AppController.upP95 * 1000))
                       : AppController.rttP50 >= 0
-                      ? `≈ ${Style.us(AppController.rttP50 * 500)}, half the round trip (exact with newer board firmware)`
+                      ? I18n.trf("≈ %1, half the round trip (exact with newer board firmware)", Style.us(AppController.rttP50 * 500))
                       : "–"
             }
-            Controls.Label { text: "Round trip"; color: Style.text }
+            Controls.Label { text: I18n.tr("Round trip"); color: Style.text }
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: Style.muted
                 text: AppController.rttP50 >= 0
-                      ? `median ${Style.us(AppController.rttP50 * 1000)} · 95\u00a0% below ${Style.us(AppController.rttP95 * 1000)} (there and back, with the board's processing)`
+                      ? I18n.trf("median %1 · 95\u00a0% below %2 (there and back, with the board's processing)",
+                                 Style.us(AppController.rttP50 * 1000), Style.us(AppController.rttP95 * 1000))
                       : "–"
             }
-            Controls.Label { text: "Network adapter"; color: Style.text }
+            Controls.Label { text: I18n.tr("Network adapter"); color: Style.text }
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: AppController.adapterMode === "delaying" ? Style.stateColor("warn") : Style.muted
                 text: AppController.adapterMode === "delaying"
-                      ? `${AppController.adapterIface} holds every packet back up to about ${Style.us(AppController.adapterDelayMs * 1000)} (USB adapter, cdc_ncm)`
+                      ? I18n.trf("%1 holds every packet back up to about %2 (USB adapter, cdc_ncm)", AppController.adapterIface,
+                                 Style.us(AppController.adapterDelayMs * 1000))
                       : AppController.adapterMode === "managed"
-                      ? (AppController.adapterAtOnceNow ? `${AppController.adapterIface} sends at once while the app runs (bundles again when it is closed)`
-                         : `${AppController.adapterIface} bundles packets (up to ${Style.us(AppController.adapterDelayMs * 1000)}); the app switches it to “send at once”`)
-                      : AppController.adapterMode === "fixed" ? `${AppController.adapterIface} sends at once (set outside the app)`
-                      : AppController.connected ? "sends packets at once" : "–"
+                      ? (AppController.adapterAtOnceNow
+                         ? I18n.trf("%1 sends at once while the app runs (bundles again when it is closed)", AppController.adapterIface)
+                         : I18n.trf("%1 bundles packets (up to %2); the app switches it to “send at once”", AppController.adapterIface,
+                                    Style.us(AppController.adapterDelayMs * 1000)))
+                      : AppController.adapterMode === "fixed" ? I18n.trf("%1 sends at once (set outside the app)", AppController.adapterIface)
+                      : AppController.connected ? I18n.tr("sends packets at once") : "–"
             }
-            Controls.Label { text: "Processor sleep"; color: Style.text }
+            Controls.Label { text: I18n.tr("Processor sleep"); color: Style.text }
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: AppController.cpuWakeState === "not_permitted" ? Style.stateColor("warn") : Style.muted
-                text: !AppController.keepCpuAwake ? "deep sleep states allowed (switched off below)"
-                      : AppController.cpuWakeState === "held" ? "kept out of deep sleep states now"
-                      : AppController.cpuWakeState === "ready" ? "kept out of deep sleep states while the bridge is on"
-                      : AppController.cpuWakeState === "not_permitted" ? "may not be kept awake by this user yet"
-                      : AppController.cpuWakeState === "unavailable" ? "cannot be kept awake on this system"
+                text: !AppController.keepCpuAwake ? I18n.tr("deep sleep states allowed (switched off below)")
+                      : AppController.cpuWakeState === "held" ? I18n.tr("kept out of deep sleep states now")
+                      : AppController.cpuWakeState === "ready" ? I18n.tr("kept out of deep sleep states while the bridge is on")
+                      : AppController.cpuWakeState === "not_permitted" ? I18n.tr("may not be kept awake by this user yet")
+                      : AppController.cpuWakeState === "unavailable" ? I18n.tr("cannot be kept awake on this system")
                       : "–"
             }
         }
@@ -365,13 +381,13 @@ AppPage {
             AppSwitch {
                 checked: AppController.keepCpuAwake
                 onToggled: AppController.enableKeepCpuAwake(checked)
-                Accessible.name: "Keep the processor awake while the bridge is on"
+                Accessible.name: I18n.tr("Keep the processor awake while the bridge is on")
             }
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: Style.muted
-                text: "Keep the processor awake while the bridge is on: no input has to wait for a core to wake up from deep sleep (now and then a few hundred µs). The PC uses a few watts more meanwhile."
+                text: I18n.tr("Keep the processor awake while the bridge is on: no input has to wait for a core to wake up from deep sleep (now and then a few hundred µs). The PC uses a few watts more meanwhile.")
             }
         }
         RowLayout {
@@ -380,26 +396,26 @@ AppPage {
             visible: needed || AppController.latencyRuleInstalled || AppController.latencySetupMessage !== ""
             spacing: 12
             AppButton {
-                text: AppController.latencySetupBusy ? "Setting up …" : "Set up"
+                text: AppController.latencySetupBusy ? I18n.tr("Setting up …") : I18n.tr("Set up")
                 highlighted: true
                 visible: setupRow.needed
                 enabled: !AppController.latencySetupBusy
                 onClicked: AppController.setupLowLatency()
             }
             AppButton {
-                text: AppController.latencySetupBusy && !setupRow.needed ? "Removing …" : "Undo"
+                text: AppController.latencySetupBusy && !setupRow.needed ? I18n.tr("Removing …") : I18n.tr("Undo")
                 visible: AppController.latencyRuleInstalled
                 enabled: !AppController.latencySetupBusy
                 onClicked: AppController.removeLowLatency()
-                Accessible.description: "Removes the low-latency rule; asks for the administrator password"
+                Accessible.description: I18n.tr("Removes the low-latency rule; asks for the administrator password")
             }
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: Style.muted
                 text: AppController.latencySetupMessage !== "" ? AppController.latencySetupMessage
-                      : setupRow.needed ? "Asks for the administrator password once and installs a udev rule: this user may then switch the bundling of USB network adapters (the app turns it off while it runs and back on when it is closed, without a password) and, where needed, keep the processor awake."
-                      : "Set up through /etc/udev/rules.d/70-ps-hid-bridge-latency.rules. “Undo” removes it: the network adapter bundles packets again and the app no longer switches it (administrator password)."
+                      : setupRow.needed ? I18n.tr("Asks for the administrator password once and installs a udev rule: this user may then switch the bundling of USB network adapters (the app turns it off while it runs and back on when it is closed, without a password) and, where needed, keep the processor awake.")
+                      : I18n.tr("Set up through /etc/udev/rules.d/70-ps-hid-bridge-latency.rules. “Undo” removes it: the network adapter bundles packets again and the app no longer switches it (administrator password).")
             }
         }
     }
@@ -408,7 +424,7 @@ AppPage {
     Card {
         visible: page.have
         opacity: page.stale ? 0.5 : 1
-        title: "Details"
+        title: I18n.tr("Details")
         icon: "board"
         // One grid: the values line up from row to row; below each name
         // when the card is narrow.
@@ -420,17 +436,26 @@ AppPage {
             rowSpacing: 6
             Repeater {
                 model: page.have ? [
-                    ["Firmware", `${page.st.firmware} · slot ${page.st.partition} · up ${page.uptime(page.st.uptime_ms)}`],
-                    ["PlayStation", page.st.usb_mounted ? (page.st.usb_suspended ? "connected, in rest mode" : "connected") : "not connected"],
-                    ["Address", `${page.st.ip} / ${page.st.mask} (${page.st.ip_mode === "static" ? "static" : "DHCP"})`],
+                    [I18n.tr("Firmware"), I18n.trf("%1 · slot %2 · up %3", page.st.firmware, page.st.partition, page.uptime(page.st.uptime_ms))],
+                    ["PlayStation", page.st.usb_mounted ? (page.st.usb_suspended ? I18n.tr("connected, in rest mode") : I18n.tr("connected"))
+                                    : I18n.tr("not connected")],
+                    [I18n.tr("Address"), `${page.st.ip} / ${page.st.mask} (${page.st.ip_mode === "static" ? I18n.tr("static") : "DHCP"})`],
                     ["Gateway / DNS", `${page.st.gateway} / ${page.st.dns}`],
-                    ["MAC address", page.st.mac],
-                    ["UDP port", String(page.st.udp_port)],
-                    ["Sender filter", page.st.allowed_sender || "any sender"],
-                    ["Packets", `${page.n(page.st.rx_ok)} ok · ${page.n(page.st.rx_auth_fail)} bad signature · ${page.n(page.st.rx_replay)} replayed · ${page.n(page.st.rx_filtered)} unknown sender · ${page.n(page.st.rx_malformed)} malformed`],
-                    ["Receive rounds", `${Style.plural(page.d.datagrams || 0, "packet", "packets")} in ${Style.plural(page.d.rounds || 0, "round", "rounds")} · ${page.n(page.d.core0_spi)} SPI transfers`],
-                    ["Keystream on core 1", `${Style.plural(page.d.crypto_helped || 0, "packet", "packets")} · ${page.n(page.d.crypto_alone)} on core 0 alone`],
-                    ["Mouse input that waited", `${page.n(page.d.mouse_waits)} of ${page.n(page.d.mouse_inputs)} (${page.pct(page.d.mouse_waits, page.d.mouse_inputs)})`]
+                    [I18n.tr("MAC address"), page.st.mac],
+                    [I18n.tr("UDP port"), String(page.st.udp_port)],
+                    [I18n.tr("Sender filter"), page.st.allowed_sender || I18n.tr("any sender")],
+                    [I18n.tr("Packets"), I18n.trf("%1 ok · %2 bad signature · %3 replayed · %4 unknown sender · %5 malformed",
+                                                  page.n(page.st.rx_ok), page.n(page.st.rx_auth_fail), page.n(page.st.rx_replay),
+                                                  page.n(page.st.rx_filtered), page.n(page.st.rx_malformed))],
+                    [I18n.tr("Receive rounds"), I18n.trf("%1 in %2 · %3 SPI transfers",
+                                                         Style.plural(page.d.datagrams || 0, I18n.tr("packet"), I18n.tr("packets")),
+                                                         Style.plural(page.d.rounds || 0, I18n.tr("round"), I18n.tr("rounds")),
+                                                         page.n(page.d.core0_spi))],
+                    [I18n.tr("Keystream on core 1"), I18n.trf("%1 · %2 on core 0 alone",
+                                                              Style.plural(page.d.crypto_helped || 0, I18n.tr("packet"), I18n.tr("packets")),
+                                                              page.n(page.d.crypto_alone))],
+                    [I18n.tr("Mouse input that waited"), I18n.trf("%1 of %2 (%3)", page.n(page.d.mouse_waits), page.n(page.d.mouse_inputs),
+                                                                  page.pct(page.d.mouse_waits, page.d.mouse_inputs))]
                 ].reduce((all, row) => all.concat([{ name: true, text: row[0] }, { name: false, text: row[1] }]), []) : []
                 delegate: Controls.Label {
                     required property var modelData

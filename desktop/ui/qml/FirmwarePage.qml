@@ -1,9 +1,11 @@
 import QtQuick
 import QtQuick.Controls as Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import PSHIDBridge
 
-// Versions and updates of app and board, and installing over USB.
+// Versions and updates of app and board, installing over USB, and the
+// diagnostics report.
 AppPage {
     id: page
 
@@ -74,14 +76,14 @@ AppPage {
             }
         }
     }
-    title: "Firmware & updates"
-    subtitle: "New versions come from GitHub; every download is checked before it is used."
+    title: I18n.tr("Firmware & updates")
+    subtitle: I18n.tr("New versions come from GitHub; every download is checked before it is used.")
 
     Card {
-        title: "Versions"
+        title: I18n.tr("Versions")
         icon: "update"
         actions: AppButton {
-            text: "Check now"
+            text: I18n.tr("Check now")
             icon.name: "update"
             icon.color: Style.text
             enabled: !AppController.updateBusy
@@ -90,16 +92,18 @@ AppPage {
 
         VersionRow {
             icon: "status"
-            name: "Desktop app"
-            detail: "installed " + AppController.version
-                    + (AppController.appUpdateAvailable && !AppController.canUpdateApp
-                       ? " · not an AppImage: download the new version from the release page" : "")
+            name: I18n.tr("Desktop app")
+            detail: AppController.appUpdateAvailable && !AppController.canUpdateApp
+                    ? I18n.trf("installed %1 · not an AppImage: download the new version from the release page",
+                               AppController.version)
+                    : I18n.trf("installed %1", AppController.version)
             showPill: AppController.latestVersion !== ""
             pillLevel: AppController.appUpdateAvailable ? "accent" : "ok"
-            pillText: AppController.appUpdated ? "restart to use it"
-                      : AppController.appUpdateAvailable ? AppController.latestVersion + " available" : "up to date"
+            pillText: AppController.appUpdated ? I18n.tr("restart to use it")
+                      : AppController.appUpdateAvailable ? I18n.trf("%1 available", AppController.latestVersion)
+                      : I18n.tr("up to date")
             AppButton {
-                text: AppController.appUpdated ? "Restart now" : "Update"
+                text: AppController.appUpdated ? I18n.tr("Restart now") : I18n.tr("Update")
                 highlighted: true
                 // Not an AppImage: nothing to update here (the line above says why).
                 visible: (AppController.appUpdateAvailable && AppController.canUpdateApp) || AppController.appUpdated
@@ -109,11 +113,13 @@ AppPage {
         }
         VersionRow {
             icon: "board"
-            name: "Board firmware"
-            detail: AppController.boardFirmware !== "" ? "installed " + AppController.boardFirmware : "unknown (board not connected)"
+            name: I18n.tr("Board firmware")
+            detail: AppController.boardFirmware !== "" ? I18n.trf("installed %1", AppController.boardFirmware)
+                    : I18n.tr("unknown (board not connected)")
             showPill: AppController.latestVersion !== "" && AppController.boardFirmware !== ""
             pillLevel: AppController.boardUpdateAvailable ? "accent" : "ok"
-            pillText: AppController.boardUpdateAvailable ? AppController.latestVersion + " available" : "up to date"
+            pillText: AppController.boardUpdateAvailable ? I18n.trf("%1 available", AppController.latestVersion)
+                      : I18n.tr("up to date")
             // In a wrapper: a disabled button gets no hover, the wrapper does
             // (the tooltip says why it is disabled).
             Item {
@@ -123,7 +129,7 @@ AppPage {
                 AppButton {
                     id: boardUpdate
                     anchors.fill: parent
-                    text: "Update"
+                    text: I18n.tr("Update")
                     highlighted: true
                     enabled: !AppController.updateBusy && !AppController.active
                     onClicked: AppController.updateBoard()
@@ -132,16 +138,16 @@ AppPage {
                     id: boardUpdateHover
                 }
                 Controls.ToolTip.visible: boardUpdateHover.hovered && AppController.active
-                Controls.ToolTip.text: "Switch the bridge off first: the board restarts."
+                Controls.ToolTip.text: I18n.tr("Switch the bridge off first: the board restarts.")
             }
         }
 
         Banner {
             kind: "warn"
             visible: AppController.boardNoPartitionTable
-            text: "The board has no partition table: an update overwrites the running firmware and there is no previous version to fall back to. Install it once over USB (\"First installation\"); key and settings stay."
+            text: I18n.tr("The board has no partition table: an update overwrites the running firmware and there is no previous version to fall back to. Install it once over USB (\"First installation\"); key and settings stay.")
             actions: AppButton {
-                text: "Install via USB"
+                text: I18n.tr("Install via USB")
                 onClicked: usbToggle.checked = true
             }
         }
@@ -157,11 +163,13 @@ AppPage {
             AppSwitch {
                 checked: AppController.updateCheck
                 onToggled: AppController.enableUpdateCheck(checked)
-                Accessible.name: "Look for updates automatically"
+                Accessible.name: I18n.tr("Look for updates automatically")
             }
             Controls.Label {
                 Layout.fillWidth: true
-                text: "Look for updates at start and every 6 hours" + (AppController.latestVersion !== "" ? " · newest " + AppController.latestVersion : "")
+                text: AppController.latestVersion !== ""
+                      ? I18n.trf("Look for updates at start and every 6 hours · newest %1", AppController.latestVersion)
+                      : I18n.tr("Look for updates at start and every 6 hours")
                 color: Style.muted
                 wrapMode: Text.WordWrap
             }
@@ -169,12 +177,12 @@ AppPage {
     }
 
     Card {
-        title: "Install via USB"
+        title: I18n.tr("Install via USB")
         icon: "usb"
-        subtitle: "First installation or recovery, with the board connected to this PC."
+        subtitle: I18n.tr("First installation or recovery, with the board connected to this PC.")
         actions: AppButton {
             id: usbToggle
-            text: checked ? "Hide" : "Open"
+            text: checked ? I18n.tr("Hide") : I18n.tr("Open")
             checkable: true
         }
 
@@ -186,6 +194,40 @@ AppPage {
                     || Qt.application.arguments.indexOf("--screenshot") >= 0
             visible: active
             sourceComponent: UsbInstall {}
+        }
+    }
+
+    Card {
+        title: I18n.tr("Diagnostics")
+        icon: "help"
+        subtitle: I18n.tr("One text file with what helps to find a problem, to attach to a bug report.")
+        help: I18n.tr("Versions, system, desktop, the settings (without the key), the devices and their access, what the board says about itself, and the app's recent messages. Never the key or a text typed on the PlayStation. Look through it before you share it: it names your devices and the board's addresses.")
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 12
+            AppButton {
+                text: AppController.diagBusy ? I18n.tr("Collecting …") : I18n.tr("Save diagnostics …")
+                icon.name: "download"
+                icon.color: Style.text
+                enabled: !AppController.diagBusy
+                onClicked: diagDialog.open()
+            }
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: AppController.diagMessage !== ""
+                wrapMode: Text.WrapAnywhere
+                color: Style.stateColor(AppController.diagLevel)
+                text: AppController.diagMessage
+            }
+        }
+
+        FileDialog {
+            id: diagDialog
+            title: I18n.tr("Save diagnostics")
+            fileMode: FileDialog.SaveFile
+            nameFilters: [I18n.tr("Text files (*.md *.txt)")]
+            onAccepted: AppController.saveDiagnostics(selectedFile.toString())
         }
     }
 }
