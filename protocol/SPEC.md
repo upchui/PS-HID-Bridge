@@ -8,9 +8,11 @@ This document describes the UDP packets between the desktop app and the board. T
 
 All three are checked against the shared test vectors in `protocol/vectors/`.
 
+A walk-through in plain words (what goes when, and what happens when something goes wrong) is in [docs/protocol.md](../docs/protocol.md).
+
 ## Overview
 
-- Transport: UDP; the board listens on port **45045** (configurable).
+- Transport: UDP over IPv4; the board listens on port **45045** (configurable in the web interface; a change restarts the board).
 - Every packet is encrypted and authenticated with **ChaCha20-Poly1305** (RFC 8439) and a **pre-shared key** (256 bit).
 - All numbers are **little endian**.
 - The board silently drops packets with a bad tag, an old counter or a foreign sender IP, and only counts them. For a wrong session it answers with a session hint at most every 100 ms (see "Processing on the board").
@@ -69,8 +71,11 @@ Both directions use the same key. Because the direction is part of the nonce, ap
 | 21 | 1 | wheel | i8, vertical wheel |
 | 22 | 1 | pan | i8, horizontal wheel |
 
-- Keyboard and mouse buttons are **absolute state**: every packet contains all keys currently pressed, so a lost packet is corrected by the next one. Every distinct state is sent (and reported over USB) in order, so even a key tap shorter than a millisecond arrives.
-- Motion and wheels are **relative**: the board adds them up and passes them on through the USB reports without losing anything.
+- Keyboard and mouse buttons are **absolute state**: every packet contains all keys currently pressed, so a lost packet is corrected by the next one. Every distinct state is sent (and reported over USB) in order, so even a key tap shorter than a millisecond arrives. Within limits:
+  - The app keeps up to 64 states waiting to be sent; beyond that it drops the oldest. States from before it knows the board's session are not sent (the first packet of a session carries the current state).
+  - The board keeps up to 8 states each for the keyboard and the mouse buttons until the host fetches them; when full, the newest waiting entry is overwritten.
+  - Keyboard and mouse are separate USB interfaces: a key change and a button change keep their own order, not their order relative to each other.
+- Motion and wheels are **relative**: the board adds them up and passes them on through the USB reports; what does not fit into one report goes into the next. It drops what it has summed up when it releases everything (failsafe, `RELEASE_ALL`, USB disconnected or suspended), and its sum stops at four full reports per axis (±4 × 32767), so a host that stops fetching does not get all of it at once later. Motion in a packet that the app's network stack refuses (send buffer full) is lost.
 - HEARTBEAT has the same layout. The app sends it while the bridge is active and nothing else was sent for 50 ms. It carries the full key state and `dx = dy = wheel = pan = 0`.
 
 ### PING (12 bytes)
@@ -121,8 +126,8 @@ For every received packet the board checks, in this order:
 3. `counter > last valid counter`. Otherwise `rx_replay`. This check is cheap and therefore comes before the cryptography.
 4. Verify the tag and decrypt. Otherwise `rx_auth_fail`.
 5. Only now: `last valid counter = counter`. A forged packet can therefore not push the counter up.
-6. INPUT/HEARTBEAT: `session_id` must match the current session. Otherwise `rx_replay`; at most every 100 ms the board answers with a PONG with `t_app_us = seq = 0` as a **session hint**, so the app learns the new session immediately.
-7. PING: PONG to the sender (IP and port of the received packet); PING_TIMED: PONG_TIMED.
+6. INPUT/HEARTBEAT: `session_id` must match the current session. Otherwise `rx_replay`; at most every 100 ms (one limit for all senders together) the board answers with a PONG with `t_app_us = seq = 0` as a **session hint**, so the app learns at once that the session changed. A hint is always a plain PONG, also for a sender that uses PING_TIMED.
+7. PING: PONG to the sender (IP and port of the received packet); PING_TIMED: PONG_TIMED. If the network chip is still sending the previous answer, the new one is dropped; the next ping gets one.
 
 The board creates a new **session id** from the TRNG on every boot. After a restart every previously recorded input packet is worthless, even though the board's own counter starts over.
 
@@ -131,14 +136,17 @@ The board creates a new **session id** from the TRNG on every boot. After a rest
 - If no valid INPUT or HEARTBEAT arrives for **250 ms**, the board releases all keys and mouse buttons (status bit 2).
 - The same happens when the PlayStation disconnects the USB port or puts it into rest mode.
 - The next valid packet restores the state.
+- A `RELEASE_ALL` counts as valid input: status bit 2 is clear for the 250 ms after it, then the failsafe sets it again (nothing is pressed either way).
 
 ## Behaviour of the app
 
-1. Send PING until a PONG arrives; take the `session_id` from it.
-2. Send an INPUT on every change, on average at most one per millisecond (two in a row are allowed, so a 1000 Hz mouse whose reports jitter a little is never held back). Motion that has to wait is summed up; whatever does not fit into i16 goes into the next packet.
-3. While the bridge is active: HEARTBEAT if nothing was sent for 50 ms.
-4. PING every second (more often for the latency view); PING_TIMED instead once a PONG has status bit 4. If the `session_id` in a PONG changes, use the new one from now on and send the full state again.
-5. When deactivating: INPUT with `RELEASE_ALL`.
+1. Send PING every 250 ms until a PONG arrives; take the `session_id` from it.
+2. Send an INPUT on every change, on average at most one per millisecond (two in a row are allowed, so a 1000 Hz mouse whose reports jitter a little is never held back). Motion that has to wait is summed up; whatever does not fit into i16 (i8 for the wheels) goes into the next packet.
+3. While the bridge is active: HEARTBEAT if no INPUT or HEARTBEAT was sent for 50 ms (pings do not count).
+4. PING every second (every 200 ms while the latency view is open); PING_TIMED instead once a PONG has status bit 4, as long as the last PONG is less than 2 s old. If the `session_id` in a PONG changes, use the new one from now on and send the full state again.
+5. When deactivating, on "release all" and when closing: INPUT with `RELEASE_ALL`, once.
+
+A PONG counts only if it opens with the key and its `t_app_us` is from the last 2 s (and not in the future); other authentic PONGs are counted as stale. The app is "connected" while the last PONG that counted is less than 3 s old. A session hint does not switch the session by itself (it answers no ping, so a recorded one could be replayed): when it names another session, the app pings at once (at most every 5 ms), and the answer switches the session.
 
 ## Unencrypted debug mode (version 0)
 

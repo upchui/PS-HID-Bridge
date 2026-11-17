@@ -201,5 +201,6 @@ The board's side, stage by stage with measurements and clock speeds: [docs/laten
 | [docs/latency-pc.md](docs/latency-pc.md) | what the app does for a short input path on the PC and the network, how to undo it, how to measure |
 | [docs/latency.md](docs/latency.md) | the board's input path, stage by stage, with measurements |
 | [docs/usb-host-port.md](docs/usb-host-port.md) | how to solder a USB host port to two GPIOs (not used by the firmware), and what was tried with it |
+| [docs/protocol.md](docs/protocol.md) | how the app and the board talk over UDP, step by step, and what happens when something goes wrong |
 | [docs/development.md](docs/development.md) | test status, building, continuous integration, testing without a board, screenshots, checks on real hardware, directories |
-| [protocol/SPEC.md](protocol/SPEC.md) | the packet format |
+| [protocol/SPEC.md](protocol/SPEC.md) | the packet format, byte by byte |

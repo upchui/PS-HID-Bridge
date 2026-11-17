@@ -1,6 +1,6 @@
 # Security and failure safety
 
-What the key and the encryption are for, what they protect against and what not, what happens when the network, the app or the board fails, and why the web interface works the way it does. The packet format itself is in [protocol/SPEC.md](../protocol/SPEC.md).
+What the key and the encryption are for, what they protect against and what not, what happens when the network, the app or the board fails, and why the web interface works the way it does. How app and board talk is explained in [protocol.md](protocol.md); the packet format itself is in [protocol/SPEC.md](../protocol/SPEC.md).
 
 ## Why a key at all
 
@@ -54,7 +54,7 @@ Every part of the way has its own safety net, so a failure never leaves a key he
 The web interface is only for setting things up: password, key, network, firmware. It uses plain HTTP, on purpose:
 
 - **HTTPS needs a certificate**, and a device in a home network has no domain name a certificate could be issued for. A self-made certificate makes every browser show a red warning page at every visit, and teaches you to click such warnings away, which is worse than the risk it would remove.
-- **Settings and input are separate ways.** The password guards the settings only. Your input never goes through the web interface: it goes its own way, encrypted with the key (UDP, see [protocol/SPEC.md](../protocol/SPEC.md)).
+- **Settings and input are separate ways.** The password guards the settings only. Your input never goes through the web interface: it goes its own way, encrypted with the key (UDP, see [protocol.md](protocol.md)).
 - **The app never sends the password.** It reads the board's status, sets its clock and installs firmware with the key, through signed one-time requests that are worthless when recorded.
 - **Guessing is slow:** after three wrong passwords the address they came from has to wait, growing to 64 seconds, so guessing runs at about one try a minute; addresses beyond the eight the board keeps apart share one count. Choose a password that is not easy to guess.
 - **To read the traffic, someone has to be in your network already**, and capture it at the moment you log in or generate the key. If that is a concern (a shared network), set the board up where you trust the network.
