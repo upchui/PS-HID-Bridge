@@ -595,6 +595,7 @@ fn cmd_run(
     while !STOP.load(Ordering::Acquire) {
         watchdog.feed();
         inputs.wait(Duration::from_millis(100), &mut msgs);
+        let mut grab_failed = Vec::new();
         for m in std::mem::take(&mut msgs) {
             match m {
                 InputMsg::Event { event, ts_us, .. } => {
@@ -614,8 +615,22 @@ fn cmd_run(
                 InputMsg::OpenFailed { path, error } => {
                     eprintln!("Opening {}: {error}", path.display());
                 }
-                InputMsg::GrabFailed { .. } | InputMsg::ReleaseFailed { .. } => {}
+                // A device that came back could not be grabbed (another
+                // program holds it, e.g. input-remapper or keyd).
+                m @ InputMsg::GrabFailed { .. } => grab_failed.push(m),
+                InputMsg::ReleaseFailed { .. } => {}
             }
+        }
+        // As when switching on: the bridge goes off, or that device's keys
+        // would reach the PlayStation and the desktop at once.
+        if !grab_failed.is_empty() {
+            if let Some(text) = input::grab_problems(&grab_failed) {
+                eprintln!("{text}");
+            }
+            for n in ctl.command(Action::Off) {
+                println!("{}", notice_text(n));
+            }
+            apply_grab(&mut ctl, &mut inputs, &mut idle, &mut cpu);
         }
         if rescan_at.is_some_and(|t| Instant::now() >= t) {
             rescan_at = None;
@@ -1112,13 +1127,13 @@ fn cmd_config(ctx: &mut Ctx, cmd: &ConfigCmd) -> Result<(), String> {
                 c.iso_keyboard = matches!(k, KeyboardType::Iso);
             }
             if let Some(s) = sensitivity {
-                c.mouse.sensitivity = *s;
+                c.mouse.sensitivity = config::check_range("--sensitivity", *s, config::SENSITIVITY_RANGE)?;
             }
             if let Some(a) = accel {
-                c.mouse.accel = *a;
+                c.mouse.accel = config::check_range("--accel", *a, config::ACCEL_RANGE)?;
             }
             if let Some(s) = touchpad_speed {
-                c.touchpad.speed = *s;
+                c.touchpad.speed = config::check_range("--touchpad-speed", *s, config::TOUCH_SPEED_RANGE)?;
             }
             if let Some(on) = tap_to_click {
                 c.touchpad.tap_to_click = matches!(on, OnOff::On);

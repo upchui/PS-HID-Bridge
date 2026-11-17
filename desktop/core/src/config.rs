@@ -211,6 +211,24 @@ impl Default for Config {
 /// Remote Play client the window rule looks for by default.
 pub const DEFAULT_WINDOW_RULE: &str = "chiaki-ng";
 
+/// What the app's sliders cover, and so what `pshb-cli config set` takes:
+/// a value outside would be shown wrong in the app and replaced by it.
+pub const SENSITIVITY_RANGE: (f64, f64) = (0.1, 8.0);
+pub const ACCEL_RANGE: (f64, f64) = (0.0, 1.0);
+pub const TOUCH_SPEED_RANGE: (f64, f64) = (0.1, 8.0);
+
+/// `value` in `range`, as a message for the option `name` otherwise.
+pub fn check_range(name: &str, value: f64, range: (f64, f64)) -> Result<f64, String> {
+    if value.is_finite() && value >= range.0 && value <= range.1 {
+        Ok(value)
+    } else {
+        Err(format!(
+            "{name} must be between {} and {} (is {value})",
+            range.0, range.1
+        ))
+    }
+}
+
 impl Config {
     /// The window rule is switched on and has a non-empty pattern.
     pub fn window_rule_active(&self) -> bool {
