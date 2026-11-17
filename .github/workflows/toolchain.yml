@@ -1,7 +1,11 @@
-# Builds the four toolchain images and pushes them to the GitHub Container
+# Builds the toolchain images and pushes them to the GitHub Container
 # Registry, tagged with the content hash of versions.env and docker/
 # (tools/toolchain-tag.sh). The release workflow calls this only when an image
 # for the current hash is missing; building Qt from source takes hours.
+#
+# x86_64: all four images. aarch64 (ARM64): the desktop and AppImage test
+# images, built natively on an ARM runner and tagged "<hash>-aarch64" (the
+# rust image is not needed there: the desktop image has the same Rust).
 
 name: Toolchain images
 
@@ -20,17 +24,19 @@ permissions:
 
 jobs:
   image:
-    name: ${{ matrix.image }}
-    runs-on: ubuntu-24.04
+    name: ${{ matrix.image }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { image: firmware, var: FW_IMAGE }
-          - { image: rust, var: RUST_IMAGE }
-          - { image: desktop, var: DESKTOP_IMAGE }
-          - { image: apptest, var: APPTEST_IMAGE }
+          - { image: firmware, var: FW_IMAGE, arch: x86_64, runner: ubuntu-24.04 }
+          - { image: rust, var: RUST_IMAGE, arch: x86_64, runner: ubuntu-24.04 }
+          - { image: desktop, var: DESKTOP_IMAGE, arch: x86_64, runner: ubuntu-24.04 }
+          - { image: apptest, var: APPTEST_IMAGE, arch: x86_64, runner: ubuntu-24.04 }
+          - { image: desktop, var: DESKTOP_IMAGE, arch: aarch64, runner: ubuntu-24.04-arm }
+          - { image: apptest, var: APPTEST_IMAGE, arch: aarch64, runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -51,9 +57,12 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
           IMAGE: ${{ matrix.image }}
           VAR: ${{ matrix.var }}
+          ARCH: ${{ matrix.arch }}
         run: |
           tag=${INPUT_TAG:-$(tools/toolchain-tag.sh)}
-          ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pshb-$IMAGE:$tag"
+          suffix=""
+          [ "$ARCH" = x86_64 ] || suffix="-$ARCH"
+          ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pshb-$IMAGE:$tag$suffix"
           # The source label links the package to this repository.
-          make "image-$IMAGE" "$VAR=$ref" QT_JOBS=4 REPO_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          make "image-$IMAGE" "$VAR=$ref" ARCH="$ARCH" QT_JOBS=4 REPO_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
           docker push "$ref"

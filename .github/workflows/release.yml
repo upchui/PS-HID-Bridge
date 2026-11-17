@@ -43,8 +43,10 @@ jobs:
           tag=$(tools/toolchain-tag.sh)
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           build=false
-          for image in firmware rust desktop apptest; do
-            ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pshb-$image:$tag"
+          # x86_64: all four; aarch64 (ARM64): desktop and AppImage test.
+          for image in firmware:$tag rust:$tag desktop:$tag apptest:$tag \
+                       desktop:$tag-aarch64 apptest:$tag-aarch64; do
+            ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pshb-$image"
             if out=$(docker manifest inspect "$ref" 2>&1); then
               echo "found   $ref"
             elif grep -qiE "manifest unknown|not found" <<<"$out"; then
@@ -69,7 +71,8 @@ jobs:
     with:
       tag: ${{ needs.prepare.outputs.tag }}
 
-  release:
+  # x86_64: firmware, every test, CLI and AppImage.
+  build:
     needs: [prepare, toolchain]
     if: >-
       !cancelled() && needs.prepare.result == 'success' &&
@@ -77,7 +80,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
-      contents: write
+      contents: read
       packages: read
     env:
       # Only the cached dependencies matter; incremental data would bloat the cache.
@@ -133,7 +136,98 @@ jobs:
           mkdir release
           cp out/*.uf2 out/PS-HID-Bridge-x86_64.AppImage release/
           cp out/pshb-cli release/pshb-cli-x86_64-linux
-          (cd release && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-x86_64
+          path: release/
+          if-no-files-found: error
+          retention-days: 3
+
+  # aarch64 (ARM64): Rust tests, CLI and AppImage with its self-test, natively
+  # on an ARM runner. The firmware is the same for every PC (built above).
+  build-aarch64:
+    needs: [prepare, toolchain]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      (needs.toolchain.result == 'success' || needs.toolchain.result == 'skipped')
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the version counts commits
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cache/cargo/registry
+            .cache/cargo/git
+            .cache/target/cargo-aarch64
+          key: cargo-aarch64-${{ needs.prepare.outputs.tag }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: cargo-aarch64-${{ needs.prepare.outputs.tag }}-
+
+      - name: Pull toolchain images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          prefix="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pshb"
+          docker pull --quiet "$prefix-desktop:$TAG-aarch64" &
+          docker pull --quiet "$prefix-apptest:$TAG-aarch64" &
+          wait
+          {
+            echo "RUST_IMAGE=$prefix-desktop:$TAG-aarch64"
+            echo "DESKTOP_IMAGE=$prefix-desktop:$TAG-aarch64"
+            echo "APPTEST_IMAGE=$prefix-apptest:$TAG-aarch64"
+          } >> "$GITHUB_ENV"
+          df -h /
+
+      - name: Build and test
+        run: make -j2 -O ARCH=aarch64 PREBUILT=1 test-desktop desktop-cli desktop test-appimage
+
+      - name: Collect release files
+        run: |
+          mkdir release
+          cp out/PS-HID-Bridge-aarch64.AppImage release/
+          cp out/pshb-cli-aarch64 release/pshb-cli-aarch64-linux
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-aarch64
+          path: release/
+          if-no-files-found: error
+          retention-days: 3
+
+  # Both builds passed: one release with every file and one SHA256SUMS.
+  publish:
+    needs: [prepare, build, build-aarch64]
+    if: >-
+      !cancelled() && needs.build.result == 'success' && needs.build-aarch64.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # version counts commits; release notes need the tags
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: release/
+          merge-multiple: true
+
+      - name: Checksums
+        run: (cd release && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
 
       - name: Publish release
         env:

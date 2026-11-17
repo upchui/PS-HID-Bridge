@@ -27,8 +27,10 @@ cat <<'EOF'
 
 | File | Purpose |
 |---|---|
-| `PS-HID-Bridge-x86_64.AppImage` | desktop app: make it executable (`chmod +x`) and start it |
-| `pshb-cli-x86_64-linux` | command line tool |
+| `PS-HID-Bridge-x86_64.AppImage` | desktop app for PCs with an x86_64 processor (Intel, AMD): make it executable (`chmod +x`) and start it |
+| `PS-HID-Bridge-aarch64.AppImage` | the same for ARM64 (aarch64), e.g. a Raspberry Pi 4/5 with a 64-bit system |
+| `pshb-cli-x86_64-linux` | command line tool, x86_64 |
+| `pshb-cli-aarch64-linux` | command line tool, ARM64 (aarch64) |
 | `ps-hid-bridge.uf2` | board firmware: update via the web interface (System), or copy it to the board in BOOTSEL mode |
 | `ps-hid-bridge-pt.uf2` | partition table: copy it once via BOOTSEL before the first firmware |
 | other `.uf2` files | test and recovery images, see "Other images" in docs/advanced-setup.md |
