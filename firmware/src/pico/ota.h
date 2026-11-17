@@ -16,7 +16,10 @@ bool ota_begin(uint32_t size, char *err, size_t err_cap);
 bool ota_write(const uint8_t *data, size_t len);
 bool ota_finish(uint32_t crc, char *err, size_t err_cap);
 void ota_abort(void);
-// Reboot into the freshly written image (does not return).
+// A complete, verified image is waiting for ota_activate.
+bool ota_ready(void);
+// Reboot into the freshly written image (does not return; returns at once
+// if no image is ready).
 void ota_activate(void);
 
 // This start runs new firmware on trial (after an update, until confirmed).

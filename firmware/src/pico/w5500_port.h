@@ -40,6 +40,10 @@
 // Call once on core 0 before core 1 is launched. Returns false if the chip
 // does not answer (VERSIONR != 0x04).
 bool w5500_port_init(bool spi_fast);
+// Reset the chip and set it up, waiting at most `wait_ms` for it to answer:
+// part of w5500_port_init, and on core 0 again while the chip has not
+// answered yet (before core 1 is launched).
+bool w5500_port_start(bool spi_fast, uint32_t wait_ms);
 
 // The chip lost its setup: it reset by itself (brown-out, ESD) and its MAC
 // address register no longer holds ours. Core 1 checks every few seconds.

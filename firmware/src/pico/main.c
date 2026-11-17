@@ -44,6 +44,10 @@ volatile bool g_confirm_trial;
 
 static input_state_t g_input;
 static bool s_chip_ok;
+// The network chip did not answer at power-on: tried again this often, each
+// time waiting this long for it (core 0 serves USB meanwhile).
+#define CHIP_RETRY_MS 1000
+#define CHIP_RETRY_WAIT_MS 20
 
 // ---------------------------------------------------------------- core 1 -> core 0 config
 
@@ -372,6 +376,28 @@ static void load_settings(bool stored) {
 // OTA) gets its own stack instead of the SDK's 2 KB default.
 static uint32_t s_core1_stack[8192 / sizeof(uint32_t)];
 
+static void start_core1(void) {
+    multicore_launch_core1_with_stack(core1_main, s_core1_stack, sizeof(s_core1_stack));
+    guard_core1_launched();
+}
+
+// The network chip did not answer at power-on (it may come up late, or a
+// slow supply held it back): reset it and ask again every second. Once it
+// answers, the network starts as at a normal boot.
+static void chip_retry(void) {
+    static absolute_time_t next;
+    if (!time_reached(next)) return;
+    next = make_timeout_time_ms(CHIP_RETRY_MS);
+    if (!w5500_port_start(g_settings.spi_fast, CHIP_RETRY_WAIT_MS)) return;
+    printf("net: W5500 answered, starting the network\n");
+    s_chip_ok = true;
+#if !PSHB_OTA_NO_CONFIRM
+    // Still confirmed in time if it answered early in the trial.
+    g_confirm_trial = ota_trial_boot();
+#endif
+    start_core1();
+}
+
 int main(void) {
     // The clock first: UART, USB and SPI depend on it, and its setting is in
     // the flash (read through XIP, which needs no set-up).
@@ -423,10 +449,9 @@ int main(void) {
 #endif
     guard_service();
     if (s_chip_ok) {
-        multicore_launch_core1_with_stack(core1_main, s_core1_stack, sizeof(s_core1_stack));
-        guard_core1_launched();
+        start_core1();
     } else {
-        printf("net: W5500 not responding\n");
+        printf("net: W5500 not responding, trying again every second\n");
         atomic_store(&g_net.state, NET_STATE_CHIP_ERROR);
     }
 
@@ -434,7 +459,11 @@ int main(void) {
         guard_service();
         clock_service();
         tud_task();
-        if (s_chip_ok) net_service();
+        if (s_chip_ok) {
+            net_service();
+        } else {
+            chip_retry();
+        }
 #if PSHB_TEST_PATTERN
         test_pattern_service();
 #endif

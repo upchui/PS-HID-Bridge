@@ -182,11 +182,8 @@ bool w5500_port_init(bool spi_fast) {
     gpio_set_dir(W5500_PIN_INT, GPIO_IN);
     gpio_pull_up(W5500_PIN_INT);
 
-    // Hardware reset: >= 500 us low, then wait for the PLL to lock.
     gpio_init(W5500_PIN_RST);
     gpio_set_dir(W5500_PIN_RST, GPIO_OUT);
-    gpio_put(W5500_PIN_RST, 0);
-    sleep_ms(2);
     gpio_put(W5500_PIN_RST, 1);
 
     reg_wizchip_cris_cbfunc(cris_enter, cris_exit);
@@ -194,8 +191,17 @@ bool w5500_port_init(bool spi_fast) {
     reg_wizchip_spi_cbfunc(spi_read_byte, spi_write_byte);
     reg_wizchip_spiburst_cbfunc(spi_read_burst, spi_write_burst);
 
+    return w5500_port_start(spi_fast, 200);
+}
+
+bool w5500_port_start(bool spi_fast, uint32_t wait_ms) {
+    // Hardware reset: >= 500 us low, then wait for the PLL to lock.
+    gpio_put(W5500_PIN_RST, 0);
+    sleep_ms(2);
+    gpio_put(W5500_PIN_RST, 1);
+
     // VERSIONR reads 0x04 once the chip is up.
-    absolute_time_t deadline = make_timeout_time_ms(200);
+    absolute_time_t deadline = make_timeout_time_ms(wait_ms);
     while (getVERSIONR() != 0x04) {
         if (time_reached(deadline)) return false;
         sleep_ms(5);

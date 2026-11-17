@@ -48,7 +48,10 @@ typedef enum { C1_NO_LINK, C1_DHCP, C1_DHCP_WAIT, C1_READY } c1_state_t;
 // in one piece, as large as it arrived (up to the socket's receive buffer),
 // not only the 548 bytes of a DHCP message. Any larger datagram -- also a
 // broadcast answer meant for another device -- would overwrite what follows.
-static uint8_t s_dhcp_buf[W5500_DHCP_RX_KB * 1024] __attribute__((aligned(4)));  // cast to RIP_MSG *
+// Cast to RIP_MSG *. Room behind the largest datagram: ioLibrary's option
+// parser does not check an option's length against the end of the message
+// and can read up to 257 bytes past it; those reads stay in this buffer.
+static uint8_t s_dhcp_buf[W5500_DHCP_RX_KB * 1024 + 260] __attribute__((aligned(4)));
 static volatile bool s_dhcp_assigned;
 static volatile bool s_dhcp_conflict;
 static bool s_udp_open;
@@ -569,12 +572,17 @@ void core1_main(void) {
 #endif
         }
 
+        // Only with the image still ready: another upload may have begun in
+        // the same web pass and discarded it. Then nothing restarts, and the
+        // guard must keep feeding the watchdog.
         if (s_ota_activate) {
-            s_ota_activate = false;  // returns only if the image is not ready
-            web_server_drain(1000);  // let the response reach the client
-            clock_before_reboot();
-            guard_before_reboot();
-            ota_activate();
+            s_ota_activate = false;
+            if (ota_ready()) {
+                web_server_drain(1000);  // let the response reach the client
+                clock_before_reboot();
+                guard_before_reboot();
+                ota_activate();
+            }
         }
 
         if (s_reboot) {

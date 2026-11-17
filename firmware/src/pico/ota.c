@@ -104,6 +104,10 @@ void ota_abort(void) {
     s_ready = false;
 }
 
+bool ota_ready(void) {
+    return s_ready;
+}
+
 void ota_activate(void) {
     if (!s_ready) return;
     printf("ota: rebooting into the new firmware\n");
