@@ -1135,7 +1135,10 @@ fn track_key(pressed: &mut Vec<u16>, stale: &mut Vec<u16>, event: &Event) {
 /// else of the device (relative axes, keys of a keyboard built into it)
 /// goes the usual way. When events were lost (SYN_DROPPED), the touch
 /// handling starts over from the kernel's state (`state`: contacts and key
-/// state). Returns true if events had been lost.
+/// state) and the rest of the batch is skipped: it is older than that state,
+/// and asking for the key state deleted the key events still queued (a
+/// release among them), so a press from the rest of the batch would stay
+/// held. Returns true if events had been lost.
 #[allow(clippy::too_many_arguments)]
 fn process_touch_events(
     events: impl IntoIterator<Item = InputEvent>,
@@ -1162,14 +1165,13 @@ fn process_touch_events(
             if *dropping {
                 *dropping = false;
                 lost = true;
-                other = false;
                 let geo = *touch.geometry();
                 let (slots, held) = state(&geo);
                 for event in touch.reset(slots, &held) {
                     track_key(pressed, stale, &event);
                     out.push((event, None));
                 }
-                continue;
+                break; // the rest is in that state already (see above)
             }
             let now = if mono {
                 micros(ev.timestamp())
@@ -1791,6 +1793,36 @@ mod tests {
                 },
                 Event::Sync
             ]
+        );
+        assert!(pressed.is_empty());
+
+        // Events lost, and behind the lost frame in the same batch a click
+        // whose release the key state already took along: the click is up
+        // in that state, so the press from the older rest of the batch must
+        // not be sent (it would stay held).
+        let mut out = Vec::new();
+        let events = vec![
+            syn(SynchronizationCode::SYN_DROPPED),
+            abs(0x35, 900),
+            report(),
+            key(0x110, 1),
+            report(),
+        ];
+        let lost = process_touch_events(
+            events,
+            &mut touch,
+            false,
+            &mut pressed,
+            &mut stale,
+            &mut dropping,
+            none,
+            &mut out,
+        );
+        assert!(lost);
+        assert!(
+            !out.iter()
+                .any(|(e, _)| matches!(e, Event::Key { down: true, .. })),
+            "{out:?}"
         );
         assert!(pressed.is_empty());
     }
