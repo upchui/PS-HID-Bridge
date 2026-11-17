@@ -38,7 +38,7 @@ The controller keeps working through Remote Play.
 | **Board** | WIZnet W5500-EVB-Pico2 (RP2350 with the W5500 network chip) |
 | **USB cable** | with data lines: board → PC for the first installation, then board → PlayStation |
 | **Network cable** | from the board to your router or switch, in the same network as the PC (DHCP or a static address) |
-| **PC** | Linux on x86_64 (glibc 2.34 or newer) with Wayland or X11, by cable or Wi-Fi (a cable is better); the administrator password once, so the app may read mouse and keyboard |
+| **PC** | Linux on x86_64 or ARM64 (aarch64, e.g. a Raspberry Pi 4/5 with a 64-bit system), glibc 2.34 or newer, with Wayland or X11, by cable or Wi-Fi (a cable is better); the administrator password once, so the app may read mouse and keyboard |
 | **PlayStation** | a free USB port |
 
 Optional:
@@ -57,7 +57,7 @@ Optional:
 - **Keyboards:** up to six keys at once reach the PlayStation, plus Ctrl, Shift, Alt and Super; with more, it reacts like any USB keyboard that ran out of keys. Keyboards with full rollover work the same way.
 - **Touchpads and touchscreens** work as a mouse, see [below](#touchpads-and-touchscreens).
 - **Not forwarded:** game controllers (they keep working through Remote Play) and graphics tablets.
-- **PC:** 64-bit x86 Linux only; the window rule needs KDE Plasma.
+- **PC:** 64-bit Linux on x86_64 or ARM64 (aarch64); no 32-bit systems. The window rule needs KDE Plasma.
 - **Board:** only the WIZnet W5500-EVB-Pico2, connected by network cable (it has no Wi-Fi). Tested with a PlayStation 5.
 
 ## Quick start
@@ -74,7 +74,7 @@ Station by station, as in [How it works](#how-it-works).
 
 **Station 1, the PC:**
 
-5. **App:** start `PS-HID-Bridge-x86_64.AppImage`. The wizard asks for the board address and key, the devices, the keyboard type and the trigger.
+5. **App:** start the AppImage for your processor, `PS-HID-Bridge-x86_64.AppImage` (Intel, AMD) or `PS-HID-Bridge-aarch64.AppImage` (ARM64). The wizard asks for the board address and key, the devices, the keyboard type and the trigger.
 
 **Station 3, the PlayStation:**
 

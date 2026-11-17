@@ -24,6 +24,7 @@ make submodules        # Pico SDK, TinyUSB, ioLibrary, Monocypher (pinned, not r
 make firmware          # -> out/*.uf2
 make desktop-cli       # -> out/pshb-cli
 make desktop           # -> out/PS-HID-Bridge-x86_64.AppImage
+make ARCH=aarch64 desktop-cli desktop   # ARM64: out/pshb-cli-aarch64, out/PS-HID-Bridge-aarch64.AppImage
 make test              # unit tests, test vectors, simulator, Rust tests
 make all               # everything, including the AppImage self-test (tests first)
 make -j2 -O all        # the same, two steps at a time (faster)
@@ -33,14 +34,21 @@ The first `make desktop` builds Qt 6.12 and Kirigami from source and therefore t
 
 All versions are kept in [versions.env](../versions.env); downloads are checked by SHA-256. `make check-pins` checks that the submodules are at the tags listed there (and that `desktop/rust-toolchain.toml` matches `RUST_VERSION`).
 
+### Building for ARM64 (aarch64)
+
+`ARCH=aarch64` builds the desktop app and the CLI for ARM64 (`test-desktop`, `desktop-cli`, `desktop`, `test-appimage`, `ui-shots`); the firmware and its tests are the same for every PC and refuse it. The ARM images are called `pshb-rust-aarch64`, `pshb-desktop-aarch64` and `pshb-apptest-aarch64`, the Rust build has its own directory (`.cache/target/cargo-aarch64`).
+
+- **On an ARM64 machine** it builds natively, as fast as on x86.
+- **On an x86 PC** the ARM containers run under QEMU: install `qemu-user-static` and `qemu-user-static-binfmt` (Arch, CachyOS) or `qemu-user-static` and `binfmt-support` (Debian, Ubuntu); `docker buildx ls` then lists `linux/arm64`. Everything takes several times longer. `make ARCH=aarch64 image-rust test-desktop desktop-cli` (Rust tests and the CLI, no Qt) is fine; building Qt under emulation (`make ARCH=aarch64 image-desktop`) takes very long (likely more than ten hours). Use the images CI built instead: `make ARCH=aarch64 PREBUILT=1 DESKTOP_IMAGE=ghcr.io/upchui/pshb-desktop:<tag>-aarch64 APPTEST_IMAGE=ghcr.io/upchui/pshb-apptest:<tag>-aarch64 desktop test-appimage` (`<tag>`: `make print-toolchain-tag`; pull them first with `docker pull --platform linux/arm64 …`).
+
 For development builds without the web interface a key can be compiled in: `make firmware DEV_PSK=<64 hex digits>`. It only applies as long as no key is set in the web interface.
 
 ### Continuous integration
 
 GitHub Actions builds on GitHub-hosted runners with the same Makefile:
 
-- [`release.yml`](../.github/workflows/release.yml) runs on every push to `main`: `make -j2 -O all` (every test, firmware, CLI, AppImage, AppImage self-test), then it publishes the release `v<major>.<minor>.<patch>` and marks it as the latest. The app finds it through `github.com/…/releases/latest` (no GitHub API, so no limit of 60 requests per hour). Compiled Rust dependencies are cached per `Cargo.lock`. A release whose tag already exists for another commit (after a force-push) is refused.
-- The toolchain images are stored in the GitHub Container Registry (`ghcr.io/<owner>/pshb-*`), tagged with a hash of `versions.env` and `docker/` (`make print-toolchain-tag`). Only when that hash changes does [`toolchain.yml`](../.github/workflows/toolchain.yml) rebuild them; with Qt this takes a few hours, a normal release run takes a few minutes.
+- [`release.yml`](../.github/workflows/release.yml) runs on every push to `main`: `make -j2 -O all` on x86_64 (every test, firmware, CLI, AppImage, AppImage self-test) and, at the same time on an ARM runner, `make ARCH=aarch64 … test-desktop desktop-cli desktop test-appimage`; when both pass it publishes the release with the files of both `v<major>.<minor>.<patch>` and marks it as the latest. The app finds it through `github.com/…/releases/latest` (no GitHub API, so no limit of 60 requests per hour). Compiled Rust dependencies are cached per `Cargo.lock`. A release whose tag already exists for another commit (after a force-push) is refused.
+- The toolchain images are stored in the GitHub Container Registry (`ghcr.io/<owner>/pshb-*`), tagged with a hash of `versions.env` and `docker/` (`make print-toolchain-tag`); the ARM64 ones (desktop and AppImage test, built natively on an ARM runner) with `-aarch64` after it. Only when that hash changes does [`toolchain.yml`](../.github/workflows/toolchain.yml) rebuild them; with Qt this takes a few hours, a normal release run takes a few minutes.
 - `make PREBUILT=1 FW_IMAGE=… RUST_IMAGE=… DESKTOP_IMAGE=… APPTEST_IMAGE=… all` is what CI runs: the image targets only check that the pulled images exist.
 - The version is `MAJOR.MINOR` from the file [`VERSION`](../VERSION) plus the number of commits since `VERSION` was last changed ([`tools/version.sh`](../tools/version.sh), `make print-version`): the commit that raises `VERSION` is `X.Y.0`. Firmware, app, CLI and metainfo get it at build time; for a bigger step (e.g. `1.1`) only `VERSION` is edited. The boot ROM gets it as binary version `MAJOR*256+MINOR`.`PATCH`.
 

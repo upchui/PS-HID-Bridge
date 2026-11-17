@@ -4,7 +4,7 @@ Everything the [README](../README.md) leaves out for everyday use: the command l
 
 ## Command line tool
 
-`pshb-cli` (in the release as `pshb-cli-x86_64-linux`, built as `out/pshb-cli`) does what the app does, without a user interface and without the window rule. `pshb-cli run` also keeps the screen on while the bridge is on.
+`pshb-cli` (in the release as `pshb-cli-x86_64-linux` and `pshb-cli-aarch64-linux` for ARM64, built as `out/pshb-cli`) does what the app does, without a user interface and without the window rule. `pshb-cli run` also keeps the screen on while the bridge is on.
 
 ```sh
 pshb-cli list-devices                              # keyboards, mice, touchpads, touchscreens with access status
@@ -145,7 +145,7 @@ The app and `pshb-cli flash` can put the firmware, the HID test images and the e
 
 ## Downloads and version numbers
 
-Every commit on `main` is built and tested automatically and published as a release on the [releases page](https://github.com/upchui/PS-HID-Bridge/releases), named after its version, e.g. `v1.0.3`; the newest one is marked "Latest". Each release contains the AppImage, the command line tool (`pshb-cli-x86_64-linux`), all firmware images and `SHA256SUMS`.
+Every commit on `main` is built and tested automatically and published as a release on the [releases page](https://github.com/upchui/PS-HID-Bridge/releases), named after its version, e.g. `v1.0.3`; the newest one is marked "Latest". Each release contains the AppImage and the command line tool for x86_64 and for ARM64 (`PS-HID-Bridge-x86_64.AppImage`, `PS-HID-Bridge-aarch64.AppImage`, `pshb-cli-x86_64-linux`, `pshb-cli-aarch64-linux`), all firmware images and `SHA256SUMS`. The app and the CLI update themselves with the file for their own processor.
 
 The last part of the version is the number of commits since the version (`1.0`) was raised, so every commit has a higher version than the one before. The app, `pshb-cli --version` and the firmware (web interface, "Status" page of the app) all show the same version.
 
