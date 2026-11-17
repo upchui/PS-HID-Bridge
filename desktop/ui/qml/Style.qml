@@ -61,9 +61,18 @@ QtObject {
     // ---- numbers in text: a number and its unit stay on one line (no-break
     // space), big counts get digit groups.
 
-    /// Microseconds, rounded: "172 µs".
+    /// A time in microseconds: "172 µs" below a millisecond, from 1000 µs on
+    /// in milliseconds ("1 ms", "1.23 ms", "16.2 ms", "250 ms").
     function us(v) {
-        return Math.round(v) + "\u00a0µs";
+        const r = Math.round(v);
+        return Math.abs(r) < 1000 ? r + "\u00a0µs" : ms(v / 1000);
+    }
+    /// Milliseconds, at most three significant digits and no trailing zeros
+    /// ("1 ms", "1.5 ms", "1.87 ms", "16.2 ms"); from 1000 ms on whole
+    /// milliseconds with digit groups.
+    function ms(v) {
+        const p = Number(v.toPrecision(3));
+        return (Math.abs(p) < 1000 ? String(p) : count(p)) + "\u00a0ms";
     }
     /// A share in percent ("0.14 %"), "–" without a whole.
     function percent(part, whole) {

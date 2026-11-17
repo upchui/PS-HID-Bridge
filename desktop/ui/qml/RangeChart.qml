@@ -40,6 +40,10 @@ ColumnLayout {
     function fmt(us) {
         return Style.us(us);
     }
+    // Axis labels in one unit: all in ms once the scale reaches 1 ms.
+    function tick(us) {
+        return scaleMax >= 1000 ? Style.ms(us / 1000) : Style.us(us);
+    }
     function pos(v, w) {
         return Math.min(1, Math.max(0, v / scaleMax)) * w;
     }
@@ -156,7 +160,7 @@ ColumnLayout {
             delegate: Controls.Label {
                 required property real modelData
                 x: Math.min(axis.width - width, Math.max(0, chart.pos(modelData, axis.width) - width / 2))
-                text: chart.fmt(modelData)
+                text: chart.tick(modelData)
                 color: Style.muted
                 font.pointSize: Style.fontSize * 0.85
                 font.features: { "tnum": 1 }

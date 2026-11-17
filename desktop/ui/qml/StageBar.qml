@@ -6,11 +6,10 @@ import PSHIDBridge
 // One whole split into its parts (a tall segmented bar): each part its own
 // block with its value inside where it fits, a 2 px gap between blocks, the
 // names in the legend below, everything on hover.
-// parts: [{name, value}] (values in `unit`).
+// parts: [{name, value}] (values in µs; shown from 1 ms on in ms).
 ColumnLayout {
     id: bar
     property var parts: []
-    property string unit: "µs"
     readonly property real total: parts.reduce((a, p) => a + Math.max(0, p.value), 0)
     spacing: 10
 
@@ -41,7 +40,7 @@ ColumnLayout {
 
                     TextMetrics {
                         id: fit
-                        text: block.modelData.value + " " + bar.unit
+                        text: Style.us(block.modelData.value)
                         font.pointSize: Style.fontSize * 0.9
                         font.weight: Font.DemiBold
                     }
@@ -61,7 +60,7 @@ ColumnLayout {
                         hoverEnabled: true
                     }
                     Controls.ToolTip.visible: hover.containsMouse
-                    Controls.ToolTip.text: `${block.modelData.name}: ${block.modelData.value} ${bar.unit} (${Math.round(block.share * 100)} %)`
+                    Controls.ToolTip.text: `${block.modelData.name}: ${Style.us(block.modelData.value)} (${Math.round(block.share * 100)} %)`
                     Accessible.name: Controls.ToolTip.text
                 }
             }

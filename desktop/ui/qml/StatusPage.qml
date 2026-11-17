@@ -5,7 +5,7 @@ import PSHIDBridge
 
 AppPage {
     id: page
-    // Every latency in microseconds (most are well below a millisecond).
+    // Every latency in µs (most are well below a millisecond), from 1 ms on in ms.
     function us(ms) {
         return Style.us(ms * 1000);
     }
