@@ -7,6 +7,7 @@
 #include "board_name.h"
 #include "hexutil.h"
 #include "json.h"
+#include "mdns.h"
 #include "monocypher.h"
 #include "password.h"
 #include "protocol.h"
@@ -424,6 +425,7 @@ static void h_status(web_app_t *app, web_conn_t *c) {
     jw_bool(&w, "name_set", settings_board_name(s)[0] != '\0');
     jw_str(&w, "default_name", app->hostname);
     jw_str(&w, "hostname", host);
+    jw_str(&w, "local_name", st.local_name ? st.local_name : "");
     jw_str(&w, "firmware", fw);
     jw_str(&w, "partition", st.partition ? st.partition : "-");
     jw_bool(&w, "watchdog_reset", st.watchdog_reset);
@@ -689,10 +691,12 @@ static void h_network(web_app_t *app, web_conn_t *c) {
         return;
     }
     // 67/68: DHCP (the board's DHCP client listens on 68 and would get the
-    // input); the discovery port has its own socket.
-    if (port < 1 || port > 65535 || port == 67 || port == 68 || port == PSHB_DISCOVERY_PORT) {
+    // input); the discovery and mDNS ports have sockets of their own.
+    if (port < 1 || port > 65535 || port == 67 || port == 68 || port == PSHB_DISCOVERY_PORT ||
+        port == PSHB_MDNS_PORT) {
         respond_error(c, 400,
-                      "UDP port must be between 1 and 65535 (not 67 or 68, used by DHCP, nor 45046, used by the app's search)");
+                      "UDP port must be between 1 and 65535 (not 67 or 68, used by DHCP, 5353, used by mDNS, "
+                      "nor 45046, used by the app's search)");
         return;
     }
     s.udp_port = (uint16_t)port;
@@ -862,8 +866,9 @@ static bool is_ipv4(const char *s, size_t n) {
 // board's address would be the board's origin in the browser (with the
 // factory password it could even log in). Allowed: an address, the
 // board's default name and its network name (also with a domain:
-// "ps-hid-bridge-a1b2c3.fritz.box"), localhost (the simulator), and no
-// Host at all (HTTP/1.0 tools).
+// "ps-hid-bridge-a1b2c3.fritz.box", or "wohnzimmer-ps5.local" as mdns.c
+// answers it), localhost (the simulator), and no Host at all (HTTP/1.0
+// tools).
 static bool host_allowed(const web_app_t *app, const http_req_t *r) {
     if (!r->has_host) return true;
     if (r->host_bad) return false;

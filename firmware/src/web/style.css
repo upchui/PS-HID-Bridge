@@ -204,7 +204,7 @@ progress { display: block; width: 100%; height: 10px; margin: 10px 0; accent-col
   text-decoration: none;
 }
 .banner .i { color: var(--c); }
-.banner a { color: var(--accent); }
+.banner a, .sub a { color: var(--accent); }
 /* State colours: pills, the status badge, messages and banners. */
 .pill, .badge, .msg, .banner { --c: var(--muted); }
 .msg, .banner { --c: var(--accent); }

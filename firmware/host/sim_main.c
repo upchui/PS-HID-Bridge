@@ -4,7 +4,8 @@
 // testing without hardware.
 //
 // Output lines (stdout, line-buffered):
-//   READY <udp port> HTTP <http port or 0>
+//   READY <udp port> HTTP <http port or 0> DISCOVERY <port or 0> MDNS <port or 0>
+//   MDNS <name>.local      (mDNS answers under this name from now on)
 //   KBD mods=02 keys=04 1d 00 00 00 00
 //   MOUSE buttons=01 dx=15 dy=-3 wheel=0 pan=0
 //   FAILSAFE
@@ -26,10 +27,12 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "board_name.h"
 #include "bridge.h"
 #include "discovery.h"
 #include "hexutil.h"
 #include "input_state.h"
+#include "mdns.h"
 #include "protocol.h"
 #include "settings.h"
 #include "uf2_writer.h"
@@ -165,6 +168,9 @@ static void boot(void) {
 #define SIM_HOSTNAME "ps-hid-bridge-514d00"
 static const uint8_t k_sim_mac[6] = {0x02, 0x00, 0x00, 0x51, 0x4D, 0x00};
 
+// "<name>.local" while mDNS answers under it (--mdns-port), else "".
+static char s_local_name[PSHB_NAME_SIZE + 6];
+
 static void be_status(void *ctx, web_status_t *out) {
     (void)ctx;
     out->fw_version = S.bridge.fw_version;
@@ -185,6 +191,7 @@ static void be_status(void *ctx, web_status_t *out) {
     out->rx_filtered = S.bridge.stats.rx_filtered;
     out->rx_malformed = S.bridge.stats.rx_malformed;
     out->partition = "-";
+    out->local_name = s_local_name;
     if (S.max_values) {
         // Every number at its largest, the longest texts: the answer must
         // still fit its buffer (web.c, c->dyn).
@@ -193,6 +200,7 @@ static void be_status(void *ctx, web_status_t *out) {
         out->link_up = out->failsafe = out->watchdog_reset = true;
         out->net_state = "Network chip not responding";
         out->partition = "A";
+        out->local_name = "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwww.local";  // the longest network name
     }
 }
 
@@ -365,6 +373,9 @@ static void usage(const char *argv0) {
             "  --http-port N     web interface port (default: off, 0 = any free port)\n"
             "  --discovery-port N  answer discovery requests on this port (default: off,\n"
             "                    0 = any free port; the board uses %d)\n"
+            "  --mdns-port N     answer mDNS queries on this port, by unicast to the\n"
+            "                    sender (default: off, 0 = any free port; the board\n"
+            "                    uses %d with multicast)\n"
             "  --settings FILE   keep the simulated settings flash in FILE\n"
             "  --plaintext       accept unencrypted debug packets (version 0)\n"
             "  --psk HEX         pre-shared key (overrides the settings)\n"
@@ -374,7 +385,7 @@ static void usage(const char *argv0) {
             "  --allow IP[/N]    only accept packets from this sender or subnet\n"
             "  --usb-unmounted   simulate a board that is not plugged in\n"
             "  --max-values      status and diagnostics report their largest values\n",
-            argv0, PSHB_UDP_PORT_DEFAULT, PSHB_DISCOVERY_PORT);
+            argv0, PSHB_UDP_PORT_DEFAULT, PSHB_DISCOVERY_PORT, PSHB_MDNS_PORT);
 }
 
 static void usb_frame(void) {
@@ -412,6 +423,60 @@ static void discovery_service(int fd, int udp_port) {
         if (len && pshb_discovery_allow(&limit, now_us())) {
             sendto(fd, answer, len, 0, (struct sockaddr *)&src, slen);
         }
+    }
+}
+
+// mDNS like the board (core1.c mdns_service), with what the simulator
+// reports as its address (be_status) and its own names. No multicast here:
+// every answer goes back to the asker by unicast (a query from port 5353 is
+// answered as an mDNS query, from any other port as a plain DNS query), and
+// the probes, announcements and goodbyes are dropped. "MDNS <name>.local"
+// is printed each time the simulator starts answering under a name: about
+// a second after the start, a restart or a new name (probing).
+static pshb_mdns_t s_mdns;
+static pshb_mdns_info_t s_mdns_info;
+
+static void sim_mdns_info(pshb_mdns_info_t *info, int http_port) {
+    memset(info, 0, sizeof(*info));
+    static const uint8_t loopback[4] = {127, 0, 0, 1};
+    memcpy(info->ip, S.settings.ip_mode == PSHB_IP_STATIC ? S.settings.ip : loopback, 4);
+    // mask 0.0.0.0: no check of the asker's network (the tests ask from
+    // 127.0.0.1, also with a static address set).
+    const char *name = settings_board_name(&S.settings);
+    pshb_hostname_from_name(name, SIM_HOSTNAME, info->host, sizeof(info->host));
+    snprintf(info->fallback, sizeof(info->fallback), "%s", SIM_HOSTNAME);
+    snprintf(info->instance, sizeof(info->instance), "%s", name[0] ? name : SIM_HOSTNAME);
+    info->http_port = (uint16_t)(http_port > 0 ? http_port : 80);
+}
+
+static void mdns_service(int fd, int http_port, bool restart) {
+    pshb_mdns_info_t info;
+    sim_mdns_info(&info, http_port);
+    if (restart || memcmp(&info, &s_mdns_info, sizeof(info)) != 0) {
+        s_mdns_info = info;
+        pshb_mdns_reset(&s_mdns, &info, now_us() / 1000);
+    }
+    uint8_t out[1024];
+    for (;;) {
+        uint8_t pkt[2048];
+        struct sockaddr_in src;
+        socklen_t slen = sizeof(src);
+        ssize_t n = recvfrom(fd, pkt, sizeof(pkt), 0, (struct sockaddr *)&src, &slen);
+        if (n < 0) break;
+        uint8_t ip[4];
+        memcpy(ip, &src.sin_addr.s_addr, 4);
+        pshb_mdns_dest_t dest;
+        size_t len = pshb_mdns_input(&s_mdns, pkt, (size_t)n, ip, ntohs(src.sin_port), now_us() / 1000, out,
+                                     sizeof(out), &dest);
+        if (len) sendto(fd, out, len, 0, (struct sockaddr *)&src, slen);
+    }
+    pshb_mdns_poll(&s_mdns, now_us() / 1000, out, sizeof(out));
+    const char *name = pshb_mdns_name(&s_mdns);
+    char local[sizeof(s_local_name)] = "";
+    if (name) snprintf(local, sizeof(local), "%s.local", name);
+    if (strcmp(local, s_local_name) != 0) {
+        memcpy(s_local_name, local, sizeof(local));
+        if (local[0]) printf("MDNS %s\n", local);
     }
 }
 
@@ -488,6 +553,7 @@ int main(int argc, char **argv) {
     int port = PSHB_UDP_PORT_DEFAULT;
     int http_port = -1;
     int discovery_port = -1;
+    int mdns_port = -1;
     S.usb_mounted = true;
     S.failsafe_ms = PSHB_FAILSAFE_US_DEFAULT / 1000;
 
@@ -496,6 +562,7 @@ int main(int argc, char **argv) {
         {"port", required_argument, 0, 'p'},
         {"http-port", required_argument, 0, 'w'},
         {"discovery-port", required_argument, 0, 'D'},
+        {"mdns-port", required_argument, 0, 'm'},
         {"settings", required_argument, 0, 'S'},
         {"plaintext", no_argument, 0, 'P'},
         {"psk", required_argument, 0, 'k'},
@@ -515,6 +582,7 @@ int main(int argc, char **argv) {
         case 'p': port = atoi(optarg); break;
         case 'w': http_port = atoi(optarg); break;
         case 'D': discovery_port = atoi(optarg); break;
+        case 'm': mdns_port = atoi(optarg); break;
         case 'S': S.settings_file = optarg; break;
         case 'P': S.plaintext = true; break;
         case 'k':
@@ -600,16 +668,21 @@ int main(int argc, char **argv) {
         setsockopt(disc, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
     }
 
-    printf("READY %d HTTP %d DISCOVERY %d\n", udp_port, bound_http, bound_disc);
+    int mdns = -1, bound_mdns = 0;
+    bool mdns_restart = true;
+    if (mdns_port >= 0) mdns = bind_socket(SOCK_DGRAM, bind_addr, mdns_port, &bound_mdns);
+
+    printf("READY %d HTTP %d DISCOVERY %d MDNS %d\n", udp_port, bound_http, bound_disc, bound_mdns);
 
     uint64_t next_frame = now_us() + 1000;
     while (!s_stop) {
         uint64_t t = now_us();
         int timeout_ms = next_frame > t ? (int)((next_frame - t + 999) / 1000) : 0;
-        struct pollfd pfd[3 + MAX_CONNS];
+        struct pollfd pfd[4 + MAX_CONNS];
         int nfds = 0;
         pfd[nfds++] = (struct pollfd){.fd = udp, .events = POLLIN};
         if (disc >= 0) pfd[nfds++] = (struct pollfd){.fd = disc, .events = POLLIN};
+        if (mdns >= 0) pfd[nfds++] = (struct pollfd){.fd = mdns, .events = POLLIN};
         if (listen_fd >= 0) pfd[nfds++] = (struct pollfd){.fd = listen_fd, .events = POLLIN};
         for (int i = 0; i < MAX_CONNS; i++) {
             if (slots[i].fd >= 0) pfd[nfds++] = (struct pollfd){.fd = slots[i].fd, .events = POLLIN | POLLOUT};
@@ -630,6 +703,10 @@ int main(int argc, char **argv) {
             if (rlen) sendto(udp, reply, rlen, 0, (struct sockaddr *)&src, slen);
         }
         if (disc >= 0) discovery_service(disc, udp_port);
+        if (mdns >= 0) {
+            mdns_service(mdns, bound_http, mdns_restart);
+            mdns_restart = false;
+        }
         if (listen_fd >= 0) http_service(&app, slots, listen_fd, now_us());
 
         if (S.reboot_requested) {
@@ -639,6 +716,7 @@ int main(int argc, char **argv) {
             web_app_init(&app, &k_backend, &S.settings);
             web_app_set_hostname(&app, SIM_HOSTNAME);
             app.bench_sink = true;
+            mdns_restart = true;  // a board probes and announces anew after a restart
         }
 
         t = now_us();
@@ -656,5 +734,7 @@ int main(int argc, char **argv) {
     }
     close(udp);
     if (listen_fd >= 0) close(listen_fd);
+    if (disc >= 0) close(disc);
+    if (mdns >= 0) close(mdns);
     return 0;
 }

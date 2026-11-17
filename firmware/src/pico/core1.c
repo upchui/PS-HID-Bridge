@@ -16,6 +16,7 @@
 #include "diag.h"
 #include "discovery.h"
 #include "flash_store.h"
+#include "mdns.h"
 #include "net_shared.h"
 #include "ota.h"
 #include "proto.h"
@@ -60,6 +61,11 @@ static volatile bool s_dhcp_assigned;
 static volatile bool s_dhcp_conflict;
 static bool s_udp_open;
 static bool s_disc_open;  // the discovery socket (W5500_SOCK_DISCOVERY)
+static bool s_mdns_open;  // the mDNS socket (W5500_SOCK_MDNS)
+// An address was published (link up, new lease, static start, also after
+// the chip was set up anew): mDNS probes and announces again.
+static bool s_mdns_restart;
+static uint8_t s_mask[4];  // subnet mask of the published address
 static c1_state_t s_state = C1_NO_LINK;
 // The DHCP lease in use. Its address stays until the lease ends, also while
 // the server does not answer a renewal or the cable was out for a moment:
@@ -181,6 +187,8 @@ static void publish_ip(const char *what) {
     printf("net: %s %u.%u.%u.%u/%u.%u.%u.%u gw %u.%u.%u.%u\n", what, ni.ip[0], ni.ip[1], ni.ip[2], ni.ip[3],
            ni.sn[0], ni.sn[1], ni.sn[2], ni.sn[3], ni.gw[0], ni.gw[1], ni.gw[2], ni.gw[3]);
     atomic_store(&g_net.ip, ip_to_u32(ni.ip));
+    memcpy(s_mask, ni.sn, 4);
+    s_mdns_restart = true;
 }
 
 static void start_addressing(void) {
@@ -220,6 +228,7 @@ static void chip_check(void) {
     if (!w5500_chip_setup()) return;  // tried again at the next check
     s_udp_open = false;
     s_disc_open = false;
+    s_mdns_open = false;
     s_lease = false;  // the address is gone with the reset
     atomic_store(&g_net.ip, 0);
     set_state(C1_NO_LINK);
@@ -350,6 +359,143 @@ static void discovery_service(void) {
     }
 }
 
+// ---------------------------------------------------------------- mDNS
+
+// The board answers as "<network name>.local" and announces its web
+// interface (core/mdns.c) on a socket of its own, polled here like
+// discovery: no interrupt, core 0's input path never waits for more than
+// one SPI piece of it.
+//
+// The socket joins 224.0.0.251 when it opens (Sn_MR MULTI, with Sn_DIPR,
+// Sn_DPORT and Sn_DHAR set to the group before OPEN). The W5500 sends its
+// IGMP report only then and does not answer a querier's membership queries,
+// so a switch with IGMP snooping forgets the board after a few minutes
+// (260 s by default) and stops passing the group's packets to its port.
+// The socket is therefore opened anew every MDNS_REJOIN_MS: a Leave and a
+// Join, at worst a datagram in the receive buffer is lost (mDNS asks again).
+// Sn_MR bit 5 stays 0, which is IGMP version 2: ioLibrary's SF_IGMP_VER2
+// sets that bit, and on the W5500 it selects version 1.
+#define MDNS_POLL_US 20000
+#define MDNS_REJOIN_MS 60000
+// Datagrams handled per poll at most: every mDNS packet in the network
+// lands in the 1 KB receive buffer (other devices' queries and answers
+// too) and is read away here.
+#define MDNS_READS_PER_POLL 4
+#define MDNS_SEND_WAIT_MS 10
+
+static const uint8_t k_mdns_group[4] = PSHB_MDNS_GROUP_INIT;
+static const uint8_t k_mdns_mac[6] = PSHB_MDNS_GROUP_MAC_INIT;
+static pshb_mdns_t s_mdns;
+static pshb_mdns_info_t s_mdns_info;  // what s_mdns was last started with
+
+// The socket's destination back to the group: a unicast answer changes it
+// (and the chip's ARP writes the asker's MAC address into Sn_DHAR).
+static void mdns_to_group(void) {
+    setSn_DIPR(W5500_SOCK_MDNS, (uint8_t *)k_mdns_group);
+    setSn_DPORT(W5500_SOCK_MDNS, PSHB_MDNS_PORT);
+    setSn_DHAR(W5500_SOCK_MDNS, (uint8_t *)k_mdns_mac);
+}
+
+static bool mdns_open(void) {
+    mdns_to_group();  // before OPEN: the group to join
+    s_mdns_open = socket(W5500_SOCK_MDNS, Sn_MR_UDP, PSHB_MDNS_PORT,
+                         SF_MULTI_ENABLE | SF_BROAD_BLOCK | SF_IO_NONBLOCK) == W5500_SOCK_MDNS;
+    if (!s_mdns_open) {
+        printf("net: cannot open the mDNS socket\n");
+        return false;
+    }
+    setSn_TTL(W5500_SOCK_MDNS, 255);  // RFC 6762 section 11
+    return true;
+}
+
+// To the group: SEND_MAC with the group's Ethernet address, no ARP (which
+// nobody would answer for a group address).
+static void mdns_send_group(const uint8_t *buf, size_t len) {
+    const uint8_t sn = W5500_SOCK_MDNS;
+    if (len > getSn_TX_FSR(sn)) return;
+    mdns_to_group();
+    wiz_send_data(sn, (uint8_t *)buf, (uint16_t)len);
+    setSn_IR(sn, (Sn_IR_SENDOK | Sn_IR_TIMEOUT));
+    setSn_CR(sn, Sn_CR_SEND_MAC);
+    while (getSn_CR(sn)) tight_loop_contents();
+    // Out within microseconds without ARP; bounded all the same.
+    absolute_time_t until = make_timeout_time_ms(MDNS_SEND_WAIT_MS);
+    while (!(getSn_IR(sn) & (Sn_IR_SENDOK | Sn_IR_TIMEOUT)) && !time_reached(until)) tight_loop_contents();
+    setSn_IR(sn, (Sn_IR_SENDOK | Sn_IR_TIMEOUT));
+}
+
+// What the board answers with right now.
+static void mdns_info_now(pshb_mdns_info_t *info) {
+    memset(info, 0, sizeof(*info));  // compared with memcmp below
+    uint32_t ip = atomic_load(&g_net.ip);
+    for (int i = 0; i < 4; i++) info->ip[i] = (uint8_t)(ip >> (24 - 8 * i));
+    memcpy(info->mask, s_mask, 4);
+    memcpy(info->host, pshb_dhcp_hostname, sizeof(info->host));  // the network name, as DHCP sends it
+    default_name(info->fallback);
+    const char *name = settings_board_name(&g_settings);
+    snprintf(info->instance, sizeof(info->instance), "%s", name[0] ? name : info->fallback);
+    info->http_port = 80;  // web_server.c
+}
+
+static void mdns_service(void) {
+    static absolute_time_t next_poll, next_open, rejoin_at;
+    // A datagram never exceeds the socket's 1 KB receive buffer (read in
+    // one piece), an answer never its 1 KB send buffer.
+    static uint8_t pkt[1024], out[1024];
+    static char shown[PSHB_NAME_SIZE];  // the name last logged as answered
+    // An input port set to 5353 by older firmware (the web interface
+    // refuses it now) keeps it: no mDNS then.
+    if (s_state != C1_READY || g_settings.udp_port == PSHB_MDNS_PORT || !time_reached(next_poll)) return;
+    next_poll = make_timeout_time_us(MDNS_POLL_US);
+
+    // A new address or link (publish_ip) or a new name (be_apply, noticed
+    // here): probe and announce again. After a new address or link the
+    // group is joined anew as well (another switch port, maybe).
+    pshb_mdns_info_t info;
+    mdns_info_now(&info);
+    if (s_mdns_restart || memcmp(&info, &s_mdns_info, sizeof(info)) != 0) {
+        if (s_mdns_restart) s_mdns_open = false;
+        s_mdns_restart = false;
+        s_mdns_info = info;
+        pshb_mdns_reset(&s_mdns, &info, time_us_64() / 1000);
+        printf("mdns: probing for %s.local\n", info.host);
+    }
+    if (!s_mdns_open || time_reached(rejoin_at)) {
+        if (!time_reached(next_open)) return;
+        next_open = make_timeout_time_ms(UDP_REOPEN_MS);
+        if (!mdns_open()) return;
+        rejoin_at = make_timeout_time_ms(MDNS_REJOIN_MS);
+    }
+
+    for (int i = 0; i < MDNS_READS_PER_POLL && getSn_RX_RSR(W5500_SOCK_MDNS) > 0; i++) {
+        uint8_t ip[4];
+        uint16_t port;
+        int32_t n = recvfrom(W5500_SOCK_MDNS, pkt, sizeof(pkt), ip, &port);
+        if (n <= 0) break;
+        pshb_mdns_dest_t dest;
+        size_t len = pshb_mdns_input(&s_mdns, pkt, (size_t)n, ip, port, time_us_64() / 1000, out, sizeof(out),
+                                     &dest);
+        if (!len) continue;
+        if (dest == PSHB_MDNS_TO_GROUP) {
+            mdns_send_group(out, len);
+        } else if (port != 0) {
+            // Waits for the chip's ARP to the asker (it just sent this), at
+            // most the retry time (w5500_chip_setup); limited per second.
+            sendto(W5500_SOCK_MDNS, out, (uint16_t)len, ip, port);
+            mdns_to_group();
+        }
+    }
+    size_t len = pshb_mdns_poll(&s_mdns, time_us_64() / 1000, out, sizeof(out));
+    if (len) mdns_send_group(out, len);
+    // The name answered changes after probing, or to the default name after
+    // a conflict (or to none: both taken).
+    const char *name = pshb_mdns_name(&s_mdns);
+    if (strcmp(name ? name : "", shown) != 0) {
+        snprintf(shown, sizeof(shown), "%s", name ? name : "");
+        if (name) printf("mdns: answering as %s.local\n", name);
+    }
+}
+
 // ---------------------------------------------------------------- web backend
 
 static const char *net_state_text(void) {
@@ -384,6 +530,14 @@ static void be_status(void *ctx, web_status_t *out) {
     out->rx_malformed = g_bridge.stats.rx_malformed;
     out->partition = g_running_slot;
     out->watchdog_reset = guard_watchdog_reset();
+    static char local[PSHB_NAME_SIZE + 6];
+    const char *mdns_name = s_state == C1_READY ? pshb_mdns_name(&s_mdns) : NULL;
+    if (mdns_name) {
+        snprintf(local, sizeof(local), "%s.local", mdns_name);
+    } else {
+        local[0] = '\0';
+    }
+    out->local_name = local;
     out->lat_usb_count = g_diag.usb.count;
     out->lat_usb_p50_us = latency_percentile(&g_diag.usb, 50);
     out->lat_usb_p95_us = latency_percentile(&g_diag.usb, 95);
@@ -504,7 +658,8 @@ static void be_apply(void *ctx, const pshb_settings_t *s) {
     (void)ctx;
     input_cfg_post(s);
     // A new name: the router learns it with a lease renewal right away
-    // (with a static address there is no DHCP to tell).
+    // (with a static address there is no DHCP to tell); mDNS takes it up
+    // by itself (mdns_service).
     if (update_dhcp_hostname()) {
         printf("net: network name %s\n", pshb_dhcp_hostname);
         if (s_ip_mode == PSHB_IP_DHCP) pshb_dhcp_renew_now();
@@ -644,6 +799,7 @@ void core1_main(void) {
         }
         network_service();
         discovery_service();
+        mdns_service();
         if (s_state == C1_READY && (web_server_busy() || time_reached(next_web))) {
             next_web = make_timeout_time_us(WEB_IDLE_POLL_US);
             web_server_service();

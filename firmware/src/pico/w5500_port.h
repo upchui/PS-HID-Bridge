@@ -33,6 +33,9 @@
 // Discovery answers (core 1 only, polled: no interrupt, INTn stays with
 // the input socket).
 #define W5500_SOCK_DISCOVERY 4
+// mDNS (core 1 only, polled like discovery): UDP port 5353 in multicast
+// mode, member of 224.0.0.251.
+#define W5500_SOCK_MDNS 5
 
 #define W5500_RX_EMPTY    (-1)
 #define W5500_RX_OVERSIZE (-2)

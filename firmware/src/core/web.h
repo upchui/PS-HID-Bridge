@@ -44,6 +44,9 @@ typedef struct {
     uint32_t rx_ok, rx_auth_fail, rx_replay, rx_filtered, rx_malformed;
     const char *partition;  // active firmware slot ("A", "B" or "-")
     bool watchdog_reset;    // this start followed a restart by the watchdog (a core hung)
+    // The name the board answers to by mDNS ("wohnzimmer-ps5.local");
+    // NULL or "" while it is not answering (probing, no network).
+    const char *local_name;
 
     // Input path diagnostics measured by core 0 since boot (count 0 = none).
     uint32_t lat_usb_count;                   // reports fetched by the host

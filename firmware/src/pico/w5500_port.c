@@ -139,7 +139,8 @@ static void make_mac(uint8_t mac[6]) {
 
 bool w5500_chip_setup(void) {
     // Socket buffers in KB (16 KB each direction in total):
-    // 0 DHCP, 1 input UDP, 2-3 HTTP, 4-7 unused.
+    // 0 DHCP, 1 input UDP, 2-3 HTTP, 4 discovery, 5 mDNS, 6-7 unused
+    // (7's TX buffer holds the SPI self-test patterns at start).
     uint8_t tx[8] = {2, 2, 4, 4, 1, 1, 1, 1};
     uint8_t rx[8] = {W5500_DHCP_RX_KB, 4, 4, 4, 1, 1, 0, 0};
     if (wizchip_init(tx, rx) != 0) return false;

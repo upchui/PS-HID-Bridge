@@ -14,6 +14,7 @@ set(PSHB_CORE_SOURCES
     ${PSHB_FW_DIR}/src/core/http.c
     ${PSHB_FW_DIR}/src/core/input_state.c
     ${PSHB_FW_DIR}/src/core/latency.c
+    ${PSHB_FW_DIR}/src/core/mdns.c
     ${PSHB_FW_DIR}/src/core/json.c
     ${PSHB_FW_DIR}/src/core/packet.c
     ${PSHB_FW_DIR}/src/core/password.c

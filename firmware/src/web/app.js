@@ -159,6 +159,13 @@ function renderStatus(st) {
   $("s-nokey").hidden = st.psk_set;
   $("s-ip").textContent = st.ip;
   $("s-net").textContent = `${st.net_state} · ${st.ip_mode === "static" ? "static address" : "DHCP"}`;
+  // The name the board answers to by mDNS (empty while it is not answering).
+  $("s-local").hidden = !st.local_name;
+  if (st.local_name) {
+    const url = `http://${st.local_name}${location.port ? ":" + location.port : ""}`;
+    $("s-local-link").href = url + "/";
+    $("s-local-link").textContent = url;
+  }
   $("s-fw").textContent = st.firmware;
   const slot = st.partition === "none" ? "no partition table" : `slot ${st.partition}`;
   $("s-uptime").textContent = `up ${fmtUptime(st.uptime_ms)} · ${slot}` +
