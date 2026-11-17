@@ -123,6 +123,15 @@ pub mod qobject {
         /// key_set, current}]; `current`: the board in the settings.
         #[qproperty(QString, found_boards_json)]
         #[qproperty(bool, discover_busy)]
+        /// The connected board's name ("" = not known yet), from its
+        /// discovery answer; rename_board changes it.
+        #[qproperty(QString, board_name)]
+        /// MAC address of the board in the settings ("" = not known yet).
+        #[qproperty(QString, board_mac)]
+        #[qproperty(bool, rename_busy)]
+        /// Outcome of the last rename_board: the text and "ok" or "warn".
+        #[qproperty(QString, rename_message)]
+        #[qproperty(QString, rename_level)]
         #[qproperty(bool, clock_busy)]
         #[qproperty(QString, clock_message)]
         #[qproperty(bool, usb_board_found)]
@@ -167,6 +176,14 @@ pub mod qobject {
         /// result in `found_boards_json`).
         #[qinvokable]
         fn discover_boards(self: Pin<&mut AppController>);
+        /// Give the board a name (signed with the key; "" = its default
+        /// name); `rename_busy` meanwhile, then `rename_message`.
+        #[qinvokable]
+        fn rename_board(self: Pin<&mut AppController>, name: &QString);
+        /// The network name the board takes for `name` (router, browser), as
+        /// the firmware derives it; `fallback` if nothing is left of it.
+        #[qinvokable]
+        fn network_name_for(self: &AppController, name: &QString, fallback: &QString) -> QString;
 
         #[qinvokable]
         fn refresh_devices(self: Pin<&mut AppController>);
@@ -360,6 +377,11 @@ pub struct AppControllerRust {
     board_info_busy: bool,
     found_boards_json: QString,
     discover_busy: bool,
+    board_name: QString,
+    board_mac: QString,
+    rename_busy: bool,
+    rename_message: QString,
+    rename_level: QString,
     /// The last search's boards (`found_boards_json`).
     found: Vec<FoundBoard>,
     /// Service generation whose board was asked for its MAC address.
@@ -423,9 +445,12 @@ const RETRY: Duration = Duration::from_secs(5);
 /// often (it may have a new address from DHCP).
 const RENAME_CHECK: Duration = Duration::from_secs(10);
 /// Board configured by address (its MAC known) and not answering: look for
-/// it in the network after this long, then after twice as long each time up
-/// to FOLLOW_MAX (a board that is off is not looked for all the time).
-const FOLLOW_FIRST: Duration = Duration::from_secs(10);
+/// it in the network after this long (it counts as gone after 3 s without an
+/// answer), then after twice as long each time up to FOLLOW_MAX_ON while the
+/// bridge is on and FOLLOW_MAX otherwise (a board that is off is not looked
+/// for all the time).
+const FOLLOW_FIRST: Duration = Duration::from_secs(3);
+const FOLLOW_MAX_ON: Duration = Duration::from_secs(30);
 const FOLLOW_MAX: Duration = Duration::from_secs(300);
 
 impl Default for AppControllerRust {
@@ -506,6 +531,11 @@ impl Default for AppControllerRust {
             board_info_busy: false,
             found_boards_json: QString::from("[]"),
             discover_busy: false,
+            board_name: QString::default(),
+            board_mac: QString::default(),
+            rename_busy: false,
+            rename_message: QString::default(),
+            rename_level: QString::default(),
             found: Vec::new(),
             mac_checked: 0,
             follow_wait: FOLLOW_FIRST,
@@ -634,6 +664,7 @@ impl qobject::AppController {
     fn publish_config(mut self: Pin<&mut Self>) {
         let c = self.config_ref().clone();
         self.as_mut().set_board_address(QString::from(&c.board));
+        self.as_mut().set_board_mac(QString::from(&c.board_mac));
         self.as_mut().set_psk_set(config::psk_path().exists());
         self.as_mut().set_triggers_json(QString::from(
             &serde_json::to_string(&c.triggers).unwrap_or_default(),
@@ -667,6 +698,10 @@ impl qobject::AppController {
             current: bool,
         }
         let current = board_ipv4(&self.config_ref().board);
+        if let Some(b) = self.rust().found.iter().find(|b| current == Some(b.ip)) {
+            let name = QString::from(&b.name);
+            self.as_mut().set_board_name(name);
+        }
         let rows: Vec<Row> = self
             .rust()
             .found
@@ -843,8 +878,9 @@ impl qobject::AppController {
         if mac.is_empty() {
             return; // not known (yet): learned once it answers
         }
-        let wait = self.rust().follow_wait;
-        self.as_mut().rust_mut().follow_wait = (wait * 2).min(FOLLOW_MAX);
+        let max = if *self.active() { FOLLOW_MAX_ON } else { FOLLOW_MAX };
+        let wait = self.rust().follow_wait.min(max);
+        self.as_mut().rust_mut().follow_wait = (wait * 2).min(max);
         let qt = self.qt_thread();
         let _ = thread::Builder::new().name("pshb-follow".into()).spawn(move || {
             thread::sleep(wait);
@@ -877,7 +913,16 @@ impl qobject::AppController {
             &format!("{} has a new address in the network: {address}.", b.name),
         );
         self.as_mut().publish_config();
-        self.restart_service();
+        // A running service only sends elsewhere from now on: the bridge
+        // stays as it is (on stays on), nothing is let go of or grabbed anew.
+        let running = self.rust().slot.service.lock().unwrap().is_some();
+        match config::board_socket_addr(&address) {
+            Ok(addr) if running => {
+                self.as_mut().rust_mut().board_addr = Some(addr);
+                self.command(ServiceCmd::Board(addr));
+            }
+            _ => self.restart_service(),
+        }
     }
 
     /// Once per service start, when the board answers: its MAC address from
@@ -908,11 +953,13 @@ impl qobject::AppController {
         if !self.rust().slot.is_current(generation) {
             return;
         }
+        self.as_mut().set_board_name(QString::from(&b.name));
         // It answered with the key: this is the board, whatever was stored.
         let mac = b.mac_string();
         if self.config_ref().board_mac != mac {
-            self.as_mut().rust_mut().config.board_mac = mac;
+            self.as_mut().rust_mut().config.board_mac = mac.clone();
             self.as_mut().save_config();
+            self.as_mut().set_board_mac(QString::from(&mac));
         }
     }
 
@@ -1176,6 +1223,8 @@ impl qobject::AppController {
             // The latency page shows the new board's figures only.
             self.as_mut().set_board_info_json(QString::default());
             self.as_mut().set_board_info_error(QString::default());
+            self.as_mut().set_board_name(QString::default());
+            self.as_mut().set_rename_message(QString::default());
         }
         self.as_mut().publish_config();
         self.as_mut().restart_service();
@@ -1184,6 +1233,48 @@ impl qobject::AppController {
 
     pub fn reconnect(self: Pin<&mut Self>) {
         self.restart_service();
+    }
+
+    pub fn rename_board(mut self: Pin<&mut Self>, name: &QString) {
+        if *self.rename_busy() {
+            return;
+        }
+        let name = String::from(name).trim().to_string();
+        self.as_mut().set_rename_busy(true);
+        self.as_mut().set_rename_message(QString::default());
+        let done = self.qt_thread();
+        let api = self.board_api();
+        let spawned = thread::Builder::new().name("pshb-rename".into()).spawn(move || {
+            let result = api().and_then(|(api, _one_at_a_time)| api.set_name(&name));
+            let _ = done.queue(move |mut obj| {
+                obj.as_mut().set_rename_busy(false);
+                match result {
+                    Ok((shown, host)) => {
+                        obj.as_mut().set_board_name(QString::from(&shown));
+                        obj.as_mut().set_rename_level(QString::from("ok"));
+                        obj.as_mut().set_rename_message(QString::from(&format!(
+                            "Renamed. In your router and the browser the board is now called {host}."
+                        )));
+                        // The list shows the new name.
+                        obj.as_mut().discover_boards();
+                    }
+                    Err(e) => {
+                        obj.as_mut().set_rename_level(QString::from("warn"));
+                        obj.as_mut().set_rename_message(QString::from(&e));
+                    }
+                }
+            });
+        });
+        if spawned.is_err() {
+            self.as_mut().set_rename_busy(false);
+        }
+    }
+
+    pub fn network_name_for(&self, name: &QString, fallback: &QString) -> QString {
+        QString::from(&discover::hostname_from_name(
+            String::from(name).trim(),
+            &String::from(fallback),
+        ))
     }
 
     pub fn discover_boards(mut self: Pin<&mut Self>) {

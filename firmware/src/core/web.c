@@ -4,6 +4,7 @@
 #include <string.h>
 #include <strings.h>
 
+#include "board_name.h"
 #include "hexutil.h"
 #include "json.h"
 #include "monocypher.h"
@@ -233,6 +234,18 @@ static void sessions_clear(web_app_t *app) {
 
 // Store `next` and only then make it the current settings: after a failed
 // save, what runs and what is in flash still agree.
+// The board's name as shown: the one the user gave it, else the default.
+static const char *shown_name(const web_app_t *app) {
+    const char *n = settings_board_name(app->settings);
+    return n[0] ? n : app->hostname;
+}
+
+// The board's network name (DHCP, Host): derived from its name, else the
+// default.
+static void network_name(const web_app_t *app, char out[PSHB_NAME_SIZE]) {
+    pshb_hostname_from_name(settings_board_name(app->settings), app->hostname, out, PSHB_NAME_SIZE);
+}
+
 static bool save_apply(web_app_t *app, web_conn_t *c, const pshb_settings_t *next) {
     if (!app->be->save(app->be->ctx, next)) {
         respond_error(c, 500, "Saving to flash failed");
@@ -405,6 +418,12 @@ static void h_status(web_app_t *app, web_conn_t *c) {
 
     json_writer_t w;
     jw_begin(&w, c->dyn, sizeof(c->dyn));
+    char host[PSHB_NAME_SIZE];
+    network_name(app, host);
+    jw_str(&w, "name", shown_name(app));
+    jw_bool(&w, "name_set", settings_board_name(s)[0] != '\0');
+    jw_str(&w, "default_name", app->hostname);
+    jw_str(&w, "hostname", host);
     jw_str(&w, "firmware", fw);
     jw_str(&w, "partition", st.partition ? st.partition : "-");
     jw_bool(&w, "watchdog_reset", st.watchdog_reset);
@@ -603,9 +622,43 @@ static int check_signature(web_app_t *app, web_conn_t *c) {
     return 1;
 }
 
+// The board's name: shown in the app, the search and here, and as network
+// name (derived) sent to the router. Empty = the default name.
+static void h_name(web_app_t *app, web_conn_t *c) {
+    char raw[96];
+    if (!jr_str(c->req.body, c->req.body_received, "name", raw, sizeof(raw))) {
+        respond_error(c, 400, "Name missing or too long (at most 31 bytes)");
+        return;
+    }
+    char *s = raw;
+    while (*s == ' ') s++;
+    size_t n = strlen(s);
+    while (n && s[n - 1] == ' ') s[--n] = '\0';
+    if (n >= PSHB_NAME_SIZE) {
+        respond_error(c, 400, "The name may have at most 31 bytes (an umlaut counts as two)");
+        return;
+    }
+    if (!pshb_name_valid(s)) {
+        respond_error(c, 400, "The name must not contain control characters");
+        return;
+    }
+    pshb_settings_t next = *app->settings;
+    memset(next.name, 0, sizeof(next.name));
+    memcpy(next.name, s, n);
+    if (!save_apply(app, c, &next)) return;
+    char host[PSHB_NAME_SIZE];
+    network_name(app, host);
+    json_writer_t w;
+    jw_begin(&w, c->dyn, sizeof(c->dyn));
+    jw_bool(&w, "ok", true);
+    jw_str(&w, "name", shown_name(app));
+    jw_str(&w, "hostname", host);
+    respond_json(c, 200, &w, NULL);
+}
+
 // What a signed request may do: read status and diagnostics, start the
-// diagnostics over, set the clocks. Password, key, network settings and
-// firmware stay with their own ways in.
+// diagnostics over, set the clocks, name the board. Password, key, network
+// settings and firmware stay with their own ways in.
 static void handle_signed(web_app_t *app, web_conn_t *c) {
     const http_req_t *r = &c->req;
     const char *p = r->path;
@@ -618,6 +671,8 @@ static void handle_signed(web_app_t *app, web_conn_t *c) {
         respond_ok(c);
     } else if (r->method == HTTP_POST && strcmp(p, "/api/clock") == 0) {
         h_clock_set(app, c);
+    } else if (r->method == HTTP_POST && strcmp(p, "/api/name") == 0) {
+        h_name(app, c);
     } else {
         respond_error(c, 403, "Not allowed with a signature");
     }
@@ -806,8 +861,9 @@ static bool is_ipv4(const char *s, size_t n) {
 // Against DNS rebinding: a web page whose name an attacker points at the
 // board's address would be the board's origin in the browser (with the
 // factory password it could even log in). Allowed: an address, the
-// board's own name (also with a domain: "ps-hid-bridge-a1b2c3.fritz.box"),
-// localhost (the simulator), and no Host at all (HTTP/1.0 tools).
+// board's default name and its network name (also with a domain:
+// "ps-hid-bridge-a1b2c3.fritz.box"), localhost (the simulator), and no
+// Host at all (HTTP/1.0 tools).
 static bool host_allowed(const web_app_t *app, const http_req_t *r) {
     if (!r->has_host) return true;
     if (r->host_bad) return false;
@@ -818,15 +874,20 @@ static bool host_allowed(const web_app_t *app, const http_req_t *r) {
     if (n == 9 && strncasecmp(h, "localhost", 9) == 0) return true;
     size_t label = strcspn(h, ".:");
     size_t hn = strlen(app->hostname);
-    return hn && label == hn && strncasecmp(h, app->hostname, hn) == 0;
+    if (hn && label == hn && strncasecmp(h, app->hostname, hn) == 0) return true;
+    char net[PSHB_NAME_SIZE];
+    network_name(app, net);
+    size_t nn = strlen(net);
+    return nn && label == nn && strncasecmp(h, net, nn) == 0;
 }
 
 // False (answered with 421) if the Host is not allowed.
 static bool check_host(web_app_t *app, web_conn_t *c) {
     if (host_allowed(app, &c->req)) return true;
-    char msg[128];
+    char msg[128], net[PSHB_NAME_SIZE];
+    network_name(app, net);
     snprintf(msg, sizeof(msg), "Open the board by its address%s%s instead of another name",
-             app->hostname[0] ? " or its name " : "", app->hostname);
+             net[0] ? " or its name " : "", net);
     respond_error(c, 421, msg);
     return false;
 }
@@ -929,6 +990,10 @@ static void handle(web_app_t *app, web_conn_t *c) {
         }
         if (strcmp(p, "/api/allowed-sender") == 0) {
             h_allowed_sender(app, c);
+            return;
+        }
+        if (strcmp(p, "/api/name") == 0) {
+            h_name(app, c);
             return;
         }
         if (strcmp(p, "/api/clock") == 0) {

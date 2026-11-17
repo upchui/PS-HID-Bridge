@@ -426,6 +426,21 @@ impl Link {
         self.with_tx(Tx::clear_input);
     }
 
+    /// Send to the board at another address from now on (it got a new one
+    /// from DHCP). The bridge state, the input held and the packet counter
+    /// stay; if the board restarted, its first answer brings the new session
+    /// and the input is sent again. Same address family only (the socket is
+    /// bound to one).
+    pub fn set_board(&self, board: SocketAddr) {
+        self.with_tx(|tx| {
+            tx.board = board;
+            reconnect(&tx.sock, board);
+            let now = Instant::now();
+            tx.last_reconnect = now;
+            tx.next_ping = now; // ask it right away
+        });
+    }
+
     pub fn set_ping_interval(&self, interval: Duration) {
         self.with_tx(|tx| {
             tx.ping_interval = interval;

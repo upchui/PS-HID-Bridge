@@ -4,7 +4,7 @@
 
 #include "pico/time.h"
 
-#include "discovery.h"
+#include "board_name.h"
 #include "pshb_config.h"
 #include "guard.h"
 
@@ -47,7 +47,7 @@ void web_server_init(const web_backend_t *be, pshb_settings_t *settings) {
     // The name the board registers with DHCP (ioLibrary: "ps-hid-bridge-"
     // and the last three bytes of the MAC address).
     uint8_t mac[6];
-    char name[WEB_HOSTNAME_MAX];
+    char name[PSHB_NAME_SIZE];
     w5500_get_mac(mac);
     pshb_board_name(mac, name, sizeof(name));
     web_app_set_hostname(&s_app, name);

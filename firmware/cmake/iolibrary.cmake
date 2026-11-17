@@ -3,8 +3,10 @@
 # We compile generated copies of two of its files:
 #
 # dhcp.c
-#  * the DHCP host name is "ps-hid-bridge-" + last 3 MAC bytes instead of
-#    "WIZnet...", so the board is easy to find in the router's client list;
+#  * the DHCP host name is pshb_dhcp_hostname (core1.c: the board's network
+#    name, "ps-hid-bridge-" + last 3 MAC bytes or one derived from the name
+#    the user gave it) instead of "WIZnet" + MAC bytes, so the board is easy
+#    to find in the router's client list;
 #  * after an address conflict, dhcp.c waits for its 1 s tick in a busy
 #    loop -- but that tick is advanced by our own loop on core 1, which is
 #    stuck in there: core 1 would hang forever. It sleeps 1 s instead
@@ -43,8 +45,28 @@ endfunction()
 file(READ ${PSHB_IOLIB}/Internet/DHCP/dhcp.c PSHB_DHCP_SRC)
 pshb_patch(PSHB_DHCP_SRC dhcp.c
            "uint8_t HOST_NAME[] = DCHP_HOST_NAME;"
-           "uint8_t HOST_NAME[] = \"ps-hid-bridge-\";"
+           "extern char pshb_dhcp_hostname[]; /* PS HID Bridge: core1.c */"
            "HOST_NAME definition")
+# Both host name options (DISCOVER and REQUEST): the whole name from
+# pshb_dhcp_hostname, no MAC digits appended.
+pshb_patch(PSHB_DHCP_SRC dhcp.c
+           [=[	for(i = 0 ; HOST_NAME[i] != 0; i++)
+   	pDHCPMSG->OPT[k++] = HOST_NAME[i];
+	pDHCPMSG->OPT[k++] = NibbleToHex(DHCP_CHADDR[3] >> 4); 
+	pDHCPMSG->OPT[k++] = NibbleToHex(DHCP_CHADDR[3]);
+	pDHCPMSG->OPT[k++] = NibbleToHex(DHCP_CHADDR[4] >> 4); 
+	pDHCPMSG->OPT[k++] = NibbleToHex(DHCP_CHADDR[4]);
+	pDHCPMSG->OPT[k++] = NibbleToHex(DHCP_CHADDR[5] >> 4); 
+	pDHCPMSG->OPT[k++] = NibbleToHex(DHCP_CHADDR[5]);
+	pDHCPMSG->OPT[k - (i+6+1)] = i+6; // length of hostname]=]
+           [=[	for(i = 0 ; pshb_dhcp_hostname[i] != 0; i++)
+   	pDHCPMSG->OPT[k++] = pshb_dhcp_hostname[i];
+	pDHCPMSG->OPT[k - (i+1)] = i; // length of hostname]=]
+           "host name option")
+string(FIND "${PSHB_DHCP_SRC}" "HOST_NAME[i]" pshb_left)
+if(NOT pshb_left EQUAL -1)
+    message(FATAL_ERROR "ioLibrary dhcp.c changed: a host name option still uses HOST_NAME")
+endif()
 pshb_patch(PSHB_DHCP_SRC dhcp.c
            "while((dhcp_tick_1s - ret) < 2) ;"
            "{ extern void pshb_dhcp_decline_wait(void); pshb_dhcp_decline_wait(); }"

@@ -14,7 +14,7 @@ typedef struct {
     uint16_t udp_port;
     uint32_t fw_version;
     uint8_t flags;  // PSHB_DISCOVERY_KEY_SET, ...
-    char name[PSHB_DISCOVERY_NAME_LEN];  // NUL-terminated
+    char name[PSHB_DISCOVERY_NAME_LEN];  // NUL-terminated, the name shown (board_name.h)
 } pshb_discovery_info_t;
 
 // Answers per second at most: a flood of requests costs core 1 little and
@@ -34,9 +34,5 @@ size_t pshb_discovery_answer(const uint8_t *req, size_t len, const pshb_discover
 // True if one more answer may go out now (at most PSHB_DISCOVERY_MAX_PER_S
 // per second); counts it.
 bool pshb_discovery_allow(pshb_discovery_limit_t *l, uint64_t now_us);
-
-// The board's name from its MAC address: "ps-hid-bridge-" and the last three
-// bytes in lowercase hex (as the web interface accepts it as Host).
-void pshb_board_name(const uint8_t mac[6], char *out, size_t cap);
 
 #endif

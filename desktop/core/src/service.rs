@@ -56,6 +56,9 @@ pub enum ServiceCmd {
     /// Look at the network adapter and the CPU permissions again now (after
     /// setting up low latency).
     CheckLowLatency,
+    /// The board has a new address (DHCP): send there from now on, with the
+    /// bridge left as it is (on stays on).
+    Board(SocketAddr),
     Shutdown,
     /// Result of a device scan (internal: the scan runs on its own thread,
     /// the input thread must not stall on sysfs).
@@ -646,6 +649,12 @@ impl Runner {
                         self.cpu.check();
                         self.check_network();
                     }
+                    Ok(ServiceCmd::Board(addr)) => {
+                        self.link.set_board(addr);
+                        self.board = Some(addr);
+                        // Possibly another adapter on the way there.
+                        self.check_network();
+                    }
                     Ok(ServiceCmd::Devices(list)) => self.devices_listed(list),
                     Ok(ServiceCmd::Network(found)) => {
                         self.net_check_running = false;
@@ -744,6 +753,14 @@ mod tests {
 
     /// Answers pings; counts INPUT packets with RELEASE_ALL and with keys.
     fn fake_board(key: [u8; KEY_LEN]) -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicBool>) {
+        fake_board_session(key, 77)
+    }
+
+    /// A board on this PC that answers pings with `session_id`.
+    fn fake_board_session(
+        key: [u8; KEY_LEN],
+        session_id: u64,
+    ) -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicBool>) {
         use crate::crypto::PacketKey;
         use crate::protocol::{Direction, PacketType, Ping, STATUS_USB_MOUNTED};
         let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -767,7 +784,7 @@ mod tests {
                     let pong = Pong {
                         t_app_us: ping.t_app_us,
                         seq: ping.seq,
-                        session_id: 77,
+                        session_id,
                         status: STATUS_USB_MOUNTED,
                         ..Default::default()
                     };
@@ -831,5 +848,62 @@ mod tests {
         drop(svc);
         assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
         stop.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    #[test]
+    fn board_moves_while_the_bridge_is_on() {
+        let key = [4u8; KEY_LEN];
+        let (a, stop_a) = fake_board_session(key, 77);
+        let (tx, rx) = mpsc::channel();
+        let sink: Sink = Box::new(move |e| {
+            let _ = tx.send(e);
+        });
+        let svc = Service::start(
+            ServiceConfig {
+                config: Config::default(),
+                key,
+                board: a,
+                counter_store: None,
+                adapter_state: None,
+            },
+            sink,
+        )
+        .unwrap();
+        // Events until `want` (None: timed out); a Deactivated meanwhile fails.
+        let wait_for = |want: &dyn Fn(&ServiceEvent) -> bool, within: Duration| -> Option<ServiceEvent> {
+            let end = Instant::now() + within;
+            while let Some(left) = end.checked_duration_since(Instant::now()) {
+                match rx.recv_timeout(left) {
+                    Ok(ServiceEvent::Notice(Notice::Deactivated)) => panic!("the bridge went off"),
+                    Ok(e) if want(&e) => return Some(e),
+                    Ok(_) => {}
+                    Err(_) => return None,
+                }
+            }
+            None
+        };
+        let session = |e: &ServiceEvent, id: u64| matches!(e, ServiceEvent::Status(s) if s.connected && s.board.as_ref().map(|p| p.session_id) == Some(id));
+        assert!(wait_for(&|e| session(e, 77), Duration::from_secs(2)).is_some());
+        svc.send(ServiceCmd::Action(Action::On));
+        assert!(
+            wait_for(
+                &|e| *e == ServiceEvent::Notice(Notice::Activated),
+                Duration::from_millis(500)
+            )
+            .is_some()
+        );
+
+        // The board is gone from its address and answers at another one.
+        stop_a.store(true, std::sync::atomic::Ordering::Release);
+        let (b, stop_b) = fake_board_session(key, 88);
+        svc.send(ServiceCmd::Board(b));
+        let moved =
+            wait_for(&|e| session(e, 88), Duration::from_secs(2)).expect("connected to the new address");
+        let ServiceEvent::Status(st) = moved else {
+            unreachable!()
+        };
+        assert!(st.active, "the bridge stays on");
+        drop(svc);
+        stop_b.store(true, std::sync::atomic::Ordering::Release);
     }
 }

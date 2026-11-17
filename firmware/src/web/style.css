@@ -71,6 +71,7 @@ body {
   color: var(--accent-text);
 }
 .top h1 { font-size: 17px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand-name { color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 main { max-width: 860px; margin: 0 auto; padding: 20px 16px 48px; }
 h2 { display: flex; align-items: center; gap: 8px; font-size: 16px; margin: 0 0 10px; }
 h2 .i { color: var(--accent); }

@@ -126,6 +126,56 @@ AppPage {
     }
 
     Card {
+        id: nameCard
+        title: "Name"
+        icon: "board"
+        help: "Shown in the app's search and in the board's web interface. Your router and the browser use a network name made from it (letters, digits and dashes); the board keeps answering to its old name ps-hid-bridge-… too."
+
+        // The board's default name, from its MAC address ("" = not known).
+        readonly property string defaultName: {
+            const m = AppController.boardMac.split(":");
+            return m.length === 6 ? "ps-hid-bridge-" + m.slice(3).join("") : "";
+        }
+        function rename() {
+            AppController.renameBoard(nameField.text);
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+            Controls.TextField {
+                id: nameField
+                Layout.fillWidth: true
+                text: AppController.boardName
+                maximumLength: 31
+                placeholderText: AppController.connected ? "e.g. Living room" : "Connect to the board first"
+                enabled: AppController.connected && !AppController.renameBusy
+                onAccepted: if (renameButton.enabled) nameCard.rename()
+            }
+            AppButton {
+                id: renameButton
+                text: AppController.renameBusy ? "Renaming …" : "Rename"
+                enabled: AppController.connected && !AppController.renameBusy
+                         && nameField.text.trim() !== AppController.boardName
+                onClicked: nameCard.rename()
+            }
+        }
+        Controls.Label {
+            Layout.fillWidth: true
+            visible: AppController.connected
+            text: "In your router and the browser: "
+                  + AppController.networkNameFor(nameField.text, nameCard.defaultName !== "" ? nameCard.defaultName : "ps-hid-bridge-…")
+            color: Style.muted
+            wrapMode: Text.WordWrap
+        }
+        Banner {
+            kind: AppController.renameLevel === "ok" ? "ok" : "warn"
+            visible: AppController.renameMessage !== ""
+            text: AppController.renameMessage
+        }
+    }
+
+    Card {
         title: "Details"
         icon: "board"
         GridLayout {

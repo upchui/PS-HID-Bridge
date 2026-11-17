@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "board_name.h"
 #include "crc32.h"
 #include "protocol.h"
 
@@ -21,6 +22,11 @@ void settings_defaults(pshb_settings_t *s) {
 bool settings_valid(const pshb_settings_t *s) {
     return s->magic == PSHB_SETTINGS_MAGIC && s->version == PSHB_SETTINGS_VERSION &&
            s->size == sizeof(*s) && s->crc == settings_crc(s) && s->udp_port != 0;
+}
+
+const char *settings_board_name(const pshb_settings_t *s) {
+    _Static_assert(sizeof(s->name) == PSHB_NAME_SIZE, "name field size");
+    return pshb_name_valid(s->name) ? s->name : "";
 }
 
 uint32_t settings_prefix_mask(unsigned prefix) {

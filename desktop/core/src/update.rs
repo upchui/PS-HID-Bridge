@@ -540,6 +540,23 @@ impl BoardApi {
         let v = self.signed("POST", "/api/clock", body.as_bytes())?;
         Ok(v.get("reboot").and_then(|r| r.as_bool()).unwrap_or(false))
     }
+
+    /// Give the board a name ("" = its default name); returns the name it
+    /// shows and its network name (router, browser).
+    pub fn set_name(&self, name: &str) -> Result<(String, String), String> {
+        let body = serde_json::json!({ "name": name }).to_string();
+        let v = match self.signed("POST", "/api/name", body.as_bytes()) {
+            // Firmware before names answers like for any other path.
+            Err(e) if e.contains("Not allowed with a signature") => {
+                return Err(
+                    "The board's firmware is too old to be named: update it (Firmware & updates)".into(),
+                );
+            }
+            r => r?,
+        };
+        let text = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string();
+        Ok((text("name"), text("hostname")))
+    }
 }
 
 /// Install `image` (a UF2 file) on the board at `host` (web interface on

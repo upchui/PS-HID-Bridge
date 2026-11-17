@@ -69,17 +69,10 @@ TEST(discovery_limit_per_second) {
     CHECK(pshb_discovery_allow(&l, t + 1000000));  // a new second
 }
 
-TEST(board_name_from_mac) {
-    char name[PSHB_DISCOVERY_NAME_LEN];
-    pshb_board_name(k_info.mac, name, sizeof(name));
-    CHECK(strcmp(name, "ps-hid-bridge-96c33d") == 0);
-}
-
 int main(void) {
     RUN(discovery_answers_a_request);
     RUN(discovery_ignores_anything_else);
     RUN(discovery_name_stays_terminated);
     RUN(discovery_limit_per_second);
-    RUN(board_name_from_mac);
     return TEST_SUMMARY();
 }

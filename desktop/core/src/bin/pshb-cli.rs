@@ -178,6 +178,10 @@ enum Command {
         /// Start the latency statistics over
         #[arg(long)]
         reset: bool,
+        /// Give the board a name (shown in the app and the search; its
+        /// network name in the router follows from it); "" = the default name
+        #[arg(long)]
+        name: Option<String>,
         /// Print the board's answers as JSON
         #[arg(long)]
         json: bool,
@@ -897,18 +901,25 @@ fn cmd_update(
 
 /// The board's input-path latency, status and clock speeds; or set the
 /// clock speeds, or start the latency statistics over.
+#[allow(clippy::too_many_arguments)]
 fn cmd_board(
     ctx: &Ctx,
     board: &BoardArgs,
     cpu: Option<&str>,
     spi: Option<SpiClock>,
     reset: bool,
+    name: Option<&str>,
     json: bool,
     http_port: u16,
 ) -> Result<(), String> {
     let addr = board_addr(ctx, board)?;
     let key = load_key(board)?;
     let api = update::BoardApi::new(&addr.ip().to_string(), http_port, &key);
+    if let Some(name) = name {
+        let (shown, host) = api.set_name(name.trim())?;
+        println!("The board is now called \"{shown}\" (in the router and the browser: {host}).");
+        return Ok(());
+    }
     if cpu.is_some() || spi.is_some() {
         let now = api.clock()?;
         let cpu_mhz = cpu.map_or(now.cpu_mhz, |c| c.parse().unwrap_or(150));
@@ -1304,9 +1315,19 @@ fn main() -> ExitCode {
             cpu,
             spi,
             reset,
+            name,
             json,
             http_port,
-        } => cmd_board(&ctx, board, cpu.as_deref(), *spi, *reset, *json, *http_port),
+        } => cmd_board(
+            &ctx,
+            board,
+            cpu.as_deref(),
+            *spi,
+            *reset,
+            name.as_deref(),
+            *json,
+            *http_port,
+        ),
     };
     match res {
         Ok(()) => ExitCode::SUCCESS,

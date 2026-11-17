@@ -9,6 +9,7 @@ Everything the [README](../README.md) leaves out for everyday use: the command l
 ```sh
 pshb-cli list-devices                              # keyboards, mice, touchpads, touchscreens with access status
 pshb-cli discover                                  # boards in the network: name, address, MAC, firmware (no key needed)
+pshb-cli board --name "Living room"                # give the board a name ("" = default name)
 pshb-cli config set --board 192.168.1.50 --device 046d:c52b --device "G Pro"
 pshb-cli config set --keyboard ansi                # keyboard type: the key next to Enter sends HID 0x32 (iso) or 0x31 (ansi)
 pshb-cli config set --touchpad-speed 1.5 --tap-to-click on --natural-scroll off
@@ -84,7 +85,7 @@ Open it by the board's address or its name `ps-hid-bridge-XXXXXX` (also with the
 
 ### Network and LED
 
-The board gets an address via DHCP and registers as `ps-hid-bridge-XXXXXX` (last six digits of the MAC address). It receives input on UDP port 45045 and answers the app's search on UDP port 45046 ([SPEC.md](../protocol/SPEC.md#discovery)). The app remembers the MAC address of the board it uses (`board_mac` in the settings) and, when the board no longer answers at its address, looks for it in the network and takes its new address.
+The board gets an address via DHCP and registers as `ps-hid-bridge-XXXXXX` (last six digits of the MAC address), or under the network name made from the name you give it (web interface "Network" → "Board name", the app's "Board" page, or `pshb-cli board --name "Living room"`): "Wohnzimmer PS5" becomes `wohnzimmer-ps5`. The router learns a new name at once, with a lease renewal; the board answers to both names in the browser. It receives input on UDP port 45045 and answers the app's search on UDP port 45046 ([SPEC.md](../protocol/SPEC.md#discovery)). The app remembers the MAC address of the board it uses (`board_mac` in the settings) and, when the board no longer answers at its address, looks for it in the network and takes its new address, also while the bridge is on: it stays on and sends to the new address.
 
 LED: blinks slowly = no USB host, blinks fast = USB present but no IP yet, steady = ready (flickers briefly on input).
 

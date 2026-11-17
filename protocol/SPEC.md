@@ -174,16 +174,22 @@ The app reads the board's status and latency diagnostics and sets its clock spee
 
 - A fresh challenge (`GET /api/ota/challenge`, as above; valid for one signed request or upload, 60 seconds).
 - The request carries `X-PSHB-Auth: <64 hex digits>` = `BLAKE2b-256(key = K_ota, message = "pshb-req-v1" || nonce || method || " " || path || "\n" || body)` (method `GET` or `POST`, the path without query, the body as sent; empty for GET), and `X-PSHB-Nonce` as for an upload. POST requests also carry `X-PSHB: 1` like every POST. Other methods are refused (405) before a challenge is used up.
-- Allowed with a signature: `GET /api/status`, `GET /api/diag`, `POST /api/diag/reset`, `POST /api/clock`. Anything else answers 403 "Not allowed with a signature": password, key, network settings and firmware keep their own ways in. A wrong signature or a used-up challenge answers 403.
+- Allowed with a signature: `GET /api/status`, `GET /api/diag`, `POST /api/diag/reset`, `POST /api/clock`, `POST /api/name`. Anything else answers 403 "Not allowed with a signature": password, key, network settings and firmware keep their own ways in. A wrong signature or a used-up challenge answers 403.
 
 Clock speeds:
 
 - `GET /api/clock` (no login, nothing secret): `{"cpu_mhz": 150|200, "spi_fast": bool, "cpu_hz": …, "spi_hz": …, "cpu_fell_back": bool, "spi_fast_failed": bool}` -- the setting and what runs. `cpu_fell_back`: 200 MHz is set, but the last start at 200 MHz did not get through its trial (the board restarted by itself within 10 s), so it runs at 150 MHz and the setting is back at 150. `spi_fast_failed`: the fast SPI clock failed its self-test at start.
 - `POST /api/clock` (logged in or signed) with `{"cpu_mhz": 150|200, "spi_fast": bool}` (both optional): answers `{"ok": true, "reboot": bool}`; on a change the board stores it and restarts. 200 MHz is beyond the RP2350's rating. The SPI clock follows the CPU clock: standard 25 MHz; fast 37.5 MHz at 150 MHz and 33.3 MHz at 200 MHz.
 
+Board name:
+
+- `POST /api/name` (logged in or signed) with `{"name": "…"}`: the name shown in the app, the search and the web interface. At most 31 bytes of UTF-8 after spaces at either end are removed, no control characters; `""` = the default name `ps-hid-bridge-xxxxxx`. Answers `{"ok": true, "name": …, "hostname": …}`, 400 with the reason otherwise. Takes effect at once, no restart.
+- The **network name** follows from it: lower-case letters and digits, `ä ö ü ß` as `ae oe ue ss`, everything else one `-`, no `-` at either end, at most 31 characters; the default name if nothing is left ("Wohnzimmer PS5" → `wohnzimmer-ps5`). The board sends it to the router as DHCP host name (option 12, at once with a lease renewal) and accepts it as `Host`, besides its default name.
+- `GET /api/status` carries `name` (as shown), `name_set` (a name of its own), `default_name` and `hostname` (the network name).
+
 ## Host header
 
-Against DNS rebinding (a web page whose name is pointed at the board's address would otherwise be the board's origin in the browser), the board answers 421 to every request whose `Host` is neither an IPv4 or IPv6 address (with or without port), nor `localhost`, nor its own name `ps-hid-bridge-xxxxxx` (the name it registers with DHCP; any domain may follow, e.g. `ps-hid-bridge-a1b2c3.fritz.box`). A request without `Host` is accepted. Clients address the board by its IP address.
+Against DNS rebinding (a web page whose name is pointed at the board's address would otherwise be the board's origin in the browser), the board answers 421 to every request whose `Host` is neither an IPv4 or IPv6 address (with or without port), nor `localhost`, nor its default name `ps-hid-bridge-xxxxxx`, nor its network name (the name it registers with DHCP, see "Board name"; any domain may follow, e.g. `ps-hid-bridge-a1b2c3.fritz.box`). A request without `Host` is accepted. Clients address the board by its IP address.
 
 ## Discovery
 
@@ -210,7 +216,7 @@ Answer, 64 bytes, unicast to the sender's address and port:
 | 12 | 6 | mac | the board's MAC address |
 | 18 | 2 | udp_port | u16, the input port (45045 unless changed) |
 | 20 | 4 | fw_version | u32, `0xMMmmpppp` as in a PONG |
-| 24 | 32 | name | ASCII, NUL-padded: `ps-hid-bridge-` and the last three MAC bytes in lower-case hex |
+| 24 | 32 | name | UTF-8, NUL-padded: the name the board was given, else `ps-hid-bridge-` and the last three MAC bytes in lower-case hex |
 | 56 | 8 | zero | |
 
 Rules:
@@ -218,7 +224,7 @@ Rules:
 - Only requests of exactly 64 bytes with this magic, version and type are answered: the answer is never larger than the request (no amplification).
 - At most 16 answers per second; further requests are dropped.
 - The board answers once it has an address (DHCP or static). Firmware before this feature does not answer.
-- The app sends the request to 255.255.255.255, to the broadcast address of each of its IPv4 networks and, in networks of up to 512 addresses, to every address once more. A firewall on the PC (ufw, firewalld) drops answers to a broadcast, which it cannot match to a request it let out; it lets in answers to a request to that address. The app keeps the MAC address of the board it uses and looks for it this way when the board no longer answers at its address (a new address from DHCP).
+- The app sends the request to 255.255.255.255, to the broadcast address of each of its IPv4 networks and, in networks of up to 512 addresses, to every address once more. A firewall on the PC (ufw, firewalld) drops answers to a broadcast, which it cannot match to a request it let out; it lets in answers to a request to that address. The app keeps the MAC address of the board it uses and looks for it this way when the board no longer answers at its address (a new address from DHCP): 3 seconds after the last answer, then less often. A running bridge then sends to the new address and stays on.
 
 ## Test vectors
 

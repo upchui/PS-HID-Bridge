@@ -378,6 +378,18 @@ class InteropTests(unittest.TestCase):
         self.assertIn(f"The board runs firmware {VERSION}", r.stdout)
         self.assertTrue(self.sim.wait_line("OTA OK 30", timeout=2))
 
+    def test_name_the_board(self):
+        self.sim.close()
+        self.sim = Sim("--http-port", "0", key=KEY)
+        self.board = f"127.0.0.1:{self.sim.port}"
+        r = self.cli("board", "--name", "Wohnzimmer PS5", "--http-port", str(self.sim.http_port))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('"Wohnzimmer PS5"', r.stdout)
+        self.assertIn("wohnzimmer-ps5", r.stdout)
+        r = self.cli("board", "--name", "x" * 40, "--http-port", str(self.sim.http_port))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("31 bytes", r.stderr)
+
     def test_wrong_key(self):
         r = self.cli("ping", "--count", "1", "--timeout-ms", "300", key=bytes(32))
         self.assertNotEqual(r.returncode, 0)
@@ -417,6 +429,16 @@ class DiscoveryTests(unittest.TestCase):
         major, minor, patch = (int(x) for x in VERSION.split("."))
         self.assertEqual(int.from_bytes(a[20:24], "little"), (major << 24) | (minor << 16) | patch)
         self.assertEqual(a[24:56].rstrip(b"\0"), b"ps-hid-bridge-514d00")
+
+    def test_answer_carries_the_name(self):
+        self.sim.close()
+        self.sim = Sim("--discovery-port", "0", "--http-port", "0", key=KEY)
+        web = Web(self.sim.http_port)
+        self.assertEqual(web.login("ps-hid-bridge")[0], 200)
+        self.assertEqual(web.req("POST", "/api/password", {"old": "ps-hid-bridge", "new": "a-long-password"})[0], 200)
+        self.assertEqual(web.req("POST", "/api/name", {"name": "Küche"})[0], 200)
+        a = self.ask(DISCOVERY_REQUEST)
+        self.assertEqual(a[24:56].rstrip(b"\0").decode(), "Küche")
 
     def test_only_exact_requests(self):
         self.assertIsNone(self.ask(DISCOVERY_REQUEST[:63]))
@@ -905,9 +927,12 @@ class WebTests(unittest.TestCase):
         status, d, _ = self.web.req("GET", "/api/diag")
         self.assertEqual(status, 200, d)
         self.assertEqual((d["ready_p99"], d["bus_timeouts"], d["crypto_fast"]), (4294967295, 4294967295, True))
+        # The longest name, every byte escaped in JSON.
+        self.assertEqual(self.web.req("POST", "/api/name", {"name": '"' * 31})[0], 200)
         status, st, _ = self.web.req("GET", "/api/status")
         self.assertEqual(status, 200, st)
         self.assertEqual(st["mouse_lead_us"], 4294967295)
+        self.assertEqual(st["name"], '"' * 31)
 
     def test_bench_sink_takes_uploads_only_when_logged_in(self):
         body = bytes(range(256)) * 300  # 75 KiB
@@ -977,6 +1002,10 @@ class WebTests(unittest.TestCase):
         nonce = bytes.fromhex(Web(self.sim.http_port).req("GET", "/api/ota/challenge")[1]["nonce"])
         self.assertEqual(self.signed("GET", "/api/status", key, nonce=nonce)[0], 200)
         self.assertEqual(self.signed("GET", "/api/status", key, nonce=nonce)[0], 403)
+        # The app names the board with the key.
+        body = json.dumps({"name": "Wohnzimmer"}).encode()
+        self.assertEqual(self.signed("POST", "/api/name", key, body),
+                         (200, {"ok": True, "name": "Wohnzimmer", "hostname": "wohnzimmer"}))
         # Password, key and network stay with the login.
         status, r = self.signed("POST", "/api/psk/generate", key, b"{}")
         self.assertEqual(status, 403)
@@ -1053,6 +1082,35 @@ class WebTests(unittest.TestCase):
                      "127.0.0.1.evil.example", "a" * 70):
             self.assertEqual(self.raw_status(host), 421, host)
         self.assertEqual(self.raw_status("evil.example", "/"), 421)
+
+    def test_board_name(self):
+        self.setup_password()
+        st = self.web.req("GET", "/api/status")[1]
+        self.assertEqual((st["name"], st["name_set"], st["hostname"], st["default_name"]),
+                         ("ps-hid-bridge-514d00", False, "ps-hid-bridge-514d00", "ps-hid-bridge-514d00"))
+        status, r, _ = self.web.req("POST", "/api/name", {"name": "  Wohnzimmer PS5 "})
+        self.assertEqual((status, r), (200, {"ok": True, "name": "Wohnzimmer PS5", "hostname": "wohnzimmer-ps5"}))
+        st = self.web.req("GET", "/api/status")[1]
+        self.assertEqual((st["name"], st["name_set"], st["hostname"]), ("Wohnzimmer PS5", True, "wohnzimmer-ps5"))
+        # Reached by the new network name and still by the default one.
+        for host in ("wohnzimmer-ps5", "WOHNZIMMER-PS5.fritz.box:80", "ps-hid-bridge-514d00"):
+            self.assertEqual(self.raw_status(host), 200, host)
+        self.assertEqual(self.raw_status("wohnzimmer-ps5x"), 421)
+        # Umlauts, as a browser sends them.
+        status, r, _ = self.web.req("POST", "/api/name", {"name": "Küche Süd"})
+        self.assertEqual((status, r["name"], r["hostname"]), (200, "Küche Süd", "kueche-sued"))
+        for bad in ("x" * 32, "ä" * 16, "tab\there", "line\nbreak"):
+            status, r, _ = self.web.req("POST", "/api/name", {"name": bad})
+            self.assertEqual(status, 400, bad)
+        self.assertEqual(self.web.req("POST", "/api/name", {})[0], 400)
+        self.assertEqual(self.web.req("GET", "/api/status")[1]["name"], "Küche Süd")
+        # Kept across a restart; empty = the default name again.
+        self.assertEqual(self.web.req("POST", "/api/reboot", {})[0], 200)
+        self.assertTrue(self.sim.wait_line("REBOOT", timeout=2))
+        self.assertEqual(self.web.login(NEW_PW)[0], 200)
+        self.assertEqual(self.web.req("GET", "/api/status")[1]["name"], "Küche Süd")
+        status, r, _ = self.web.req("POST", "/api/name", {"name": ""})
+        self.assertEqual((status, r["name"], r["hostname"]), (200, "ps-hid-bridge-514d00", "ps-hid-bridge-514d00"))
 
     def test_password_with_umlauts(self):
         import urllib.request

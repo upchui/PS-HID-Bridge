@@ -1,6 +1,5 @@
 #include "discovery.h"
 
-#include <stdio.h>
 #include <string.h>
 
 #define MAGIC_LEN 8
@@ -32,8 +31,4 @@ bool pshb_discovery_allow(pshb_discovery_limit_t *l, uint64_t now_us) {
     if (l->sent >= PSHB_DISCOVERY_MAX_PER_S) return false;
     l->sent++;
     return true;
-}
-
-void pshb_board_name(const uint8_t mac[6], char *out, size_t cap) {
-    snprintf(out, cap, "ps-hid-bridge-%02x%02x%02x", mac[3], mac[4], mac[5]);
 }

@@ -40,8 +40,14 @@ typedef struct {
     // the W5500 at its fast setting after a self-test (pico/clock.c).
     uint8_t cpu_200mhz;
     uint8_t spi_fast;
+    // Not used: a test image wrote 1 here on one board.
+    uint8_t reserved0;
+    // The name the user gave the board (UTF-8, NUL-terminated; empty = the
+    // default name, see board_name.h). Read through settings_board_name:
+    // settings stored before it existed have zeros here.
+    char name[32];
 
-    uint8_t reserved[PSHB_SETTINGS_SIZE - 4 - 2 - 2 - 4 - 1 - 16 - 1 - 2 - 32 - 4 - 1 - 16 - 32 - 1 - 2 - 4];
+    uint8_t reserved[PSHB_SETTINGS_SIZE - 4 - 2 - 2 - 4 - 1 - 16 - 1 - 2 - 32 - 4 - 1 - 16 - 32 - 1 - 2 - 1 - 32 - 4];
     uint32_t crc;              // CRC-32 of all bytes before this field
 } pshb_settings_t;
 
@@ -68,6 +74,10 @@ bool settings_save(const pshb_flash_t *f, pshb_settings_t *s);
 bool settings_erase(const pshb_flash_t *f);
 
 bool settings_valid(const pshb_settings_t *s);
+
+// The name the user gave the board; "" if none (or what is stored is no
+// valid name).
+const char *settings_board_name(const pshb_settings_t *s);
 
 // Sender filter as network and mask (a.b.c.d as 0xaabbccdd): a sender is
 // allowed if ((ip ^ net) & mask) == 0. Mask 0 = any sender.

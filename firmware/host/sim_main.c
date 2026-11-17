@@ -402,7 +402,8 @@ static void discovery_service(int fd, int udp_port) {
         if (n < 0) break;
         pshb_discovery_info_t info = {0};
         memcpy(info.mac, k_sim_mac, 6);
-        snprintf(info.name, sizeof(info.name), "%s", SIM_HOSTNAME);
+        const char *name = settings_board_name(&S.settings);
+        snprintf(info.name, sizeof(info.name), "%s", name[0] ? name : SIM_HOSTNAME);
         info.udp_port = (uint16_t)udp_port;
         info.fw_version = S.bridge.fw_version;
         if (S.settings.psk_set) info.flags |= PSHB_DISCOVERY_KEY_SET;

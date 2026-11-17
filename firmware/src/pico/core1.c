@@ -10,6 +10,7 @@
 #include "pico/rand.h"
 #include "pico/stdlib.h"
 
+#include "board_name.h"
 #include "bootsel.h"
 #include "dhcp.h"
 #include "diag.h"
@@ -109,6 +110,27 @@ static void on_dhcp_conflict(void) {
 // Added to ioLibrary's dhcp.c (cmake/iolibrary.cmake).
 uint8_t pshb_dhcp_bound(void);
 void pshb_dhcp_renew_now(void);
+
+// The host name the DHCP client sends (read by dhcp.c, see
+// cmake/iolibrary.cmake): the board's network name.
+char pshb_dhcp_hostname[PSHB_NAME_SIZE];
+
+// The board's default name ("ps-hid-bridge-96c33d"), from its MAC address.
+static void default_name(char out[PSHB_NAME_SIZE]) {
+    uint8_t mac[6];
+    w5500_get_mac(mac);
+    pshb_board_name(mac, out, PSHB_NAME_SIZE);
+}
+
+// Set the DHCP host name from the settings; true if it changed.
+static bool update_dhcp_hostname(void) {
+    char def[PSHB_NAME_SIZE], host[PSHB_NAME_SIZE];
+    default_name(def);
+    pshb_hostname_from_name(settings_board_name(&g_settings), def, host, sizeof(host));
+    if (strcmp(host, pshb_dhcp_hostname) == 0) return false;
+    memcpy(pshb_dhcp_hostname, host, sizeof(host));
+    return true;
+}
 
 static bool lease_valid(void) {
     return s_lease && !time_reached(s_lease_end);
@@ -308,7 +330,12 @@ static void discovery_service(void) {
 
     pshb_discovery_info_t info = {0};
     w5500_get_mac(info.mac);
-    pshb_board_name(info.mac, info.name, sizeof(info.name));
+    const char *name = settings_board_name(&g_settings);
+    if (name[0]) {
+        snprintf(info.name, sizeof(info.name), "%s", name);
+    } else {
+        pshb_board_name(info.mac, info.name, sizeof(info.name));
+    }
     info.udp_port = g_settings.udp_port;
     info.fw_version = PSHB_FW_VERSION;
     if (g_settings.psk_set) info.flags |= PSHB_DISCOVERY_KEY_SET;
@@ -476,6 +503,12 @@ static bool be_save(void *ctx, const pshb_settings_t *s) {
 static void be_apply(void *ctx, const pshb_settings_t *s) {
     (void)ctx;
     input_cfg_post(s);
+    // A new name: the router learns it with a lease renewal right away
+    // (with a static address there is no DHCP to tell).
+    if (update_dhcp_hostname()) {
+        printf("net: network name %s\n", pshb_dhcp_hostname);
+        if (s_ip_mode == PSHB_IP_DHCP) pshb_dhcp_renew_now();
+    }
 }
 
 static void be_reboot(void *ctx) {
@@ -592,6 +625,7 @@ void core1_main(void) {
         if (!s_settings_erased && settings_save(&g_settings_flash, &next)) g_settings = next;
         printf("clock: back to 150 MHz for good\n");
     }
+    update_dhcp_hostname();  // before the first DHCP message
     reg_dhcp_cbfunc(on_dhcp_assign, on_dhcp_assign, on_dhcp_conflict);
     s_ip_mode = g_settings.ip_mode;
     set_state(C1_NO_LINK);

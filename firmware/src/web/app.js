@@ -124,8 +124,30 @@ function boardState(st) {
   return ["Ready", "Waiting for input from the app.", "accent"];
 }
 
+// The network name for a board name, as the board derives it
+// (firmware/src/core/board_name.c): lower-case letters and digits, ä ö ü ß
+// as ae oe ue ss, everything else one "-", at most 31 characters.
+function hostFromName(name, fallback) {
+  const map = { "ä": "ae", "ö": "oe", "ü": "ue", "Ä": "ae", "Ö": "oe", "Ü": "ue", "ß": "ss" };
+  let out = "", dash = false;
+  for (const ch of name) {
+    let put = null;
+    if (/[a-z0-9]/.test(ch)) put = ch;
+    else if (/[A-Z]/.test(ch)) put = ch.toLowerCase();
+    else if (map[ch]) put = map[ch];
+    if (!put) { dash = out.length > 0; continue; }
+    const add = (dash ? "-" : "") + put;
+    if (out.length + add.length > 31) break;
+    out += add;
+    dash = false;
+  }
+  return out || fallback;
+}
+
 function renderStatus(st) {
   lastStatus = st;
+  $("h-name").textContent = st.name;
+  document.title = `${st.name} · PS HID Bridge`;
   const [title, text, level] = boardState(st);
   const p = $("pill");
   p.hidden = false;
@@ -168,7 +190,17 @@ function renderStatus(st) {
   $("psk-state").className = "pill " + (st.psk_set ? "ok" : "warn");
 }
 
+function updateNameHost() {
+  const st = lastStatus;
+  if (!st) return;
+  $("name-host").textContent = hostFromName($("f-name").name.value.trim(), st.default_name);
+}
+
 function fillForms(st) {
+  const n = $("f-name");
+  n.name.value = st.name_set ? st.name : "";
+  n.name.placeholder = st.default_name;
+  updateNameHost();
   const f = $("f-network");
   f.mode.value = st.ip_mode;
   f.ip.value = st.ip_mode === "static" ? st.static_ip : st.ip;
@@ -342,6 +374,13 @@ function init() {
     await pwChange(f);
     message("Password changed.", true);
   });
+
+  onSubmit("f-name", async (f) => {
+    const r = await api("/api/name", { name: f.name.value.trim() });
+    message(`Name saved. In your router and the browser the board is now “${r.hostname}”.`, true);
+    refreshStatus(true);
+  });
+  $("f-name").name.addEventListener("input", updateNameHost);
 
   onSubmit("f-network", async (f) => {
     const body = { mode: f.mode.value, udp_port: Number(f.udp_port.value) };

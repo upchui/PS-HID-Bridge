@@ -81,6 +81,41 @@ impl FoundBoard {
     }
 }
 
+/// The network name the board derives from its name (the same rules as
+/// firmware/src/core/board_name.c): lower-case letters and digits, ä ö ü ß
+/// as ae oe ue ss, everything else one "-", no "-" at either end, at most 31
+/// characters; `fallback` if nothing is left.
+pub fn hostname_from_name(name: &str, fallback: &str) -> String {
+    const MAX: usize = 31;
+    let mut out = String::new();
+    let mut dash = false;
+    for ch in name.chars() {
+        let put = match ch {
+            'a'..='z' | '0'..='9' => Some(ch.to_string()),
+            'A'..='Z' => Some(ch.to_ascii_lowercase().to_string()),
+            'ä' | 'Ä' => Some("ae".to_string()),
+            'ö' | 'Ö' => Some("oe".to_string()),
+            'ü' | 'Ü' => Some("ue".to_string()),
+            'ß' => Some("ss".to_string()),
+            _ => None,
+        };
+        let Some(put) = put else {
+            dash = !out.is_empty();
+            continue;
+        };
+        let need = put.len() + usize::from(dash);
+        if out.len() + need > MAX {
+            break;
+        }
+        if dash {
+            out.push('-');
+        }
+        dash = false;
+        out.push_str(&put);
+    }
+    if out.is_empty() { fallback.to_string() } else { out }
+}
+
 /// The IPv4 address in a board setting ("10.14.0.21", "10.14.0.21:45045");
 /// None for a host name or IPv6.
 pub fn board_ipv4(board: &str) -> Option<Ipv4Addr> {
@@ -359,6 +394,32 @@ mod tests {
         assert_eq!(b.address(), "10.14.0.21");
         let other_port = FoundBoard { udp_port: 4000, ..b };
         assert_eq!(other_port.address(), "10.14.0.21:4000");
+    }
+
+    #[test]
+    fn network_names_as_the_firmware() {
+        // The cases of firmware/tests/test_board_name.c.
+        let host = |n: &str| hostname_from_name(n, "ps-hid-bridge-96c33d");
+        assert_eq!(host("Wohnzimmer PS5"), "wohnzimmer-ps5");
+        assert_eq!(host("Küche Ärger Straße"), "kueche-aerger-strasse");
+        assert_eq!(host("  --Hello__World!!  "), "hello-world");
+        assert_eq!(host("🎮 PS5"), "ps5");
+        assert_eq!(host("café"), "caf");
+        assert_eq!(host(""), "ps-hid-bridge-96c33d");
+        assert_eq!(host("!!! ???"), "ps-hid-bridge-96c33d");
+        assert_eq!(host("🎮"), "ps-hid-bridge-96c33d");
+        assert_eq!(
+            host("abcdefghijklmnopqrstuvwxyz abcd efgh"),
+            "abcdefghijklmnopqrstuvwxyz-abcd"
+        );
+        assert_eq!(
+            host("abcdefghijklmnopqrstuvwxyzabcd x"),
+            "abcdefghijklmnopqrstuvwxyzabcd"
+        );
+        assert_eq!(
+            host("abcdefghijklmnopqrstuvwxyzabcdä"),
+            "abcdefghijklmnopqrstuvwxyzabcd"
+        );
     }
 
     #[test]
