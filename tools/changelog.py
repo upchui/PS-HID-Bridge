@@ -201,7 +201,8 @@ def check(data):
             for d in c["details"]:
                 if not isinstance(d.get("bullet"), bool) or not d.get("text") or "\n" in d["text"]:
                     errors.append(f"{r['version']} {c['hash']}: bad details block {d}")
-                elif TRAILER.match(d["text"]) or "Co-Authored-By" in d["text"]:
+                # A trailer line itself (a text may well mention one).
+                elif TRAILER.match(d["text"]):
                     errors.append(f"{r['version']} {c['hash']}: a trailer in the details")
     versions = [r["version"] for r in data["releases"]]
     if len(set(versions)) != len(versions):
