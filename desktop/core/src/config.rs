@@ -618,6 +618,16 @@ pub fn state_dir() -> PathBuf {
     xdg("XDG_STATE_HOME", ".local/state")
 }
 
+pub fn cache_dir() -> PathBuf {
+    xdg("XDG_CACHE_HOME", ".cache")
+}
+
+/// The changelog of the newest release, as fetched by the update check (it
+/// shows newer versions than the one built into the app).
+pub fn changelog_cache_path() -> PathBuf {
+    cache_dir().join("changelog.json")
+}
+
 pub fn config_path() -> PathBuf {
     config_dir().join("config.toml")
 }

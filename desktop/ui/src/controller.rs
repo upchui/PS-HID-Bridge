@@ -161,9 +161,11 @@ pub mod qobject {
         #[qproperty(bool, access_busy)]
         #[qproperty(QString, access_message)]
         #[qproperty(QString, version)]
-        /// The changelog built into this version (tools/changelog.py):
+        /// The changelog built into this version (tools/changelog.py), or
+        /// the newest release's once the update check fetched it:
         /// {"repo", "releases": [{version, tag, date, build, compare,
-        /// changes: [{area, group, items, hash, date}]}]}, newest first.
+        /// changes: [{area, group, items, hash, date, details}]}]}, newest
+        /// first.
         #[qproperty(QString, changelog_json)]
         /// This version, once after an update to it ("" = nothing new to
         /// point to): the status page offers the changelog.
@@ -639,6 +641,9 @@ impl ServiceSlot {
     }
 }
 
+/// The changelog built into this version (tools/changelog.py, build.rs).
+const BUILT_IN_CHANGELOG: &str = include_str!(concat!(env!("OUT_DIR"), "/changelog.json"));
+
 /// Retry interval when the service could not be started (no network yet,
 /// board name not resolvable, another program sending).
 const RETRY: Duration = Duration::from_secs(5);
@@ -742,7 +747,7 @@ impl Default for AppControllerRust {
             last_status: ServiceStatus::default(),
             last_live: None,
             health: BoardHealth::default(),
-            changelog_json: QString::from(include_str!(concat!(env!("OUT_DIR"), "/changelog.json"))),
+            changelog_json: QString::from(BUILT_IN_CHANGELOG),
             whats_new: QString::default(),
             update_check: true,
             appearance: QString::from("system"),
@@ -2608,12 +2613,47 @@ impl qobject::AppController {
 
     fn start_update_check(self: Pin<&mut Self>, manual: bool) {
         let qt = self.qt_thread();
+        // The changelog shown goes this far: a newer release brings its own.
+        let shown = update::changelog_version(&self.changelog_json().to_string());
         let _ = thread::Builder::new()
             .name("pshb-update-check".into())
             .spawn(move || {
                 let result = update::latest_release();
-                let _ = qt.queue(move |obj| obj.updates_found(result, manual));
+                // Releases before it, or no network: the page stays as it is.
+                let log = match &result {
+                    Ok(r) if shown.is_none_or(|v| r.version > v) => update::changelog_of(r).ok(),
+                    _ => None,
+                };
+                let _ = qt.queue(move |mut obj| {
+                    if let Some(log) = log {
+                        obj.as_mut().changelog_fetched(log);
+                    }
+                    obj.updates_found(result, manual);
+                });
             });
+    }
+
+    /// The newest release's changelog: kept for the next start, shown if it
+    /// goes further than the one built in.
+    fn changelog_fetched(mut self: Pin<&mut Self>, log: String) {
+        let path = config::changelog_cache_path();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, &log);
+        self.as_mut().show_changelog(Some(log));
+    }
+
+    /// The changelog the page shows: the built-in one, or `fetched` if that
+    /// goes further.
+    fn show_changelog(mut self: Pin<&mut Self>, fetched: Option<String>) {
+        let text = match &fetched {
+            Some(f) => update::newest_changelog(BUILT_IN_CHANGELOG, f),
+            None => BUILT_IN_CHANGELOG,
+        };
+        if *self.changelog_json() != QString::from(text) {
+            self.as_mut().set_changelog_json(QString::from(text));
+        }
     }
 
     /// Timer tick (start and every six hours).
@@ -3180,6 +3220,10 @@ impl cxx_qt::Initialize for qobject::AppController {
         }
         self.as_mut().publish_config();
         self.as_mut().refresh_devices();
+        // Newer versions an earlier update check fetched.
+        if let Ok(cached) = std::fs::read_to_string(config::changelog_cache_path()) {
+            self.as_mut().show_changelog(Some(cached));
+        }
 
         let self_test = std::env::args().any(|a| a == "--self-test" || a == "--screenshot");
         // Screenshots with live values: the service runs (no tray, no window

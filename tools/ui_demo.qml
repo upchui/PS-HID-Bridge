@@ -89,6 +89,20 @@ Main {
                         "Die Einstellungen konnten nicht gespeichert werden: /home/someone/.config/ps-hid-bridge/config.toml: No space left on device (os error 28). Änderungen gelten nur, bis die App geschlossen wird.");
         C.counterError = "No space left on device (os error 28)";
         C.latestVersion = "1.10.123";
+        // The newest release's changelog, fetched by the update check: a
+        // version newer than this app on top (entries are English in both).
+        const log = JSON.parse(C.changelogJson);
+        if (log.releases) {
+            log.releases.unshift({
+                version: "1.10.123", tag: "v1.10.123", build: false, date: "2026-12-24", compare: "v1.0.99...v1.10.123",
+                changes: [{
+                    area: "Desktop app", group: "app", hash: "0123abc", date: "2026-12-24",
+                    items: ["A change in the newest version with a long title that has to wrap in a narrow window"],
+                    details: [{ bullet: true, text: "What it does, why, and how it was tested, as the commit says." }]
+                }]
+            });
+            C.changelogJson = JSON.stringify(log);
+        }
         C.appUpdateAvailable = true;
         C.boardUpdateAvailable = true;
         C.canUpdateApp = false;

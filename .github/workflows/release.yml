@@ -137,6 +137,9 @@ jobs:
           mkdir release
           cp out/*.uf2 out/PS-HID-Bridge-x86_64.AppImage release/
           cp out/pshb-cli release/pshb-cli-x86_64-linux
+          # The Changelog page's data (built into the app): older apps
+          # fetch it to show what a newer version brings.
+          cp .cache/build/changelog-x86_64.json release/changelog.json
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

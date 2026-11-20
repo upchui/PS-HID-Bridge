@@ -13,7 +13,18 @@ AppPage {
     id: page
 
     title: I18n.tr("Changelog")
-    subtitle: I18n.trf("Installed: version %1. What changed in each version, newest first.", AppController.version)
+    subtitle: AppController.latestVersion !== "" && AppController.latestVersion !== AppController.version
+              ? I18n.trf("Installed: version %1, newest: %2. What changed in each version, newest first.",
+                         AppController.version, AppController.latestVersion)
+              : I18n.trf("Installed: version %1. What changed in each version, newest first.", AppController.version)
+    // Also fetches the newest release's changelog (newer versions show up).
+    actions: AppButton {
+        text: I18n.tr("Check now")
+        icon.name: "update"
+        icon.color: Style.text
+        enabled: !AppController.updateBusy
+        onClicked: AppController.checkUpdates()
+    }
 
     readonly property var log: {
         try {
@@ -139,6 +150,8 @@ AppPage {
             required property var modelData
             readonly property var release: modelData.release
             readonly property bool installed: release.version === AppController.version
+            // Newer than this app: from the newest release's changelog.
+            readonly property bool newer: page.compareVersions(release.version, AppController.version) > 0
             // A narrow window: the link only as an icon, the title keeps its room.
             readonly property bool narrow: width < 560
             // A release (this build itself may be none yet): can be installed.
@@ -165,9 +178,14 @@ AppPage {
                     level: "ok"
                 },
                 Pill {
+                    visible: version.newer
+                    text: I18n.tr("new")
+                    level: "accent"
+                },
+                Pill {
                     visible: version.onBoard
                     text: I18n.tr("on the board")
-                    level: "accent"
+                    level: ""
                 },
                 AppButton {
                     visible: version.appOk || version.boardOk

@@ -41,6 +41,9 @@ pub fn cli_asset_for(arch: &str) -> String {
     format!("pshb-cli-{arch}-linux")
 }
 pub const FIRMWARE_ASSET: &str = "ps-hid-bridge.uf2";
+/// The Changelog page's data (tools/changelog.py), a file of every release
+/// since it was added.
+pub const CHANGELOG_ASSET: &str = "changelog.json";
 const SUMS_ASSET: &str = "SHA256SUMS";
 
 /// How long to wait between automatic checks.
@@ -125,6 +128,51 @@ pub fn release_for_tag(tag: &str) -> Option<Release> {
         page: format!("https://github.com/{REPO}/releases/tag/{tag}"),
         tag: tag.to_string(),
     })
+}
+
+/// The changelog of `release` (its changelog.json, checked against its
+/// SHA256SUMS), ready for the Changelog page: the section of commits after
+/// the newest tag is the build the release was made of, so it gets the
+/// release's tag (and can be installed from the page).
+pub fn changelog_of(release: &Release) -> Result<String, String> {
+    let data = download_verified(release, CHANGELOG_ASSET, &mut |_, _| {})?;
+    let text = String::from_utf8(data).map_err(|_| format!("{CHANGELOG_ASSET} is not text"))?;
+    tag_release_section(&text, release)
+}
+
+/// See [`changelog_of`]: the top section without a tag becomes `release`'s
+/// if it has its version.
+pub fn tag_release_section(text: &str, release: &Release) -> Result<String, String> {
+    let mut v: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("{CHANGELOG_ASSET}: {e}"))?;
+    let Some(releases) = v.get_mut("releases").and_then(|r| r.as_array_mut()) else {
+        return Err(format!("{CHANGELOG_ASSET}: no releases"));
+    };
+    if let Some(top) = releases.first_mut()
+        && top["tag"].as_str() == Some("")
+        && top["version"].as_str().and_then(Version::parse) == Some(release.version)
+    {
+        top["tag"] = serde_json::Value::from(release.tag.clone());
+        top["build"] = serde_json::Value::from(false);
+    }
+    Ok(v.to_string())
+}
+
+/// The newest version a changelog lists (its top section).
+pub fn changelog_version(text: &str) -> Option<Version> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    Version::parse(v["releases"].get(0)?["version"].as_str()?)
+}
+
+/// Of the changelog built into the app and a fetched one, the one that
+/// goes further (each lists every version before its newest); the built-in
+/// one if they go as far.
+pub fn newest_changelog<'a>(built_in: &'a str, fetched: &'a str) -> &'a str {
+    match (changelog_version(built_in), changelog_version(fetched)) {
+        (Some(a), Some(b)) if b > a => fetched,
+        (None, Some(_)) => fetched,
+        _ => built_in,
+    }
 }
 
 /// The oldest app that may be installed over this one: older ones drop the
@@ -793,6 +841,49 @@ mod install_tests {
         assert_eq!(release_for_tag("1.0.89"), None);
         assert_eq!(release_for_tag("controller-mode-experiment"), None);
         assert_eq!(release_for_tag(""), None);
+    }
+
+    fn log(top_version: &str, top_tag: &str) -> String {
+        serde_json::json!({
+            "repo": REPO,
+            "releases": [
+                { "version": top_version, "tag": top_tag, "build": top_tag.is_empty(), "date": "2026-11-20",
+                  "compare": "", "changes": [] },
+                { "version": "1.0.97", "tag": "v1.0.97", "build": false, "date": "2026-11-20",
+                  "compare": "", "changes": [] }
+            ]
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_fetched_changelog_names_its_release() {
+        let release = release_for_tag("v1.0.99").unwrap();
+        let tagged = tag_release_section(&log("1.0.99", ""), &release).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&tagged).unwrap();
+        assert_eq!(v["releases"][0]["tag"], "v1.0.99");
+        assert_eq!(v["releases"][0]["build"], false);
+        assert_eq!(v["releases"][1]["tag"], "v1.0.97");
+        // Another version on top (not this release's build): left alone.
+        let other = tag_release_section(&log("1.0.98", ""), &release).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&other).unwrap();
+        assert_eq!(v["releases"][0]["tag"], "");
+        assert!(tag_release_section("not json", &release).is_err());
+        assert!(tag_release_section("{}", &release).is_err());
+    }
+
+    #[test]
+    fn the_changelog_that_goes_further_counts() {
+        let built_in = log("1.0.99", "");
+        let newer = log("1.0.105", "v1.0.105");
+        let older = log("1.0.98", "v1.0.98");
+        assert_eq!(newest_changelog(&built_in, &newer), newer);
+        assert_eq!(newest_changelog(&built_in, &older), built_in);
+        assert_eq!(newest_changelog(&built_in, &built_in), built_in);
+        assert_eq!(newest_changelog(&built_in, "broken"), built_in);
+        // A development build without a changelog: the fetched one.
+        assert_eq!(newest_changelog("{}", &newer), newer);
+        assert_eq!(changelog_version(&newer), Some(Version(1, 0, 105)));
     }
 
     #[test]
