@@ -244,18 +244,24 @@ pub fn host_command(program: impl AsRef<OsStr>) -> Command {
         cmd.current_dir(dir);
     }
     cmd.process_group(0);
-    // SAFETY: only a system call between fork and exec (async-signal-safe).
+    // SAFETY: only system calls between fork and exec (async-signal-safe).
     // Close-on-exec, not closed: Rust's own pipe for exec errors stays
-    // usable. Kernels before 5.11 lack close_range: the files stay inherited.
+    // usable. Where close_range is missing (kernels before 5.11) or refused
+    // (a container's seccomp filter), the first descriptors one by one.
     unsafe {
         cmd.pre_exec(|| {
             const CLOSE_RANGE_CLOEXEC: libc::c_uint = 1 << 2;
-            libc::syscall(
+            let done = libc::syscall(
                 libc::SYS_close_range,
                 3 as libc::c_uint,
                 libc::c_uint::MAX,
                 CLOSE_RANGE_CLOEXEC,
-            );
+            ) == 0;
+            if !done {
+                for fd in 3..1024 {
+                    libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                }
+            }
             Ok(())
         });
     }
@@ -353,10 +359,15 @@ mod tests {
 
     #[test]
     fn programs_outside_inherit_no_files() {
-        // Opened without close-on-exec (as some libraries do).
+        // Opened without close-on-exec (as some libraries do), at a number
+        // the child's own files (ls opens /proc/self/fd as the lowest free
+        // one) do not reach.
         let path = std::ffi::CString::new("/proc/self/stat").unwrap();
-        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY) };
-        assert!(fd > 2);
+        let opened = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY) };
+        assert!(opened > 2);
+        let fd = unsafe { libc::dup2(opened, 200) };
+        assert_eq!(fd, 200);
+        unsafe { libc::close(opened) };
         let out = host_command("sh")
             .args(["-c", "ls /proc/self/fd"])
             .output()

@@ -1018,9 +1018,17 @@ mod tests {
         assert!(st.is_connected());
         let ow = st.oneway.expect("one-way time from PONG_TIMED");
         assert!(ow.history_ms.len() >= 5, "{}", ow.history_ms.len());
-        // Over loopback: well below the round trip, below a few ms.
+        // Over loopback: well below the round trip, below a few ms. Median
+        // against median: the latest round trip alone may be quicker than
+        // most (a busy machine, e.g. CI).
         assert!(ow.p50_us < 5_000.0, "{ow:?}");
-        assert!(ow.p50_us <= st.rtt.unwrap().as_micros() as f64 + 1.0);
+        let mut rtts: Vec<f64> = st.rtt_history.iter().map(|ms| ms * 1000.0).collect();
+        rtts.sort_by(f64::total_cmp);
+        let rtt_p50_us = rtts[rtts.len() / 2];
+        assert!(
+            ow.p50_us <= rtt_p50_us + 1.0,
+            "one way {ow:?}, round trips {rtts:?} µs"
+        );
     }
 
     #[test]
