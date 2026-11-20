@@ -5,6 +5,8 @@ import PSHIDBridge
 
 AppPage {
     id: page
+    // Show another page (Main.qml): "What's new" opens the changelog.
+    signal openPage(string name)
     // Every latency in µs (most are well below a millisecond), from 1 ms on in ms.
     function us(ms) {
         return Style.us(ms * 1000);
@@ -97,6 +99,27 @@ AppPage {
 
     // ------------------------------------------------------------ banners
     InstallBanner {}
+    // Once after an update: what changed.
+    Banner {
+        kind: "ok"
+        visible: AppController.whatsNew !== ""
+        text: I18n.trf("Updated to version %1.", AppController.whatsNew)
+        actions: [
+            AppButton {
+                text: I18n.tr("What's new")
+                highlighted: true
+                onClicked: {
+                    AppController.dismissWhatsNew();
+                    page.openPage("changelog");
+                }
+            },
+            AppButton {
+                text: I18n.tr("Dismiss")
+                flat: true
+                onClicked: AppController.dismissWhatsNew()
+            }
+        ]
+    }
     Banner {
         // Green for the offer and progress, yellow when something failed.
         kind: AppController.updateStatus !== "" && AppController.updateLevel === "warn" ? "warn" : "ok"

@@ -99,7 +99,7 @@ DESKTOP_RUN = $(DOCKER_RUN) $(CARGO_ENV) -e APPIMAGE_EXTRACT_AND_RUN=1 $(DESKTOP
 FW_RUN      = $(FW_DOCKER_RUN) $(FW_IMAGE)
 
 .PHONY: help all firmware desktop desktop-cli test test-firmware test-desktop test-appimage \
-        test-sim test-protocol test-uf2 sim udp-test fmt submodules check-pins check-version check-icons images \
+        test-sim test-protocol test-changelog test-uf2 sim udp-test fmt submodules check-pins check-version check-icons images \
         ui-shots \
         image-firmware image-rust image-desktop image-apptest print-version print-release-tag \
         print-toolchain-tag print-image-args \
@@ -198,7 +198,7 @@ desktop: image-desktop dirs
 	$(DESKTOP_RUN) bash desktop/packaging/build-appimage.sh
 
 # ---------------------------------------------------------------- tests
-test: check-version check-icons test-protocol test-firmware test-sim test-desktop
+test: check-version check-icons test-changelog test-protocol test-firmware test-sim test-desktop
 
 test-firmware: image-firmware dirs
 	$(FW_RUN) bash -c 'cmake -S firmware/host -B $(HOST_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=Debug \
@@ -209,6 +209,11 @@ test-firmware: image-firmware dirs
 test-uf2: firmware test-firmware
 	$(FW_RUN) env PSHB_TEST_UF2=out/ps-hid-bridge.uf2 PSHB_TEST_BIN=$(FW_BUILD)/ps-hid-bridge.bin \
 		$(HOST_BUILD)/test_uf2_writer
+
+# The changelog page's data can be made from this repository's history
+# (tools/changelog.py, also run by the AppImage build).
+test-changelog: image-firmware dirs
+	$(FW_RUN) python3 tools/changelog.py --check
 
 # Vectors are up to date and the Python reference agrees with them.
 test-protocol: image-firmware dirs

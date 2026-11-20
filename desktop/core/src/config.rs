@@ -289,6 +289,10 @@ pub struct Config {
     /// Keep the CPU out of deep sleep states while the bridge is on (faster
     /// reaction to input, a few watts more; see crate::lowlat::CpuWake).
     pub keep_cpu_awake: bool,
+    /// The newest app version whose changes the user has seen (GUI: after
+    /// an update the status page points to the changelog once).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub changelog_seen: String,
     /// Settings this version does not know (written by a newer one): kept
     /// and written back as they are.
     #[serde(flatten)]
@@ -319,6 +323,7 @@ impl Default for Config {
             language: "en".into(),
             ps_layout: String::new(),
             keep_cpu_awake: true,
+            changelog_seen: String::new(),
             extra: toml::Table::new(),
         }
     }

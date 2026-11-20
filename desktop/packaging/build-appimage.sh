@@ -14,6 +14,10 @@ TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/desktop/target}
 : "${PSHB_VERSION:?PSHB_VERSION not set (build with make desktop)}"
 PSHB_DATE=${PSHB_DATE:-$(date -u +%F)}
 
+# The changelog page's data, from git (compiled in, see desktop/ui/build.rs).
+export PSHB_CHANGELOG=$ROOT/.cache/build/changelog-$(uname -m).json
+python3 "$ROOT/tools/changelog.py" -o "$PSHB_CHANGELOG"
+
 cd "$ROOT/desktop"
 cargo build --release --locked -p ps-hid-bridge
 

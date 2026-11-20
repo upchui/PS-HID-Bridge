@@ -65,7 +65,8 @@ Controls.ApplicationWindow {
         { name: "triggers", text: I18n.tr("Triggers"), icon: "bolt" },
         { name: "board", text: I18n.tr("Board"), icon: "board" },
         { name: "latency", text: I18n.tr("Latency"), icon: "latency" },
-        { name: "firmware", text: I18n.tr("Firmware & updates"), icon: "update" }
+        { name: "firmware", text: I18n.tr("Firmware & updates"), icon: "update" },
+        { name: "changelog", text: I18n.tr("Changelog"), icon: "changelog" }
     ]
     readonly property var pageNames: pages.map(p => p.name)
     readonly property var pageComponents: ({
@@ -75,6 +76,7 @@ Controls.ApplicationWindow {
         "board": boardPage,
         "latency": latencyPage,
         "firmware": firmwarePage,
+        "changelog": changelogPage,
         "wizard": wizardPage
     })
     property string currentPage: ""
@@ -90,12 +92,13 @@ Controls.ApplicationWindow {
         currentItem = pageComponents[name].createObject(pageHost);
     }
 
-    Component { id: statusPage; StatusPage {} }
+    Component { id: statusPage; StatusPage { onOpenPage: name => root.showPage(name) } }
     Component { id: inputPage; InputPage {} }
     Component { id: triggersPage; TriggersPage {} }
     Component { id: boardPage; BoardPage {} }
     Component { id: latencyPage; LatencyPage {} }
     Component { id: firmwarePage; FirmwarePage {} }
+    Component { id: changelogPage; ChangelogPage {} }
     Component { id: wizardPage; WizardPage { onFinished: root.showPage("status") } }
 
     RowLayout {

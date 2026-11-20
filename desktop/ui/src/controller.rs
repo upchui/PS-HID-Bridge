@@ -160,6 +160,13 @@ pub mod qobject {
         #[qproperty(bool, access_busy)]
         #[qproperty(QString, access_message)]
         #[qproperty(QString, version)]
+        /// The changelog built into this version (tools/changelog.py):
+        /// {"repo", "releases": [{version, tag, date, build, compare,
+        /// changes: [{area, group, items, hash, date}]}]}, newest first.
+        #[qproperty(QString, changelog_json)]
+        /// This version, once after an update to it ("" = nothing new to
+        /// point to): the status page offers the changelog.
+        #[qproperty(QString, whats_new)]
         #[qproperty(bool, update_check)]
         #[qproperty(QString, appearance)]
         #[qproperty(QString, latest_version)]
@@ -344,6 +351,9 @@ pub mod qobject {
         /// Hide the offer (until the next start).
         #[qinvokable]
         fn dismiss_install(self: Pin<&mut AppController>);
+        /// The changes of this version were seen (or not wanted).
+        #[qinvokable]
+        fn dismiss_whats_new(self: Pin<&mut AppController>);
         /// Remove every rule the app installed as root and the access they
         /// gave (asks for the administrator password once); the settings
         /// stay. `cleanup_busy` meanwhile, then `cleanup_message`.
@@ -539,6 +549,8 @@ pub struct AppControllerRust {
     /// Watches the board's counters of refused packets.
     health: BoardHealth,
 
+    changelog_json: QString,
+    whats_new: QString,
     update_check: bool,
     appearance: QString,
     latest_version: QString,
@@ -729,6 +741,8 @@ impl Default for AppControllerRust {
             last_status: ServiceStatus::default(),
             last_live: None,
             health: BoardHealth::default(),
+            changelog_json: QString::from(include_str!(concat!(env!("OUT_DIR"), "/changelog.json"))),
+            whats_new: QString::default(),
             update_check: true,
             appearance: QString::from("system"),
             latest_version: QString::default(),
@@ -2467,6 +2481,29 @@ impl qobject::AppController {
         self.set_install_offer(QString::default());
     }
 
+    /// At start: after an update, point to what changed (once). The first
+    /// start of all only takes note of the version.
+    fn check_whats_new(mut self: Pin<&mut Self>) {
+        let Some(mine) = Version::of_this_program() else {
+            return; // a development build: no version to compare
+        };
+        let seen = Version::parse(&self.config_ref().changelog_seen);
+        if seen.is_some_and(|v| v < mine) {
+            self.as_mut().set_whats_new(QString::from(pshb_core::VERSION));
+        } else if seen.is_none() {
+            self.as_mut().rust_mut().config.changelog_seen = pshb_core::VERSION.into();
+            self.as_mut().save_config();
+        }
+    }
+
+    pub fn dismiss_whats_new(mut self: Pin<&mut Self>) {
+        self.as_mut().set_whats_new(QString::default());
+        if self.config_ref().changelog_seen != pshb_core::VERSION {
+            self.as_mut().rust_mut().config.changelog_seen = pshb_core::VERSION.into();
+            self.as_mut().save_config();
+        }
+    }
+
     pub fn set_app_language(mut self: Pin<&mut Self>, code: &QString) {
         let code = String::from(code);
         let code = if code == "de" { "de" } else { "en" };
@@ -3062,6 +3099,7 @@ impl cxx_qt::Initialize for qobject::AppController {
             }
             self.as_mut().set_can_update_app(appimage_path().is_some());
             self.as_mut().check_installation();
+            self.as_mut().check_whats_new();
             // Look for updates shortly after the start, then every six hours.
             let qt = self.qt_thread();
             let _ = thread::Builder::new()

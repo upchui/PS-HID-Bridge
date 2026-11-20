@@ -27,6 +27,7 @@ fn main() {
             "qml/RangeChart.qml",
             "qml/LeadMeter.qml",
             "qml/FirmwarePage.qml",
+            "qml/ChangelogPage.qml",
             "qml/WizardPage.qml",
             // building blocks
             "qml/AppPage.qml",
@@ -67,6 +68,19 @@ fn main() {
         .alias("app-icon.svg");
     let app_icon = QResources::new().resource(QResource::new().prefix("/ps-hid-bridge").file(icon_file));
     println!("cargo:rerun-if-changed=src/window_icon.h");
+
+    // The changelog (tools/changelog.py, written by build-appimage.sh),
+    // compiled in: OUT_DIR/changelog.json. A plain cargo build has none
+    // ("{}": the page says so).
+    println!("cargo:rerun-if-env-changed=PSHB_CHANGELOG");
+    let changelog = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("changelog.json");
+    match std::env::var("PSHB_CHANGELOG") {
+        Ok(path) if !path.is_empty() => {
+            println!("cargo:rerun-if-changed={path}");
+            std::fs::copy(&path, &changelog).unwrap_or_else(|e| panic!("PSHB_CHANGELOG {path}: {e}"));
+        }
+        _ => std::fs::write(&changelog, "{}").unwrap(),
+    }
 
     CxxQtBuilder::new_qml_module(module)
         .qrc_resources(app_icon)
