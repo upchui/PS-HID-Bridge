@@ -210,6 +210,7 @@ The board's side, stage by stage with measurements and clock speeds: [docs/laten
 - [The status page warns about the network adapter](docs/troubleshooting.md#the-status-page-warns-about-the-network-adapter)
 - [The board went back to the previous firmware after an update](docs/troubleshooting.md#the-board-went-back-to-the-previous-firmware-after-an-update)
 - [The search finds no board](docs/troubleshooting.md#the-search-finds-no-board)
+- [Installed with Shelly, but not in the Plasma menu](docs/troubleshooting.md#installed-with-shelly-but-not-in-the-plasma-menu)
 - [The status page warns about refused packets](docs/troubleshooting.md#the-status-page-warns-about-refused-packets)
 - [Reporting a problem](docs/troubleshooting.md#reporting-a-problem): "Save diagnostics" on "Firmware & updates"
 - **Forgot the web password:** hold the board's BOOTSEL button for 5 seconds while it runs, then let go. It restarts with factory settings (password, key and network settings are erased); set it up again from step 4 of the [Quick start](#quick-start).

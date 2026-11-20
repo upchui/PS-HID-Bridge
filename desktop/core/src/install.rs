@@ -10,11 +10,17 @@
 //! already, and where).
 //!
 //! Programs started from inside the AppImage must not see the paths into
-//! its mount (libraries, Qt plugins): [`host_command`].
+//! its mount (libraries, Qt plugins), nor inherit files open in it:
+//! [`host_command`].
+//!
+//! Shelly refreshes the desktop database but not KDE Plasma's menu cache
+//! (ksycoca): after installing or syncing, [`refresh_menu`] does, so the app
+//! shows in the menu (under Games) at once.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 
 use serde_json::Value;
 
@@ -22,6 +28,8 @@ use serde_json::Value;
 const DESKTOP_NAME: &str = "PS HID Bridge";
 /// The release files are called PS-HID-Bridge-<processor>.AppImage.
 const FILE_PREFIX: &str = "ps-hid-bridge";
+/// The desktop entry Shelly writes (it keeps the AppImage's desktop file ID).
+const DESKTOP_FILE: &str = "io.github.thealhu.pshidbridge.desktop";
 
 /// An AppImage in Shelly's record.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,10 +96,64 @@ pub fn record_outdated(recorded: &str, own: &str) -> bool {
 
 /// Shelly's program, if it is installed.
 pub fn shelly() -> Option<PathBuf> {
+    program("shelly")
+}
+
+/// A program in the PATH.
+fn program(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
-        .map(|dir| dir.join("shelly"))
+        .map(|dir| dir.join(name))
         .find(|p| is_executable(p))
+}
+
+fn xdg_dir(var: &str, fallback: &str) -> Option<PathBuf> {
+    std::env::var_os(var)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(fallback)))
+}
+
+/// Rebuild KDE Plasma's menu cache (kbuildsycoca6, or kbuildsycoca5), so
+/// a new or changed desktop entry shows in its menu at once. Nothing on
+/// other desktops (they read the desktop entries themselves).
+pub fn refresh_menu() {
+    let Some(tool) = program("kbuildsycoca6").or_else(|| program("kbuildsycoca5")) else {
+        return;
+    };
+    match host_command(&tool).output() {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => crate::logln!(
+            "PS HID Bridge: {} failed: {}",
+            tool.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Err(e) => crate::logln!("PS HID Bridge: {}: {e}", tool.display()),
+    }
+}
+
+/// KDE's menu cache is older than the app's desktop entry (installed or
+/// changed by hand with Shelly while the cache was not rebuilt).
+pub fn menu_outdated() -> bool {
+    let entry = xdg_dir("XDG_DATA_HOME", ".local/share").map(|d| d.join("applications").join(DESKTOP_FILE));
+    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let Some(entry_time) = entry.as_deref().and_then(modified) else {
+        return false; // no entry: nothing to show
+    };
+    let caches: Vec<SystemTime> = xdg_dir("XDG_CACHE_HOME", ".cache")
+        .and_then(|d| std::fs::read_dir(d).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("ksycoca"))
+        .filter_map(|e| modified(&e.path()))
+        .collect();
+    cache_behind(entry_time, &caches)
+}
+
+/// The newest cache is older than the entry (no cache: KDE builds one itself).
+fn cache_behind(entry: SystemTime, caches: &[SystemTime]) -> bool {
+    caches.iter().max().is_some_and(|newest| *newest < entry)
 }
 
 fn is_executable(p: &Path) -> bool {
@@ -139,10 +201,12 @@ pub fn install(path: &Path) -> Result<Installed, String> {
         path.as_os_str(),
         "--no-confirm".as_ref(),
     ])?;
-    match find(&list()?, path) {
-        Found::ThisFile(i) | Found::Elsewhere(i) => Ok(i),
-        Found::NotInstalled => Err("Shelly did not list the app after installing it".into()),
-    }
+    let found = match find(&list()?, path) {
+        Found::ThisFile(i) | Found::Elsewhere(i) => i,
+        Found::NotInstalled => return Err("Shelly did not list the app after installing it".into()),
+    };
+    refresh_menu();
+    Ok(found)
 }
 
 /// Shelly reads the installed AppImage `name` again (version, desktop
@@ -153,15 +217,19 @@ pub fn sync(name: &str) -> Result<(), String> {
         "appimage".as_ref(),
         name.as_ref(),
         "--no-confirm".as_ref(),
-    ])
-    .map(drop)
+    ])?;
+    refresh_menu();
+    Ok(())
 }
 
 /// A program on the host, started from inside the AppImage: without what
 /// its AppRun set up (paths into its mount in PATH, LD_LIBRARY_PATH, the Qt
 /// plugin paths …, which would load the AppImage's libraries or point into
-/// a folder that disappears when it ends), in the folder it was started
-/// from, and in its own process group (not ended together with the app).
+/// a folder that disappears when it ends), without the app's open files
+/// (one inside the mount would keep the old AppImage mounted, its runtime
+/// waiting, after a restart into another AppImage), in the folder it was
+/// started from, and in its own process group (not ended together with the
+/// app).
 pub fn host_command(program: impl AsRef<OsStr>) -> Command {
     use std::os::unix::process::CommandExt;
     let mut cmd = Command::new(program);
@@ -176,6 +244,21 @@ pub fn host_command(program: impl AsRef<OsStr>) -> Command {
         cmd.current_dir(dir);
     }
     cmd.process_group(0);
+    // SAFETY: only a system call between fork and exec (async-signal-safe).
+    // Close-on-exec, not closed: Rust's own pipe for exec errors stays
+    // usable. Kernels before 5.11 lack close_range: the files stay inherited.
+    unsafe {
+        cmd.pre_exec(|| {
+            const CLOSE_RANGE_CLOEXEC: libc::c_uint = 1 << 2;
+            libc::syscall(
+                libc::SYS_close_range,
+                3 as libc::c_uint,
+                libc::c_uint::MAX,
+                CLOSE_RANGE_CLOEXEC,
+            );
+            Ok(())
+        });
+    }
     cmd
 }
 
@@ -266,6 +349,33 @@ mod tests {
         }];
         assert!(matches!(find(&renamed, download), Found::Elsewhere(_)));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn programs_outside_inherit_no_files() {
+        // Opened without close-on-exec (as some libraries do).
+        let path = std::ffi::CString::new("/proc/self/stat").unwrap();
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY) };
+        assert!(fd > 2);
+        let out = host_command("sh")
+            .args(["-c", "ls /proc/self/fd"])
+            .output()
+            .unwrap();
+        let fds: Vec<i32> = String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .filter_map(|n| n.parse().ok())
+            .collect();
+        unsafe { libc::close(fd) };
+        assert!(!fds.contains(&fd), "fd {fd} inherited: {fds:?}");
+        assert!(fds.contains(&1), "its own output is there: {fds:?}");
+    }
+
+    #[test]
+    fn menu_cache_behind_the_entry() {
+        let t = |s: u64| SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(s);
+        assert!(cache_behind(t(100), &[t(50), t(90)]));
+        assert!(!cache_behind(t(100), &[t(50), t(110)]));
+        assert!(!cache_behind(t(100), &[]), "no cache: KDE builds one itself");
     }
 
     #[test]

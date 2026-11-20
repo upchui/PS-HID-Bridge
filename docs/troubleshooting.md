@@ -36,6 +36,10 @@ A USB network adapter with the `cdc_ncm` driver holds every outgoing packet back
 
 A new firmware starts "on trial" and is only accepted once it has started by itself and reaches the network chip; otherwise the board returns to the previous version after a restart, and the app says so. A board without the partition table from the first installation cannot fall back. See [Firmware update over the network](advanced-setup.md#firmware-update-over-the-network).
 
+## Installed with Shelly, but not in the Plasma menu
+
+KDE Plasma builds its menu from a cache of its own, which Shelly does not rebuild. The app does that when it installs itself ("Install with Shelly") and at its next start after an installation by hand; or run `kbuildsycoca6` once. The app is listed under Games.
+
 ## The search finds no board
 
 - **Older firmware** does not answer the search. Enter the address by hand once (your router lists the board as `ps-hid-bridge-XXXXXX`) and update the firmware ("Firmware & updates"); from then on it answers.

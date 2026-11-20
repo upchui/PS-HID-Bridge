@@ -2396,6 +2396,11 @@ impl qobject::AppController {
                                 pshb_core::logln!("PS HID Bridge: {e}");
                             }
                         });
+                } else if install::menu_outdated() {
+                    // Installed by hand: KDE's menu did not see the entry yet.
+                    let _ = thread::Builder::new()
+                        .name("pshb-menu".into())
+                        .spawn(install::refresh_menu);
                 }
                 ""
             }
