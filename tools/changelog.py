@@ -5,7 +5,10 @@ One section per release tag (v*), newest first; the commits after the newest
 tag form a section of their own with this build's version (PSHB_VERSION).
 Each commit subject "Area: outcome; outcome" becomes one change with its
 area, a group for the page's filter (app, board, other) and its outcomes
-as items. Build, CI and test commits are left out.
+as items; the commit's text below the subject becomes its details,
+paragraphs and "- " points with their lines joined (the page wraps them),
+without trailers such as Co-Authored-By. Build, CI and test commits are
+left out.
 
 Usage: tools/changelog.py [-o FILE]   write the JSON (default: stdout)
        tools/changelog.py --check     generate and check it (make test)
@@ -28,6 +31,8 @@ BOARD_WORDS = ("board", "firmware", "web interface", "usb", "bootsel")
 APP_WORDS = ("desktop", "app", "page", "cli", "shelly", "menu", "tray", "wizard")
 FALLBACK_COUNT = 50
 SEP_FIELD, SEP_RECORD = "\x1f", "\x1e"
+# Lines at the end of a commit text that name people, not changes.
+TRAILER = re.compile(r"^(co-authored-by|signed-off-by|reviewed-by|acked-by):", re.IGNORECASE)
 
 
 def git(*args):
@@ -53,18 +58,45 @@ def hidden(area):
     return bool(parts) and all(p in HIDDEN for p in parts)
 
 
-def change_of(short, date, subject):
+def details_of(body):
+    """A commit text as blocks {"bullet", "text"}: a blank line ends a block,
+    "- " (or "* ") at the start of a line begins a point, indented lines
+    continue it; line breaks become spaces."""
+    blocks = []
+    cur = None
+    for raw in body.splitlines():
+        line = raw.rstrip()
+        stripped = line.strip()
+        if TRAILER.match(stripped):
+            continue
+        if not stripped:
+            cur = None
+            continue
+        point = re.match(r"^[-*] +(.*)$", line)
+        if point:
+            cur = {"bullet": True, "text": point.group(1).strip()}
+            blocks.append(cur)
+        elif cur is None:
+            cur = {"bullet": False, "text": stripped}
+            blocks.append(cur)
+        else:
+            cur["text"] += " " + stripped
+    return blocks
+
+
+def change_of(short, date, subject, body=""):
     m = re.match(r"^([^:]{1,40}): (.+)$", subject)
     area, text = (m.group(1), m.group(2)) if m else ("", subject)
     if hidden(area):
         return None
     items = [t.strip() for t in text.split("; ") if t.strip()]
     items = [t[0].upper() + t[1:] for t in items]
-    return {"area": area, "group": group_of(area) if area else "other", "items": items, "hash": short, "date": date}
+    return {"area": area, "group": group_of(area) if area else "other", "items": items, "hash": short, "date": date,
+            "details": details_of(body)}
 
 
 def commits(rev_range, max_count=None):
-    args = ["log", "--no-merges", f"--format=%h{SEP_FIELD}%cs{SEP_FIELD}%s{SEP_RECORD}"]
+    args = ["log", "--no-merges", f"--format=%h{SEP_FIELD}%cs{SEP_FIELD}%s{SEP_FIELD}%b{SEP_RECORD}"]
     if max_count:
         args.append(f"--max-count={max_count}")
     out = []
@@ -72,8 +104,8 @@ def commits(rev_range, max_count=None):
         rec = rec.strip("\n")
         if not rec:
             continue
-        short, date, subject = rec.split(SEP_FIELD, 2)
-        c = change_of(short, date, subject)
+        short, date, subject, body = rec.split(SEP_FIELD, 3)
+        c = change_of(short, date, subject, body)
         if c:
             out.append(c)
     return out
@@ -134,8 +166,28 @@ def build():
     return {"repo": REPO, "releases": releases}
 
 
+# A commit text and what the page gets from it (--check).
+SAMPLE_BODY = """Why it happened, over
+two lines.
+
+- First point,
+  continued here.
+- Second point.
+Tests: the cases.
+
+Co-Authored-By: Someone <someone@example.com>
+"""
+SAMPLE_DETAILS = [
+    {"bullet": False, "text": "Why it happened, over two lines."},
+    {"bullet": True, "text": "First point, continued here."},
+    {"bullet": True, "text": "Second point. Tests: the cases."},
+]
+
+
 def check(data):
     errors = []
+    if details_of(SAMPLE_BODY) != SAMPLE_DETAILS:
+        errors.append(f"commit text split wrongly: {details_of(SAMPLE_BODY)}")
     if not data["releases"]:
         errors.append("no releases")
     for r in data["releases"]:
@@ -146,6 +198,11 @@ def check(data):
                 errors.append(f"{r['version']}: hidden area {c['area']!r}")
             if not c["items"] or c["group"] not in ("app", "board", "other"):
                 errors.append(f"{r['version']}: bad change {c}")
+            for d in c["details"]:
+                if not isinstance(d.get("bullet"), bool) or not d.get("text") or "\n" in d["text"]:
+                    errors.append(f"{r['version']} {c['hash']}: bad details block {d}")
+                elif TRAILER.match(d["text"]) or "Co-Authored-By" in d["text"]:
+                    errors.append(f"{r['version']} {c['hash']}: a trailer in the details")
     versions = [r["version"] for r in data["releases"]]
     if len(set(versions)) != len(versions):
         errors.append("versions twice")
@@ -165,7 +222,9 @@ def main():
         for e in errors:
             print(f"changelog: {e}", file=sys.stderr)
         n = sum(len(r["changes"]) for r in data["releases"])
-        print(f"changelog: {len(data['releases'])} versions, {n} changes" + (" -- FAILED" if errors else ""))
+        detailed = sum(1 for r in data["releases"] for c in r["changes"] if c["details"])
+        print(f"changelog: {len(data['releases'])} versions, {n} changes ({detailed} with details)"
+              + (" -- FAILED" if errors else ""))
         sys.exit(1 if errors else 0)
     text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     if args.output:

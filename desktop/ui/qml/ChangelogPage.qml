@@ -5,7 +5,8 @@ import PSHIDBridge
 
 // What changed in each version, newest first, the installed one marked.
 // Made from git when the app is built (tools/changelog.py): the entries are
-// the commit subjects (English), only the page's own texts are translated.
+// the commit subjects, their details the commit texts (English); only the
+// page's own texts are translated.
 AppPage {
     id: page
 
@@ -25,6 +26,8 @@ AppPage {
     property string group: "all"
     // Versions shown (more on request: there are many).
     property int shown: 5
+    // Every change's details open (else each opens on its own).
+    property bool allDetails: false
     // [{release, changes}] with the changes of the filter, versions without any left out.
     readonly property var matching: releases
         .map(r => ({ release: r, changes: group === "all" ? r.changes : r.changes.filter(c => c.group === group) }))
@@ -58,23 +61,35 @@ AppPage {
         Layout.fillWidth: true
         visible: page.releases.length > 0
         spacing: 6
-        Segmented {
-            model: [
-                { value: "all", text: I18n.tr("All") },
-                { value: "app", text: I18n.tr("App") },
-                { value: "board", text: I18n.tr("Board") },
-                { value: "other", text: I18n.tr("Other") }
-            ]
-            value: page.group
-            onActivated: value => {
-                page.group = value;
-                page.shown = 5;
+        // Wraps below each other in a narrow window.
+        Flow {
+            Layout.fillWidth: true
+            spacing: Style.gap
+            Segmented {
+                id: filter
+                model: [
+                    { value: "all", text: I18n.tr("All") },
+                    { value: "app", text: I18n.tr("App") },
+                    { value: "board", text: I18n.tr("Board") },
+                    { value: "other", text: I18n.tr("Other") }
+                ]
+                value: page.group
+                onActivated: value => {
+                    page.group = value;
+                    page.shown = 5;
+                }
+            }
+            AppSwitch {
+                height: filter.height  // centred next to the filter
+                text: I18n.tr("Show all details")
+                checked: page.allDetails
+                onToggled: page.allDetails = checked
             }
         }
         Controls.Label {
             Layout.fillWidth: true
             visible: AppController.language !== "en"
-            text: I18n.tr("The entries are the titles of the changes in development, in English.")
+            text: I18n.tr("The entries are the titles and texts of the changes in development, in English.")
             color: Style.muted
             wrapMode: Text.WordWrap
         }
@@ -133,6 +148,9 @@ AppPage {
                 delegate: RowLayout {
                     id: change
                     required property var modelData
+                    // Its details: opened here, or all of them above.
+                    property bool open: false
+                    readonly property bool expanded: (page.allDetails || open) && modelData.details.length > 0
                     readonly property color tone: modelData.group === "board" ? (Style.dark ? Style.series[1] : Qt.darker(Style.series[1], 1.35))
                                                   : modelData.group === "app" ? Style.accent : Style.muted
                     Layout.fillWidth: true
@@ -185,6 +203,59 @@ AppPage {
                                     textFormat: Text.PlainText
                                     color: Style.text
                                     wrapMode: Text.WordWrap
+                                }
+                            }
+                        }
+                        // The commit's text, folded away until asked for.
+                        Controls.AbstractButton {
+                            id: more
+                            visible: change.modelData.details.length > 0 && !page.allDetails
+                            hoverEnabled: true
+                            padding: 0
+                            topPadding: 1
+                            text: change.open ? I18n.tr("Less") : I18n.tr("Details")
+                            Accessible.name: text
+                            contentItem: Controls.Label {
+                                text: more.text + (change.open ? " ▴" : " ▾")
+                                color: Style.accent
+                                font.pointSize: Style.fontSize * 0.9
+                                font.underline: more.hovered || more.visualFocus
+                            }
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                            onClicked: change.open = !change.open
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.topMargin: 2
+                            visible: change.expanded
+                            spacing: 4
+                            Repeater {
+                                // Built only once shown: many changes have long texts.
+                                model: change.expanded ? change.modelData.details : []
+                                delegate: RowLayout {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    Rectangle {
+                                        visible: modelData.bullet
+                                        Layout.alignment: Qt.AlignTop
+                                        Layout.topMargin: detail.font.pixelSize * 0.55
+                                        implicitWidth: 4
+                                        implicitHeight: 4
+                                        radius: 2
+                                        color: Style.muted
+                                    }
+                                    Controls.Label {
+                                        id: detail
+                                        Layout.fillWidth: true
+                                        text: modelData.text
+                                        textFormat: Text.PlainText
+                                        color: Style.muted
+                                        wrapMode: Text.WordWrap
+                                        font.pointSize: Style.fontSize * 0.92
+                                    }
                                 }
                             }
                         }
