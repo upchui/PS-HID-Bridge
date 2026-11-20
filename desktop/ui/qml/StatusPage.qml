@@ -60,6 +60,18 @@ AppPage {
     // it, the mouse or its wireless receiver lost the release.
     property bool mouseHeldLong: false
 
+    // Counts from the last change of what is held (any other key restarts
+    // it). Called on both changes: the app sets the text before the button
+    // state, so on the text change alone the button state is still the old
+    // one (a release would start the timer). The last call sees both new.
+    function watchMouseHeld() {
+        page.mouseHeldLong = false;
+        if (AppController.liveMouseHeld)
+            mouseHeldTimer.restart();
+        else
+            mouseHeldTimer.stop();
+    }
+
     Timer {
         id: mouseHeldTimer
         interval: 3000
@@ -67,13 +79,8 @@ AppPage {
     }
     Connections {
         target: AppController
-        function onLiveTextChanged() {
-            page.mouseHeldLong = false;
-            if (AppController.liveMouseHeld)
-                mouseHeldTimer.restart();
-            else
-                mouseHeldTimer.stop();
-        }
+        function onLiveTextChanged() { page.watchMouseHeld(); }
+        function onLiveMouseHeldChanged() { page.watchMouseHeld(); }
     }
 
     // What is held, as chips: ["Shift", "A", "mouse: left"] (in the app's language).
