@@ -164,12 +164,12 @@ The board creates a new **session id** from the TRNG on every boot. After a rest
 
 A PONG counts only if it opens with the key and its `t_app_us` is from the last 2 s (and not in the future); other authentic PONGs are counted as stale. The app is "connected" while the last PONG that counted is less than 3 s old. A session hint does not switch the session by itself (it answers no ping, so a recorded one could be replayed): when it names another session, the app pings at once (at most every 5 ms), and the answer switches the session.
 
-**The board moves.** A MOVED counts only if it opens with the key, names the current session and its counter is higher than that of every PONG or MOVED of this session that counted before (the board's counter only rises within a session, so a recorded MOVED never counts again). Then the app sends to the new address at once and pings there; the bridge stays as it is (on stays on, the state is the same). Without a notice, the app looks for the board when it has not answered for 1.5 s with the bridge on (3 s with it off, or since the start without an answer):
+**The board moves.** A MOVED counts only if it opens with the key, names the current session and its counter is higher than that of every PONG or MOVED of this session that counted before (the board's counter only rises within a session, so a recorded MOVED never counts again). Then the app sends to the new address at once and pings there; the bridge stays as it is (on stays on, the state is the same). Without a notice, the app looks for the board when it has not answered for 1.5 s (bridge on or off), round after round without a pause until it answers again:
 
-1. Discovery (below) for the board's MAC address, learned from the board's discovery answer once it answered with the key; the first matching answer ends the wait.
-2. Its name, if it is set up under one (e.g. `ps-hid-bridge-96c33d.local`). An address from a name is only a candidate: DNS and mDNS caches may still give the old address. The old address is skipped, any other must answer discovery with the board's MAC address.
+1. Discovery (below) for the board's MAC address, learned from the board's discovery answer once it answered with the key. The desktop app asks the network all the time anyway (round after round, see Discovery) and finds the board in that list the moment it answers at its new address; `pshb-cli` asks in each round itself, and the first matching answer ends the wait.
+2. Its name, if it is set up under one (e.g. `ps-hid-bridge-96c33d.local`), looked up at most once a second. An address from a name is only a candidate: DNS and mDNS caches may still give the old address. The old address is skipped, any other must answer discovery with the board's MAC address.
 
-After a switch the board has 3 s to answer a ping there, else the search goes on. Without a result the next search follows after 3 s, then after twice as long each time, up to 30 s with the bridge on and 5 minutes with it off.
+After a switch the board has 3 s to answer a ping there, else the search goes on.
 
 ## Unencrypted debug mode (version 0)
 
@@ -247,7 +247,7 @@ Rules:
 - Only requests of exactly 64 bytes with this magic, version and type are answered: the answer is never larger than the request (no amplification).
 - At most 16 answers per second; further requests are dropped.
 - The board answers once it has an address (DHCP or static). Firmware before this feature does not answer.
-- The app sends the request to 255.255.255.255, to the broadcast address of each of its IPv4 networks and, in networks of up to 512 addresses, to every address once more. A firewall on the PC (ufw, firewalld) drops answers to a broadcast, which it cannot match to a request it let out; it lets in answers to a request to that address. The app keeps the MAC address of the board it uses and looks for it this way when the board no longer answers at its address and did not say where it went (MOVED): see "Behaviour of the app". A running bridge then sends to the new address and stays on.
+- The app sends the request to 255.255.255.255, to the broadcast address of each of its IPv4 networks and, in networks of up to 512 addresses, to every address once more. A firewall on the PC (ufw, firewalld) drops answers to a broadcast, which it cannot match to a request it let out; it lets in answers to a request to that address. The desktop app asks all the time, on a thread of its own: one round after the other without a pause (each listens 1 s for answers), to the broadcast addresses, and every 30 s to every address of the small networks too (each address that does not exist costs an ARP request, so not every round). A board that has not answered for 5 s leaves its list. The app keeps the MAC address of the board it uses and finds it in that list when the board no longer answers at its address and did not say where it went (MOVED): see "Behaviour of the app". A running bridge then sends to the new address and stays on.
 
 ## Test vectors
 

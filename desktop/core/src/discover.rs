@@ -6,11 +6,19 @@
 //! [`SWEEP_MAX`] addresses, to every address once more: a firewall on this PC
 //! (ufw, firewalld) drops answers to a broadcast, which it cannot match to a
 //! request it let out, but lets answers to a request to that address in.
+//!
+//! The app asks all the time ([`Watcher`], a thread of its own): one round
+//! after the other without a pause, so its list of boards is always current
+//! and a board that got another address is found the moment it answers.
 
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::follow::Finder;
 use crate::protocol::{DISCOVERY_PORT, UDP_PORT_DEFAULT};
 use crate::update::Version;
 
@@ -240,12 +248,18 @@ pub fn ipv4_networks() -> Vec<Ipv4Net> {
     nets
 }
 
-/// Where the request goes for these networks: the general and each
-/// network's broadcast address, then every address of the small networks.
-pub fn targets(nets: &[Ipv4Net]) -> Vec<Ipv4Addr> {
+/// The general and each network's broadcast address.
+pub fn broadcast_targets(nets: &[Ipv4Net]) -> Vec<Ipv4Addr> {
     let mut broadcast = vec![Ipv4Addr::BROADCAST];
     broadcast.extend(nets.iter().filter_map(Ipv4Net::broadcast));
     broadcast.dedup();
+    broadcast
+}
+
+/// Where the request goes for these networks: the general and each
+/// network's broadcast address, then every address of the small networks.
+pub fn targets(nets: &[Ipv4Net]) -> Vec<Ipv4Addr> {
+    let mut broadcast = broadcast_targets(nets);
     let mut sweep: Vec<Ipv4Addr> = nets
         .iter()
         .flat_map(|n| n.hosts(SWEEP_MAX))
@@ -330,6 +344,175 @@ fn ask(
         }
     }
     Ok(found)
+}
+
+/// A round of the [`Watcher`] listens this long for answers; the next one
+/// starts right after it.
+pub const WATCH_ROUND: Duration = Duration::from_secs(1);
+/// A board that did not answer for this long leaves the list.
+pub const WATCH_EXPIRE: Duration = Duration::from_secs(5);
+/// Every address of the small networks is asked this often (the other
+/// rounds ask the broadcast addresses only): needed only where a firewall
+/// on this PC drops answers to a broadcast, and each address that does not
+/// exist costs an ARP request.
+pub const SWEEP_EVERY: Duration = Duration::from_secs(30);
+
+struct WatchShared {
+    stop: AtomicBool,
+    /// Each board (by MAC address) as it answered last, and when.
+    seen: Mutex<Vec<(FoundBoard, Instant)>>,
+    expire: Duration,
+    port: u16,
+}
+
+impl WatchShared {
+    fn fresh(&self) -> Vec<FoundBoard> {
+        let mut list: Vec<FoundBoard> = self
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, t)| t.elapsed() < self.expire)
+            .map(|(b, _)| b.clone())
+            .collect();
+        list.sort_by(|a, b| a.name.cmp(&b.name).then(a.ip.cmp(&b.ip)));
+        list
+    }
+}
+
+/// Looks for boards all the time, on a thread of its own: round after round
+/// without a pause ([`WATCH_ROUND`]), the broadcast addresses each time and
+/// every address of the small networks every [`SWEEP_EVERY`]. Its list is
+/// the boards that answered within [`WATCH_EXPIRE`]. Stops when dropped.
+pub struct Watcher {
+    shared: Arc<WatchShared>,
+}
+
+impl Watcher {
+    /// `targets`: where the requests go (None: the networks of this PC, read
+    /// anew each round); `on_change`: the list, each time it changed (a board
+    /// came, went, or answers from another address or with another name).
+    pub fn start(
+        targets: Option<Vec<Ipv4Addr>>,
+        port: u16,
+        on_change: impl Fn(Vec<FoundBoard>) + Send + 'static,
+    ) -> io::Result<Self> {
+        Self::start_with(targets, port, WATCH_ROUND, WATCH_EXPIRE, on_change)
+    }
+
+    fn start_with(
+        targets: Option<Vec<Ipv4Addr>>,
+        port: u16,
+        round: Duration,
+        expire: Duration,
+        on_change: impl Fn(Vec<FoundBoard>) + Send + 'static,
+    ) -> io::Result<Self> {
+        let shared = Arc::new(WatchShared {
+            stop: AtomicBool::new(false),
+            seen: Mutex::new(Vec::new()),
+            expire,
+            port,
+        });
+        let s = shared.clone();
+        thread::Builder::new()
+            .name("pshb-discover".into())
+            .spawn(move || watch(&s, targets, round, on_change))?;
+        Ok(Self { shared })
+    }
+
+    /// The boards that answered lately, sorted by name and address.
+    pub fn boards(&self) -> Vec<FoundBoard> {
+        self.shared.fresh()
+    }
+
+    /// The search of a link (crate::follow) from this list: a board that
+    /// moved is found the moment it answers, without asking anew.
+    pub fn finder(&self) -> Arc<dyn Finder> {
+        Arc::new(WatchFinder(self.shared.clone()))
+    }
+}
+
+impl Drop for Watcher {
+    fn drop(&mut self) {
+        // Not joined: the round ends within WATCH_ROUND by itself.
+        self.shared.stop.store(true, Ordering::Release);
+    }
+}
+
+fn watch(
+    s: &WatchShared,
+    targets: Option<Vec<Ipv4Addr>>,
+    round: Duration,
+    on_change: impl Fn(Vec<FoundBoard>),
+) {
+    let mut last_sweep: Option<Instant> = None;
+    let mut shown: Vec<FoundBoard> = Vec::new();
+    while !s.stop.load(Ordering::Acquire) {
+        let to = match &targets {
+            Some(t) => t.clone(),
+            None => {
+                let nets = ipv4_networks();
+                if last_sweep.is_none_or(|t| t.elapsed() >= SWEEP_EVERY) {
+                    last_sweep = Some(Instant::now());
+                    self::targets(&nets)
+                } else {
+                    broadcast_targets(&nets)
+                }
+            }
+        };
+        let answered = match ask(&to, s.port, round, |_| s.stop.load(Ordering::Acquire)) {
+            Ok(a) => a,
+            Err(_) => {
+                // No socket (yet): not again at once.
+                thread::sleep(round);
+                continue;
+            }
+        };
+        let now = Instant::now();
+        {
+            let mut seen = s.seen.lock().unwrap();
+            for b in answered {
+                match seen.iter_mut().find(|(o, _)| o.mac == b.mac) {
+                    Some(entry) => *entry = (b, now),
+                    None => seen.push((b, now)),
+                }
+            }
+            seen.retain(|(_, t)| t.elapsed() < s.expire);
+        }
+        let list = s.fresh();
+        if list != shown {
+            shown = list.clone();
+            on_change(list);
+        }
+    }
+}
+
+/// [`Finder`] from the [`Watcher`]'s list.
+struct WatchFinder(Arc<WatchShared>);
+
+impl Finder for WatchFinder {
+    fn find_mac(&self, mac: &str) -> Option<SocketAddr> {
+        self.0
+            .fresh()
+            .into_iter()
+            .find(|b| b.mac_string().eq_ignore_ascii_case(mac))
+            .map(|b| SocketAddr::new(IpAddr::V4(b.ip), b.udp_port))
+    }
+
+    fn probe(&self, ip: Ipv4Addr) -> Option<(String, String)> {
+        // Not in the list (another network, a firewall): asked directly.
+        let found = self.0.fresh().into_iter().find(|b| b.ip == ip);
+        found
+            .or_else(|| probe(ip, self.0.port, DISCOVER_TIMEOUT).ok().flatten())
+            .map(|b| (b.mac_string(), b.name))
+    }
+
+    fn resolve(&self, host: &str) -> Vec<IpAddr> {
+        (host, 0)
+            .to_socket_addrs()
+            .map(|a| a.map(|a| a.ip()).collect())
+            .unwrap_or_default()
+    }
 }
 
 /// The board at `ip`, if it answers within `timeout` (asked twice, in case
@@ -564,6 +747,117 @@ mod tests {
             Duration::from_millis(200),
         );
         assert_eq!(other.unwrap(), None);
+    }
+
+    /// A board at `ip:port` (port 0: any) answering with MAC address
+    /// 02:68:9d:96:c3:<last> and `name`; counts the requests, stops with the flag.
+    fn board_at(
+        ip: Ipv4Addr,
+        port: u16,
+        last: u8,
+        name: &str,
+    ) -> (u16, Arc<AtomicBool>, Arc<std::sync::atomic::AtomicUsize>) {
+        let sock = UdpSocket::bind((ip, port)).unwrap();
+        sock.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+        let port = sock.local_addr().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut a = answer();
+        a[17] = last;
+        a[24..56].fill(0);
+        a[24..24 + name.len()].copy_from_slice(name.as_bytes());
+        let (s2, a2) = (stop.clone(), asked.clone());
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 128];
+            while !s2.load(Ordering::Acquire) {
+                if let Ok((n, from)) = sock.recv_from(&mut buf)
+                    && buf[..n] == request()
+                {
+                    a2.fetch_add(1, Ordering::Relaxed);
+                    let _ = sock.send_to(&a, from);
+                }
+            }
+        });
+        (port, stop, asked)
+    }
+
+    /// The watcher's lists as they change.
+    fn watching(targets: Vec<Ipv4Addr>, port: u16) -> (Watcher, std::sync::mpsc::Receiver<Vec<FoundBoard>>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let w = Watcher::start_with(
+            Some(targets),
+            port,
+            Duration::from_millis(200),
+            Duration::from_millis(700),
+            move |list| {
+                let _ = tx.send(list);
+            },
+        )
+        .unwrap();
+        (w, rx)
+    }
+
+    #[test]
+    fn the_watcher_asks_without_a_pause_and_forgets_silent_boards() {
+        let ip = Ipv4Addr::new(127, 0, 0, 21);
+        let (port, stop, asked) = board_at(ip, 0, 0x3d, "board");
+        let (w, rx) = watching(vec![ip], port);
+        let list = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("found in the first round");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].ip, ip);
+        assert_eq!(w.boards(), list);
+        std::thread::sleep(Duration::from_millis(1000));
+        // Rounds of 200 ms, one after the other.
+        assert!(
+            asked.load(Ordering::Relaxed) >= 4,
+            "{}",
+            asked.load(Ordering::Relaxed)
+        );
+        // Gone: out of the list once it has been silent for the expiry.
+        stop.store(true, Ordering::Release);
+        let empty = rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("dropped from the list");
+        assert!(empty.is_empty());
+        assert!(w.boards().is_empty());
+    }
+
+    #[test]
+    fn the_watcher_sees_a_board_at_its_new_address_at_once() {
+        let old = Ipv4Addr::new(127, 0, 0, 22);
+        let new = Ipv4Addr::new(127, 0, 0, 23);
+        let (port, stop_old, _) = board_at(old, 0, 0x3d, "board");
+        let (w, rx) = watching(vec![old, new], port);
+        let finder = w.finder();
+        let list = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(list[0].ip, old);
+        assert_eq!(
+            finder.find_mac("02:68:9d:96:c3:3d"),
+            Some(SocketAddr::new(IpAddr::V4(old), list[0].udp_port))
+        );
+        // The same board (MAC address) answers from another address now.
+        stop_old.store(true, Ordering::Release);
+        let (_, stop_new, _) = board_at(new, port, 0x3d, "board");
+        let moved = loop {
+            let l = rx.recv_timeout(Duration::from_secs(2)).expect("the new address");
+            if l.first().map(|b| b.ip) == Some(new) {
+                break l;
+            }
+        };
+        assert_eq!(moved.len(), 1, "one board, at its new address");
+        assert_eq!(
+            finder.find_mac("02:68:9D:96:C3:3D").map(|a| a.ip()),
+            Some(IpAddr::V4(new))
+        );
+        assert_eq!(
+            finder.probe(new).map(|(mac, _)| mac),
+            Some("02:68:9d:96:c3:3d".into())
+        );
+        assert_eq!(finder.find_mac("02:00:00:00:00:01"), None);
+        stop_new.store(true, Ordering::Release);
+        drop(w);
     }
 
     #[test]

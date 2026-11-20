@@ -12,10 +12,15 @@
 //! does not answer), any other must answer discovery with the board's MAC
 //! address. After a switch the board has [`CONFIRM`] to answer an encrypted
 //! ping there, else the search goes on.
+//!
+//! It searches without a pause, round after round, until the board answers
+//! again. In the app the rounds look into the list of the network search
+//! that runs all the time ([`crate::discover::Watcher`]); elsewhere (the
+//! CLI) each round asks the network itself ([`NetFinder`]).
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::discover;
 use crate::protocol::DISCOVERY_PORT;
@@ -49,18 +54,12 @@ pub struct BoardMove {
     pub seq: u64,
 }
 
-/// No answer for this long with the bridge on: search (the app pings every
-/// second, so one answer is missing).
-pub const LOST_ACTIVE: Duration = Duration::from_millis(1500);
-/// The same with the bridge off.
-pub const LOST_IDLE: Duration = Duration::from_secs(3);
-/// After a search without result: the next one after this, doubling ...
-pub const FIRST_WAIT: Duration = Duration::from_secs(3);
-/// ... up to this with the bridge on ...
-pub const MAX_WAIT_ACTIVE: Duration = Duration::from_secs(30);
-/// ... and this with it off (a board that is switched off is not looked
-/// for all the time).
-pub const MAX_WAIT_IDLE: Duration = Duration::from_secs(300);
+/// No answer for this long: search (the app pings every second, so one
+/// answer is missing), with the bridge on or off.
+pub const LOST: Duration = Duration::from_millis(1500);
+/// The name is looked up at most this often while the search goes on (each
+/// lookup of a `.local` name may ask the network).
+pub const NAME_EVERY: Duration = Duration::from_secs(1);
 /// After a switch the board must answer there within this.
 pub const CONFIRM: Duration = Duration::from_secs(3);
 
@@ -75,20 +74,30 @@ pub trait Finder: Send + Sync {
     fn resolve(&self, host: &str) -> Vec<IpAddr>;
 }
 
-/// The real network: discovery by broadcast to every IPv4 network of this
-/// PC (or to `targets`), names through the system's resolver.
+/// The real network, asked anew each round: discovery to the broadcast
+/// addresses of every IPv4 network of this PC (every address of the small
+/// ones every [`discover::SWEEP_EVERY`]), or to `targets`; names through
+/// the system's resolver.
 pub struct NetFinder {
     /// Where discovery requests go; None = the networks of this PC.
-    pub targets: Option<Vec<Ipv4Addr>>,
-    pub port: u16,
+    targets: Option<Vec<Ipv4Addr>>,
+    port: u16,
+    last_sweep: Mutex<Option<Instant>>,
+}
+
+impl NetFinder {
+    pub fn new(targets: Option<Vec<Ipv4Addr>>, port: u16) -> Self {
+        Self {
+            targets,
+            port,
+            last_sweep: Mutex::new(None),
+        }
+    }
 }
 
 impl Default for NetFinder {
     fn default() -> Self {
-        Self {
-            targets: None,
-            port: DISCOVERY_PORT,
-        }
+        Self::new(None, DISCOVERY_PORT)
     }
 }
 
@@ -96,7 +105,16 @@ impl Finder for NetFinder {
     fn find_mac(&self, mac: &str) -> Option<SocketAddr> {
         let targets = match &self.targets {
             Some(t) => t.clone(),
-            None => discover::targets(&discover::ipv4_networks()),
+            None => {
+                let nets = discover::ipv4_networks();
+                let mut last = self.last_sweep.lock().unwrap();
+                if last.is_none_or(|t| t.elapsed() >= discover::SWEEP_EVERY) {
+                    *last = Some(Instant::now());
+                    discover::targets(&nets)
+                } else {
+                    discover::broadcast_targets(&nets)
+                }
+            }
         };
         discover::find_mac(mac, &targets, self.port, discover::DISCOVER_TIMEOUT)
             .ok()

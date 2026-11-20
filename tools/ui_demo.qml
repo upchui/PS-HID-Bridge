@@ -51,6 +51,7 @@ Main {
               mac: "02:11:22:a1:b2:c3", firmware: "1.0.99", key_set: false, current: false }
         ]);
         C.boardFirmware = "1.0.123";
+        C.searching = true;
         C.boardUsb = "PlayStation in rest mode";
         C.pskSet = true;
         C.rttMs = 0.912;

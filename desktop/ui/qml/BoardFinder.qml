@@ -3,9 +3,10 @@ import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import PSHIDBridge
 
-// Boards in the network (AppController.discoverBoards): one row per board
-// that answered the search; a tap takes its address. Boards with older
-// firmware do not answer and are entered by hand.
+// Boards in the network, from the search that runs all the time (its own
+// thread, round after round): one row per board that answers; a tap takes
+// its address. A turning symbol shows that the search goes on. Boards with
+// older firmware do not answer and are entered by hand.
 ColumnLayout {
     id: finder
     spacing: 8
@@ -14,42 +15,52 @@ ColumnLayout {
     signal picked(string address)
     // The address in the page's field: that board's row is marked.
     property string selectedAddress: ""
-    // A search ran while this page is open (an empty list then means: none
-    // answered, not: not asked yet).
-    property bool searched: false
+    // The page has been open long enough for every board to have answered
+    // (an empty list then means: none answers, not: still looking).
+    property bool settled: false
 
     readonly property var boards: JSON.parse(AppController.foundBoardsJson)
 
-    function search() {
-        searched = true;
-        AppController.discoverBoards();
+    Timer {
+        interval: 3000
+        running: true
+        onTriggered: finder.settled = true
     }
 
     RowLayout {
         Layout.fillWidth: true
         spacing: 8
+        // Turns while the search runs.
+        AppIcon {
+            id: spinner
+            name: "reconnect"
+            color: Style.accent
+            implicitWidth: 16
+            implicitHeight: 16
+            visible: AppController.searching
+            RotationAnimation on rotation {
+                running: spinner.visible
+                from: 0
+                to: 360
+                duration: 1200
+                loops: Animation.Infinite
+            }
+        }
         Controls.Label {
             Layout.fillWidth: true
-            text: AppController.discoverBusy ? I18n.tr("Looking for boards in the network …")
-                  : finder.boards.length === 1 ? I18n.tr("1 board in the network")
-                  : finder.boards.length > 1 ? I18n.trf("%1 boards in the network – pick yours", finder.boards.length)
-                  : I18n.tr("Find the board in this network.")
+            text: !AppController.searching ? I18n.tr("The search in the network is not running.")
+                  : finder.boards.length === 1 ? I18n.tr("Searching the network · 1 board")
+                  : finder.boards.length > 1 ? I18n.trf("Searching the network · %1 boards – pick yours", finder.boards.length)
+                  : I18n.tr("Searching the network …")
             color: Style.muted
-            elide: Text.ElideRight
-        }
-        AppButton {
-            text: AppController.discoverBusy ? I18n.tr("Searching …") : I18n.tr("Search")
-            icon.name: "network"
-            icon.color: enabled ? Style.text : Style.disabled
-            enabled: !AppController.discoverBusy
-            onClicked: finder.search()
+            wrapMode: Text.WordWrap
         }
     }
 
     Controls.Label {
         Layout.fillWidth: true
-        visible: finder.searched && !AppController.discoverBusy && finder.boards.length === 0
-        text: I18n.tr("No board answered. Is it plugged in and connected to this network? Boards with older "
+        visible: finder.settled && AppController.searching && finder.boards.length === 0
+        text: I18n.tr("No board answers. Is it plugged in and connected to this network? Boards with older "
                       + "firmware do not answer the search: enter the address by hand (your router lists the "
                       + "board as ps-hid-bridge-…).")
         color: Style.muted

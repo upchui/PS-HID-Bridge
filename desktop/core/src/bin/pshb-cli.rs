@@ -428,10 +428,10 @@ fn start_link_rt(
         let mac = (board == ctx.config.board && !ctx.config.board_mac.is_empty())
             .then(|| ctx.config.board_mac.clone());
         let mut fc = FollowConfig::new(follow::host_name(board), mac);
-        fc.finder = Arc::new(NetFinder {
-            targets: (!f.discovery_hosts.is_empty()).then(|| f.discovery_hosts.clone()),
-            port: f.discovery_port,
-        });
+        fc.finder = Arc::new(NetFinder::new(
+            (!f.discovery_hosts.is_empty()).then(|| f.discovery_hosts.clone()),
+            f.discovery_port,
+        ));
         cfg.follow = Some(fc);
     }
     Link::start(cfg).map_err(|e| format!("UDP: {e}"))

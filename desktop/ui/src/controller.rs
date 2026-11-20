@@ -192,11 +192,12 @@ pub mod qobject {
         #[qproperty(QString, board_info_json)]
         #[qproperty(QString, board_info_error)]
         #[qproperty(bool, board_info_busy)]
-        /// Boards that answered the last search in the network (see
-        /// discover_boards), JSON [{name, address, ip, mac, firmware,
-        /// key_set, current}]; `current`: the board in the settings.
+        /// Boards in the network, as the search that runs all the time
+        /// finds them (discover::Watcher), JSON [{name, address, ip, mac,
+        /// firmware, key_set, current}]; `current`: the board in the settings.
         #[qproperty(QString, found_boards_json)]
-        #[qproperty(bool, discover_busy)]
+        /// The search in the network runs (all the time, from the start).
+        #[qproperty(bool, searching)]
         /// The connected board's name ("" = not known yet), from its
         /// discovery answer; rename_board changes it.
         #[qproperty(QString, board_name)]
@@ -246,10 +247,6 @@ pub mod qobject {
         /// (Re)connect with the stored settings.
         #[qinvokable]
         fn reconnect(self: Pin<&mut AppController>);
-        /// Look for boards in the network (`discover_busy` meanwhile, the
-        /// result in `found_boards_json`).
-        #[qinvokable]
-        fn discover_boards(self: Pin<&mut AppController>);
         /// Give the board a name (signed with the key; "" = its default
         /// name); `rename_busy` meanwhile, then `rename_message`.
         #[qinvokable]
@@ -582,14 +579,17 @@ pub struct AppControllerRust {
     board_info_error: QString,
     board_info_busy: bool,
     found_boards_json: QString,
-    discover_busy: bool,
+    searching: bool,
     board_name: QString,
     board_mac: QString,
     rename_busy: bool,
     rename_message: QString,
     rename_level: QString,
-    /// The last search's boards (`found_boards_json`).
+    /// The boards the search sees (`found_boards_json`).
     found: Vec<FoundBoard>,
+    /// The search in the network, running all the time (not in the
+    /// self-test and screenshots).
+    watcher: Option<discover::Watcher>,
     /// The network name prefer_name looked up last (once per name).
     name_tried: String,
     clock_busy: bool,
@@ -765,13 +765,14 @@ impl Default for AppControllerRust {
             board_info_error: QString::default(),
             board_info_busy: false,
             found_boards_json: QString::from("[]"),
-            discover_busy: false,
+            searching: false,
             board_name: QString::default(),
             board_mac: QString::default(),
             rename_busy: false,
             rename_message: QString::default(),
             rename_level: QString::default(),
             found: Vec::new(),
+            watcher: None,
             name_tried: String::new(),
             clock_busy: false,
             clock_message: QString::default(),
@@ -1003,6 +1004,7 @@ impl qobject::AppController {
         let slot = self.rust().slot.clone();
         let generation = slot.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let cfg = self.config_ref().clone();
+        let finder = self.rust().watcher.as_ref().map(|w| w.finder());
         let problem = if cfg.board.is_empty() {
             Some(tr("Board address missing"))
         } else if !config::psk_path().exists() {
@@ -1043,10 +1045,15 @@ impl qobject::AppController {
                     // The link finds the board again when it moves (DHCP):
                     // by its MAC address, and by its name if it is set up
                     // under one.
-                    let follow = FollowConfig::new(
+                    let mut follow = FollowConfig::new(
                         follow::host_name(&cfg.board),
                         (!cfg.board_mac.is_empty()).then(|| cfg.board_mac.clone()),
                     );
+                    // From the search that runs all the time: found the
+                    // moment the board answers somewhere else.
+                    if let Some(f) = finder {
+                        follow.finder = f;
+                    }
                     let sc = ServiceConfig {
                         config: cfg,
                         key,
@@ -1659,8 +1666,8 @@ impl qobject::AppController {
                             "Renamed. In your router and the browser the board is now called %1.",
                             &[&host],
                         )));
-                        // The list shows the new name.
-                        obj.as_mut().discover_boards();
+                        // The list shows the new name with the search's
+                        // next round.
                     }
                     Err(e) => {
                         obj.as_mut().set_rename_level(QString::from("warn"));
@@ -1681,26 +1688,25 @@ impl qobject::AppController {
         ))
     }
 
-    pub fn discover_boards(mut self: Pin<&mut Self>) {
-        if *self.discover_busy() {
-            return;
+    /// Look for boards in the network all the time, on a thread of its own
+    /// (discover::Watcher): the list stays current, and the bridge finds a
+    /// board that moved from it (restart_service).
+    fn start_search(mut self: Pin<&mut Self>) {
+        let qt = self.qt_thread();
+        match discover::Watcher::start(None, protocol::DISCOVERY_PORT, move |list| {
+            let _ = qt.queue(move |obj| obj.boards_seen(list));
+        }) {
+            Ok(w) => {
+                self.as_mut().rust_mut().watcher = Some(w);
+                self.as_mut().set_searching(true);
+            }
+            Err(e) => pshb_core::logln!("PS HID Bridge: no search in the network: {e}"),
         }
-        self.as_mut().set_discover_busy(true);
-        let done = self.qt_thread();
-        let spawned = thread::Builder::new()
-            .name("pshb-discover".into())
-            .spawn(move || {
-                // No network at all: an empty list says the same.
-                let found = discover::discover(discover::DISCOVER_TIMEOUT).unwrap_or_default();
-                let _ = done.queue(move |mut obj| {
-                    obj.as_mut().set_discover_busy(false);
-                    obj.as_mut().rust_mut().found = found;
-                    obj.as_mut().publish_found();
-                });
-            });
-        if spawned.is_err() {
-            self.as_mut().set_discover_busy(false);
-        }
+    }
+
+    fn boards_seen(mut self: Pin<&mut Self>, list: Vec<FoundBoard>) {
+        self.as_mut().rust_mut().found = list;
+        self.as_mut().publish_found();
     }
 
     pub fn refresh_devices(mut self: Pin<&mut Self>) {
@@ -3235,6 +3241,8 @@ impl cxx_qt::Initialize for qobject::AppController {
             self.as_mut().restart_service();
         }
         if !self_test {
+            // First: the service takes its search for a moved board from it.
+            self.as_mut().start_search();
             let handle = tray::spawn(self.qt_thread());
             self.as_mut().rust_mut().tray = handle;
             self.as_mut().update_window_watcher();

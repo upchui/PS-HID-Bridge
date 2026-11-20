@@ -13,7 +13,6 @@ AppPage {
     property bool saved: false
 
     // Not set up yet: look for the board right away.
-    Component.onCompleted: if (AppController.boardAddress === "") finder.search()
 
     // The address without a port, ready for a URL: "host:port" -> "host",
     // "[fe80::1]:45045" -> "[fe80::1]", a bare IPv6 address gets brackets.
@@ -59,7 +58,7 @@ AppPage {
             selectedAddress: address.text.trim()
             onPicked: a => address.text = a
             // The only board found, while nothing is entered yet: take it.
-            onBoardsChanged: if (searched && boards.length === 1 && address.text.trim() === "")
+            onBoardsChanged: if (boards.length === 1 && address.text.trim() === "")
                                  address.text = boards[0].address
         }
 

@@ -22,9 +22,6 @@ AppPage {
         triggers.stopRecording();
         if (step === 2)
             AppController.refreshDevices();
-        // The board step with nothing set up: look for the board right away.
-        if (step === 1 && AppController.boardAddress === "" && !finder.searched)
-            finder.search();
     }
 
     // The board step: address or key typed but not saved with "Connect".
@@ -223,7 +220,7 @@ AppPage {
                     selectedAddress: address.text.trim()
                     onPicked: a => address.text = a
                     // The only board found, while nothing is entered yet: take it.
-                    onBoardsChanged: if (searched && boards.length === 1 && address.text.trim() === "")
+                    onBoardsChanged: if (boards.length === 1 && address.text.trim() === "")
                                          address.text = boards[0].address
                 }
 

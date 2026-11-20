@@ -715,36 +715,24 @@ fn follower(shared: Weak<Shared>, cfg: FollowConfig) {
     let mut mac = cfg.mac.clone();
     // The address whose board was asked who it is.
     let mut probed: Option<SocketAddr> = None;
-    let mut wait = follow::FIRST_WAIT;
-    let mut next_search: Option<Instant> = None;
     // After a switch: until then the board may answer at its new address.
     let mut confirm_until: Option<Instant> = None;
+    let mut name_at: Option<Instant> = None;
     loop {
         thread::sleep(TICK);
-        let (board, active, last_pong, name) = {
+        let (board, last_pong, name) = {
             let Some(s) = shared.upgrade() else { return };
             if s.stop.load(Ordering::Acquire) {
                 return;
             }
-            let (board, active) = {
-                let tx = s.tx.lock().unwrap();
-                (tx.board, tx.active)
-            };
+            let board = s.tx.lock().unwrap().board;
             let last_pong = s.status.lock().unwrap().last_pong;
             let name = s.follow_name.lock().unwrap().clone().or_else(|| cfg.name.clone());
-            (board, active, last_pong, name)
+            (board, last_pong, name)
         };
         let now = Instant::now();
         let silent = now.duration_since(last_pong.map_or(started, |t| t.max(started)));
-        // Never answered yet (a start at the last known address): soon.
-        let lost_after = if active || last_pong.is_none() {
-            follow::LOST_ACTIVE
-        } else {
-            follow::LOST_IDLE
-        };
-        if silent < lost_after {
-            wait = follow::FIRST_WAIT;
-            next_search = None;
+        if silent < follow::LOST {
             confirm_until = None;
             if probed != Some(board) {
                 probed = Some(board);
@@ -762,17 +750,21 @@ fn follower(shared: Weak<Shared>, cfg: FollowConfig) {
             }
             continue;
         }
-        if confirm_until.is_some_and(|t| now < t) || next_search.is_some_and(|t| now < t) {
+        if confirm_until.is_some_and(|t| now < t) {
             continue;
         }
-        let found = follow::search(&*cfg.finder, board, mac.as_deref(), name.as_deref());
-        let max = if active {
-            follow::MAX_WAIT_ACTIVE
-        } else {
-            follow::MAX_WAIT_IDLE
-        };
-        next_search = Some(Instant::now() + wait.min(max));
-        wait = (wait * 2).min(max);
+        // Round after round without a pause; the name not more often than
+        // NAME_EVERY.
+        let name_due = name.is_some() && name_at.is_none_or(|t| t.elapsed() >= follow::NAME_EVERY);
+        if name_due {
+            name_at = Some(now);
+        }
+        let found = follow::search(
+            &*cfg.finder,
+            board,
+            mac.as_deref(),
+            name.as_deref().filter(|_| name_due),
+        );
         if let Some((to, reason)) = found {
             let Some(s) = shared.upgrade() else { return };
             if s.stop.load(Ordering::Acquire) {
@@ -1388,7 +1380,7 @@ mod tests {
     }
 
     #[test]
-    fn with_the_bridge_off_the_search_waits_longer() {
+    fn the_search_goes_on_without_a_pause_also_with_the_bridge_off() {
         let mut old = FakeBoard::bound("127.0.0.10:0");
         let mut new = FakeBoard::bound("127.0.0.11:0");
         new.counter = 5000;
@@ -1396,17 +1388,20 @@ mod tests {
         let link = Link::start(following(old.addr(), &net, None, Some(MAC))).unwrap();
         old.run_for(Duration::from_millis(200));
         assert!(link.wait_connected(Duration::from_millis(500)));
+        // Gone, and nowhere to be found for a while (switched off).
+        net.broadcast.store(false, Ordering::Relaxed);
         *net.at.lock().unwrap() = new.addr();
+        thread::sleep(follow::LOST + Duration::from_millis(1000));
+        let searches = net.searches.load(Ordering::Relaxed);
+        assert!(searches >= 5, "round after round, {searches} in a second");
+        // Back (at another address): found at once.
+        net.broadcast.store(true, Ordering::Relaxed);
         let t = Instant::now();
-        while link.status().board_addr != Some(new.addr()) && t.elapsed() < Duration::from_secs(5) {
-            new.run_for(Duration::from_millis(50));
+        while link.status().board_addr != Some(new.addr()) && t.elapsed() < Duration::from_secs(2) {
+            new.run_for(Duration::from_millis(20));
         }
-        let after = t.elapsed();
         assert_eq!(link.status().board_addr, Some(new.addr()));
-        assert!(
-            after > Duration::from_millis(2500) && after < Duration::from_millis(4000),
-            "{after:?}"
-        );
+        assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
     }
 
     #[test]
