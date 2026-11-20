@@ -3,7 +3,9 @@ import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import PSHIDBridge
 
-// What changed in each version, newest first, the installed one marked.
+// What changed in each version, newest first, the installed one marked;
+// a released version can be installed from here (app and board firmware,
+// also an older one, from AppController.oldestAppInstall/oldestBoardInstall).
 // Made from git when the app is built (tools/changelog.py): the entries are
 // the commit subjects, their details the commit texts (English); only the
 // page's own texts are translated.
@@ -43,10 +45,33 @@ AppPage {
     function openOnGitHub(path) {
         Qt.openUrlExternally("https://github.com/" + page.repo + "/" + path);
     }
+    // "1.0.64" against "1.0.89": -1, 0 or 1.
+    function compareVersions(a, b) {
+        const pa = String(a).split(".").map(Number);
+        const pb = String(b).split(".").map(Number);
+        for (let i = 0; i < 3; i++) {
+            const d = (pa[i] || 0) - (pb[i] || 0);
+            if (d !== 0)
+                return d < 0 ? -1 : 1;
+        }
+        return 0;
+    }
 
+    // What an installation is doing, or how it ended.
+    Banner {
+        kind: AppController.updateLevel === "warn" ? "warn" : AppController.updateLevel === "ok" ? "ok" : "info"
+        visible: AppController.updateStatus !== ""
+        text: AppController.updateStatus
+        actions: AppButton {
+            text: I18n.tr("Restart now")
+            highlighted: true
+            visible: AppController.appUpdated
+            onClicked: AppController.restartApp()
+        }
+    }
     Banner {
         kind: "info"
-        visible: AppController.appUpdateAvailable
+        visible: AppController.appUpdateAvailable && AppController.updateStatus === ""
         text: I18n.trf("Version %1 is available for the app.", AppController.latestVersion)
         actions: AppButton {
             text: I18n.tr("Update app")
@@ -116,6 +141,16 @@ AppPage {
             readonly property bool installed: release.version === AppController.version
             // A narrow window: the link only as an icon, the title keeps its room.
             readonly property bool narrow: width < 560
+            // A release (this build itself may be none yet): can be installed.
+            readonly property bool released: (release.tag ?? "") !== ""
+            readonly property bool onBoard: AppController.boardFirmware !== ""
+                                            && release.version === AppController.boardFirmware
+            readonly property bool appTooOld: page.compareVersions(release.version, AppController.oldestAppInstall) < 0
+            readonly property bool boardTooOld: page.compareVersions(release.version, AppController.oldestBoardInstall) < 0
+            readonly property bool appOk: released && AppController.canUpdateApp && !installed && !appTooOld
+            readonly property bool boardOk: released && AppController.boardFirmware !== "" && !onBoard && !boardTooOld
+            // The choice below the title is open.
+            property bool asking: false
 
             title: I18n.trf("Version %1", release.version)
             subtitle: page.dateText(release.date) + " · "
@@ -128,6 +163,24 @@ AppPage {
                     visible: version.installed
                     text: I18n.tr("installed")
                     level: "ok"
+                },
+                Pill {
+                    visible: version.onBoard
+                    text: I18n.tr("on the board")
+                    level: "accent"
+                },
+                AppButton {
+                    visible: version.appOk || version.boardOk
+                    text: version.narrow ? "" : I18n.tr("Install …")
+                    icon.name: "download"
+                    icon.color: Style.text
+                    checkable: true
+                    checked: version.asking
+                    onClicked: version.asking = !version.asking
+                    Accessible.name: I18n.trf("Install version %1", version.release.version)
+                    Controls.ToolTip.visible: version.narrow && hovered
+                    Controls.ToolTip.text: I18n.trf("Install version %1", version.release.version)
+                    Controls.ToolTip.delay: 500
                 },
                 AppButton {
                     visible: version.release.compare !== "" && page.repo !== ""
@@ -142,6 +195,87 @@ AppPage {
                     onClicked: page.openOnGitHub("compare/" + version.release.compare)
                 }
             ]
+
+            // Which part to install, and what that does.
+            Rectangle {
+                visible: version.asking
+                Layout.fillWidth: true
+                implicitHeight: ask.implicitHeight + 2 * Style.pad
+                radius: Style.radius
+                color: Style.surfaceAlt
+                border.color: Style.border
+
+                ColumnLayout {
+                    id: ask
+                    anchors.fill: parent
+                    anchors.margins: Style.pad
+                    spacing: 10
+
+                    Controls.Label {
+                        Layout.fillWidth: true
+                        text: I18n.trf("Install version %1", version.release.version)
+                        color: Style.text
+                        font.weight: Font.DemiBold
+                        wrapMode: Text.WordWrap
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        visible: version.appOk
+                        spacing: 6
+                        Controls.Label {
+                            Layout.fillWidth: true
+                            text: I18n.tr("Desktop app: replaces this one, your settings stay (a copy of them is kept). Restart the app afterwards.")
+                            color: Style.muted
+                            wrapMode: Text.WordWrap
+                        }
+                        AppButton {
+                            text: I18n.trf("Install app %1", version.release.version)
+                            highlighted: true
+                            enabled: !AppController.updateBusy
+                            onClicked: {
+                                version.asking = false;
+                                AppController.installAppVersion(version.release.tag);
+                            }
+                        }
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        visible: version.boardOk
+                        spacing: 6
+                        Controls.Label {
+                            Layout.fillWidth: true
+                            text: AppController.active
+                                  ? I18n.tr("Board firmware: switch the bridge off first, the board restarts.")
+                                  : I18n.tr("Board firmware: the board restarts and keeps its key and settings. If this firmware does not start properly, the board goes back to the one it has now.")
+                            color: AppController.active ? Style.stateColor("warn") : Style.muted
+                            wrapMode: Text.WordWrap
+                        }
+                        AppButton {
+                            text: I18n.trf("Install firmware %1 on the board", version.release.version)
+                            highlighted: !version.appOk
+                            enabled: !AppController.updateBusy && !AppController.active
+                            onClicked: {
+                                version.asking = false;
+                                AppController.installBoardVersion(version.release.tag);
+                            }
+                        }
+                    }
+                    Controls.Label {
+                        Layout.fillWidth: true
+                        visible: version.boardTooOld && version.appOk
+                        text: I18n.trf("Firmware before %1 cannot be installed from here: the board would go back to the newer one at its next start.",
+                                       AppController.oldestBoardInstall)
+                        color: Style.muted
+                        wrapMode: Text.WordWrap
+                        font.pointSize: Style.fontSize * 0.92
+                    }
+                    AppButton {
+                        text: I18n.tr("Cancel")
+                        flat: true
+                        onClicked: version.asking = false
+                    }
+                }
+            }
 
             Repeater {
                 model: version.modelData.changes
@@ -282,6 +416,16 @@ AppPage {
                         }
                     }
                 }
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: version.released && version.appTooOld && version.boardTooOld
+                text: I18n.trf("Too old to install from here (the app from %1, the firmware from %2).",
+                               AppController.oldestAppInstall, AppController.oldestBoardInstall)
+                color: Style.muted
+                wrapMode: Text.WordWrap
+                font.pointSize: Style.fontSize * 0.92
             }
         }
     }

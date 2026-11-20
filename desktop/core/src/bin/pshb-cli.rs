@@ -204,19 +204,24 @@ enum Command {
         yes: bool,
     },
     /// Look for a newer release and install it: this program, or with
-    /// --firmware the board's firmware (signed with the key)
+    /// --firmware the board's firmware (signed with the key); with
+    /// --version a particular release, also an older one
     Update {
         #[command(flatten)]
         board: BoardArgs,
         /// Only show the installed and the newest versions
-        #[arg(long)]
+        #[arg(long, conflicts_with = "to_version")]
         check: bool,
         /// Update the board's firmware instead of this program
         #[arg(long)]
         firmware: bool,
         /// Firmware file to install instead of the newest release
-        #[arg(long, requires = "firmware")]
+        #[arg(long, requires = "firmware", conflicts_with = "to_version")]
         file: Option<PathBuf>,
+        /// Install this release instead of the newest, e.g. 1.0.89 (also an
+        /// older one: app from 1.0.32, firmware from 1.0.64)
+        #[arg(long = "version", value_name = "VERSION")]
+        to_version: Option<String>,
         /// Port of the board's web interface
         #[arg(long, default_value_t = 80)]
         http_port: u16,
@@ -1140,16 +1145,35 @@ fn board_firmware(ctx: &Ctx, board: &BoardArgs) -> Result<Version, String> {
         .ok_or_else(|| "No answer from the board.".into())
 }
 
+/// The release `--version` names ("1.0.89" or "v1.0.89"), if `target` may
+/// be installed in that version.
+fn chosen_release(version: &str, target: update::Target) -> Result<update::Release, String> {
+    let tag = format!("v{}", version.trim().trim_start_matches('v'));
+    let release = update::release_for_tag(&tag).ok_or_else(|| format!("Not a version: {version}"))?;
+    update::installable(target, release.version)?;
+    Ok(release)
+}
+
 fn cmd_update(
     ctx: &Ctx,
     board: &BoardArgs,
     check: bool,
     firmware: bool,
     file: Option<&Path>,
+    to_version: Option<&str>,
     http_port: u16,
 ) -> Result<(), String> {
     if firmware {
-        return update_firmware(ctx, board, file, http_port);
+        return update_firmware(ctx, board, file, to_version, http_port);
+    }
+    if let Some(version) = to_version {
+        let release = chosen_release(version, update::Target::App)?;
+        let exe = std::env::current_exe().map_err(|e| format!("Own path: {e}"))?;
+        let data =
+            update::download_verified(&release, &update::cli_asset(), &mut progress_printer("Download"))?;
+        update::replace_file(&exe, &data).map_err(|e| format!("{}: {e}", exe.display()))?;
+        println!("Installed pshb-cli {} as {}.", release.version, exe.display());
+        return Ok(());
     }
     let latest = update::latest_release()?;
     let this = Version::of_this_program();
@@ -1372,17 +1396,36 @@ fn board_running(ctx: &Ctx, board: &BoardArgs, http_port: u16) -> Result<(Versio
 
 /// Install firmware on the board (newest release or a file), then wait until
 /// it runs the new version.
-fn update_firmware(ctx: &Ctx, board: &BoardArgs, file: Option<&Path>, http_port: u16) -> Result<(), String> {
+fn update_firmware(
+    ctx: &Ctx,
+    board: &BoardArgs,
+    file: Option<&Path>,
+    to_version: Option<&str>,
+    http_port: u16,
+) -> Result<(), String> {
     let addr = board_addr(ctx, board)?;
     let key = load_key(board)?;
     let before = board_firmware_http(ctx, board, http_port).ok();
-    let (image, expected) = match file {
-        Some(f) => {
+    let (image, expected) = match (file, to_version) {
+        (Some(f), _) => {
             let data = std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?;
             usbflash::check_uf2(&data).map_err(|e| format!("{}: {e}", f.display()))?;
             (data, None)
         }
-        None => {
+        (None, Some(version)) => {
+            let release = chosen_release(version, update::Target::Firmware)?;
+            if before == Some(release.version) {
+                println!("The board runs firmware {} already.", release.version);
+                return Ok(());
+            }
+            let data = update::download_verified(
+                &release,
+                update::FIRMWARE_ASSET,
+                &mut progress_printer("Download"),
+            )?;
+            (data, Some(release.version))
+        }
+        (None, None) => {
             let latest = update::latest_release()?;
             if let Some(b) = before
                 && latest.version <= b
@@ -1648,8 +1691,17 @@ fn main() -> ExitCode {
             check,
             firmware,
             file,
+            to_version,
             http_port,
-        } => cmd_update(&ctx, board, *check, *firmware, file.as_deref(), *http_port),
+        } => cmd_update(
+            &ctx,
+            board,
+            *check,
+            *firmware,
+            file.as_deref(),
+            to_version.as_deref(),
+            *http_port,
+        ),
         Command::Flash { image, file, yes } => cmd_flash(image.image(), file.as_deref(), *yes),
         Command::Board {
             board,

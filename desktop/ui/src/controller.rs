@@ -175,6 +175,10 @@ pub mod qobject {
         #[qproperty(bool, board_update_available)]
         #[qproperty(bool, can_update_app)]
         #[qproperty(bool, app_updated)]
+        /// The oldest app and firmware versions the changelog page offers to
+        /// install (update::OLDEST_APP_INSTALL, OLDEST_FIRMWARE_INSTALL).
+        #[qproperty(QString, oldest_app_install)]
+        #[qproperty(QString, oldest_board_install)]
         #[qproperty(bool, update_busy)]
         #[qproperty(QString, update_status)]
         /// How `update_status` reads: "info" (working, a note), "ok" (done)
@@ -407,6 +411,14 @@ pub mod qobject {
         /// Install the newest firmware on the board (the bridge must be off).
         #[qinvokable]
         fn update_board(self: Pin<&mut AppController>);
+        /// Install the app of release `tag` ("v1.0.89"), also an older one
+        /// (from update::OLDEST_APP_INSTALL); then restart_app.
+        #[qinvokable]
+        fn install_app_version(self: Pin<&mut AppController>, tag: &QString);
+        /// Install the firmware of release `tag` on the board, also an
+        /// older one (from update::OLDEST_FIRMWARE_INSTALL).
+        #[qinvokable]
+        fn install_board_version(self: Pin<&mut AppController>, tag: &QString);
 
         /// Fetch the board's status, diagnostics and clock speeds (in the
         /// background; ignored while a fetch is running).
@@ -559,6 +571,8 @@ pub struct AppControllerRust {
     board_update_available: bool,
     can_update_app: bool,
     app_updated: bool,
+    oldest_app_install: QString,
+    oldest_board_install: QString,
     update_busy: bool,
     update_status: QString,
     update_level: QString,
@@ -737,6 +751,8 @@ impl Default for AppControllerRust {
             board_update_available: false,
             can_update_app: false,
             app_updated: false,
+            oldest_app_install: QString::from(&update::OLDEST_APP_INSTALL.to_string()),
+            oldest_board_install: QString::from(&update::OLDEST_FIRMWARE_INSTALL.to_string()),
             update_busy: false,
             update_status: QString::default(),
             update_level: QString::from("info"),
@@ -2701,6 +2717,40 @@ impl qobject::AppController {
     }
 
     pub fn update_app(mut self: Pin<&mut Self>) {
+        if let Some(release) = self.rust().latest.clone() {
+            self.as_mut().install_app(release);
+        }
+    }
+
+    pub fn install_app_version(mut self: Pin<&mut Self>, tag: &QString) {
+        let tag = String::from(tag);
+        let Some(release) = update::release_for_tag(&tag) else {
+            return;
+        };
+        if let Err(e) = update::installable(update::Target::App, release.version) {
+            self.as_mut().update_message("warn", &e);
+            return;
+        }
+        // An older version may write the settings differently: a copy of
+        // them as they are now, named after this version.
+        if Version::of_this_program().is_some_and(|mine| release.version < mine) {
+            let path = config::config_path();
+            let copy = path.with_extension(format!("toml.{}", pshb_core::VERSION));
+            if path.exists()
+                && let Err(e) = std::fs::copy(&path, &copy)
+            {
+                self.as_mut().update_message(
+                    "warn",
+                    &trf("Settings not copied (%1): nothing installed.", &[&e.to_string()]),
+                );
+                return;
+            }
+        }
+        self.as_mut().install_app(release);
+    }
+
+    /// Download the app of `release` and replace this AppImage with it.
+    fn install_app(mut self: Pin<&mut Self>, release: Release) {
         if *self.update_busy() {
             return;
         }
@@ -2709,9 +2759,6 @@ impl qobject::AppController {
                 "warn",
                 &tr("This app does not run as an AppImage in a writable folder: download the new version from the release page."),
             );
-            return;
-        };
-        let Some(release) = self.rust().latest.clone() else {
             return;
         };
         self.as_mut().set_update_busy(true);
@@ -2749,13 +2796,19 @@ impl qobject::AppController {
             Ok(v) => {
                 self.as_mut().set_app_updated(true);
                 self.as_mut().set_app_update_available(false);
-                self.as_mut().update_message(
-                    "ok",
-                    &trf(
+                let older = Version::of_this_program().is_some_and(|mine| v < mine);
+                let text = if older {
+                    trf(
+                        "Version %1 is installed. Restart the app to use it. It offers the newest version again when it looks for updates (switch that off on \"Firmware & updates\").",
+                        &[&v.to_string()],
+                    )
+                } else {
+                    trf(
                         "Version %1 is installed. Restart the app to use it.",
                         &[&v.to_string()],
-                    ),
-                );
+                    )
+                };
+                self.as_mut().update_message("ok", &text);
             }
             Err(e) => self
                 .as_mut()
@@ -2904,6 +2957,25 @@ impl qobject::AppController {
     }
 
     pub fn update_board(mut self: Pin<&mut Self>) {
+        if let Some(release) = self.rust().latest.clone() {
+            self.as_mut().install_board(release);
+        }
+    }
+
+    pub fn install_board_version(mut self: Pin<&mut Self>, tag: &QString) {
+        let tag = String::from(tag);
+        let Some(release) = update::release_for_tag(&tag) else {
+            return;
+        };
+        if let Err(e) = update::installable(update::Target::Firmware, release.version) {
+            self.as_mut().update_message("warn", &e);
+            return;
+        }
+        self.as_mut().install_board(release);
+    }
+
+    /// Download the firmware of `release` and install it on the board.
+    fn install_board(mut self: Pin<&mut Self>, release: Release) {
         if *self.update_busy() {
             return;
         }
@@ -2914,9 +2986,6 @@ impl qobject::AppController {
             );
             return;
         }
-        let Some(release) = self.rust().latest.clone() else {
-            return;
-        };
         let key = match config::load_psk(&config::psk_path()) {
             Ok(k) => k,
             Err(e) => {

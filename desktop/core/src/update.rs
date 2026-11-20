@@ -113,6 +113,52 @@ impl Release {
     }
 }
 
+/// The release behind a tag ("v1.0.89"), for installing that version (also
+/// an older one); None if the tag names no version.
+pub fn release_for_tag(tag: &str) -> Option<Release> {
+    let tag = tag.trim();
+    if !tag.starts_with('v') {
+        return None;
+    }
+    Some(Release {
+        version: Version::parse(tag)?,
+        page: format!("https://github.com/{REPO}/releases/tag/{tag}"),
+        tag: tag.to_string(),
+    })
+}
+
+/// The oldest app that may be installed over this one: older ones drop the
+/// settings they do not know when they save (profiles, remapped keys, ...);
+/// from this version on they keep them for a newer one (config `extra`).
+pub const OLDEST_APP_INSTALL: Version = Version(1, 0, 32);
+/// The oldest firmware that may be installed: older firmware never confirms
+/// itself after an update over the network (its boot ROM call failed on
+/// core 1), so the board would be back at the newer one after its next
+/// restart. From this version on, an older firmware stays: the boot ROM
+/// erases the start of the newer one's slot when the older one confirms
+/// itself (a "version downgrade" of an A/B pair).
+pub const OLDEST_FIRMWARE_INSTALL: Version = Version(1, 0, 64);
+
+/// What is installed: this program, or the firmware on the board.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    App,
+    Firmware,
+}
+
+/// Whether `version` may be installed as `target`; the reason if not.
+pub fn installable(target: Target, version: Version) -> Result<(), String> {
+    match target {
+        Target::App if version < OLDEST_APP_INSTALL => Err(format!(
+            "App versions before {OLDEST_APP_INSTALL} would lose settings they do not know; install {OLDEST_APP_INSTALL} or newer."
+        )),
+        Target::Firmware if version < OLDEST_FIRMWARE_INSTALL => Err(format!(
+            "Firmware before {OLDEST_FIRMWARE_INSTALL} cannot stay installed (the board would return to the newer one); install {OLDEST_FIRMWARE_INSTALL} or newer."
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Upper limit for a download whose size the server does not announce.
 const MAX_DOWNLOAD: u64 = 256 << 20;
 
@@ -728,6 +774,37 @@ pub fn board_ota(host: &str, http_port: u16, psk: &[u8; 32], image: &[u8]) -> Re
         return Err(board_error(&mut resp));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod install_tests {
+    use super::*;
+
+    #[test]
+    fn releases_from_tags() {
+        let r = release_for_tag("v1.0.89").unwrap();
+        assert_eq!(r.version, Version(1, 0, 89));
+        assert_eq!(r.tag, "v1.0.89");
+        assert_eq!(r.page, format!("https://github.com/{REPO}/releases/tag/v1.0.89"));
+        assert_eq!(
+            r.asset(FIRMWARE_ASSET).url,
+            format!("https://github.com/{REPO}/releases/download/v1.0.89/ps-hid-bridge.uf2")
+        );
+        assert_eq!(release_for_tag("1.0.89"), None);
+        assert_eq!(release_for_tag("controller-mode-experiment"), None);
+        assert_eq!(release_for_tag(""), None);
+    }
+
+    #[test]
+    fn oldest_versions_to_install() {
+        assert!(installable(Target::App, Version(1, 0, 32)).is_ok());
+        assert!(installable(Target::App, Version(1, 0, 31)).is_err());
+        assert!(installable(Target::App, Version(0, 9, 0)).is_err());
+        assert!(installable(Target::Firmware, Version(1, 0, 64)).is_ok());
+        assert!(installable(Target::Firmware, Version(1, 0, 63)).is_err());
+        assert!(installable(Target::Firmware, Version(1, 1, 0)).is_ok());
+        assert!(installable(Target::App, Version(1, 0, 63)).is_ok());
+    }
 }
 
 #[cfg(test)]
