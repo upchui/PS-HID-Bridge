@@ -77,7 +77,7 @@ Main {
         C.liveChipsJson = JSON.stringify(de
             ? ["Strg", "Umschalt", "Alt", "AltGr", "Super rechts", "W", "A", "D", "Maus: links, rechts, Mitte"]
             : ["Ctrl", "Shift", "Alt", "AltGr", "right Super", "W", "A", "D", "mouse: left, right, middle"]);
-        C.liveMouseHeld = true;
+        C.liveMouseButtons = 7;
         C.liveDevice = "Micro-Star INT'L CO., LTD. MSI VERSA PRO WIRELESS Gaming Mouse";
         C.adapterIface = "enp0s20f0u4u1c2";
         C.adapterMode = "delaying";

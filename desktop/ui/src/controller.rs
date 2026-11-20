@@ -101,8 +101,9 @@ pub mod qobject {
         #[qproperty(QString, live_text)]
         /// The same as chips: JSON array of texts ("Shift", "A", "mouse: left").
         #[qproperty(QString, live_chips_json)]
-        /// A mouse button reaches the PlayStation right now.
-        #[qproperty(bool, live_mouse_held)]
+        /// The mouse buttons the PlayStation receives right now (bits:
+        /// left 1, right 2, middle 4, back 8, forward 16; 0 = none).
+        #[qproperty(i32, live_mouse_buttons)]
         #[qproperty(QString, live_device)]
         /// The service is starting (connecting to the board).
         #[qproperty(bool, connecting)]
@@ -475,7 +476,7 @@ pub struct AppControllerRust {
     identified_path: QString,
     live_text: QString,
     live_chips_json: QString,
-    live_mouse_held: bool,
+    live_mouse_buttons: i32,
     live_device: QString,
     connecting: bool,
     language: QString,
@@ -677,7 +678,7 @@ impl Default for AppControllerRust {
             identified_path: QString::default(),
             live_text: QString::default(),
             live_chips_json: QString::from("[]"),
-            live_mouse_held: false,
+            live_mouse_buttons: 0,
             live_device: QString::default(),
             connecting: false,
             language: QString::from("en"),
@@ -1251,10 +1252,12 @@ impl qobject::AppController {
     /// language (None: nothing, the bridge is off).
     fn show_live(mut self: Pin<&mut Self>, state: Option<KeyState>) {
         self.as_mut().rust_mut().last_live = state;
+        // The buttons first: whoever reacts to the text sees them new too.
+        self.as_mut()
+            .set_live_mouse_buttons(state.map_or(0, |s| i32::from(s.buttons)));
         let Some(s) = state else {
             self.as_mut().set_live_text(QString::default());
             self.as_mut().set_live_chips_json(QString::from("[]"));
-            self.as_mut().set_live_mouse_held(false);
             return;
         };
         let (keys, mouse) = live_parts(&s);
@@ -1271,7 +1274,6 @@ impl qobject::AppController {
         self.as_mut().set_live_text(QString::from(&text));
         self.as_mut()
             .set_live_chips_json(QString::from(&serde_json::to_string(&chips).unwrap_or_default()));
-        self.as_mut().set_live_mouse_held(s.buttons != 0);
     }
 
     fn apply_status(mut self: Pin<&mut Self>, st: ServiceStatus) {

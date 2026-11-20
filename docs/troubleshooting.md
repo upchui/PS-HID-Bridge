@@ -4,7 +4,7 @@ Problems and where to look. For setting up and using PS HID Bridge, see the [REA
 
 ## A mouse button stays pressed
 
-The status page shows what goes to the PlayStation and which device reports it ("from …"); a mouse button held for more than 3 s gets a hint. The app forwards what the kernel reports, so first find out where the button is held:
+The status page shows what goes to the PlayStation and which device reports it ("from …"); a mouse button held for 30 s without a change gets a hint. The app forwards what the kernel reports, so first find out where the button is held:
 
 1. **Kernel:** with the button stuck, `sudo evtest --query /dev/input/eventN EV_KEY BTN_LEFT` (exit code 10 = held; the node is in `pshb-cli list-devices`). Held there although you let go: the mouse, its receiver or the USB path never delivered the release, not the app.
 2. **Mouse/receiver:** `sudo cat /dev/hidrawN | xxd -c 12` shows the raw reports (first byte = buttons). A wireless receiver that sends only the release edge when you click the stuck button again (no press before it) had lost the earlier release itself. Seen with an MSI VERSA PRO WIRELESS: a release was lost when another button changed within a few hundred milliseconds.

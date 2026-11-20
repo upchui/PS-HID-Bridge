@@ -56,31 +56,26 @@ AppPage {
 
     readonly property var triggers: JSON.parse(AppController.triggersJson)
     readonly property string level: AppController.active ? "ok" : AppController.connected ? "accent" : ""
-    // A mouse button has been held for a while: if the user is not holding
-    // it, the mouse or its wireless receiver lost the release.
+    // The mouse buttons have not changed for 30 s while one is held: if the
+    // user is not holding it, the mouse or its wireless receiver lost the
+    // release. Counts from the last change of the mouse buttons only: keys
+    // pressed meanwhile (playing on with the keyboard) do not restart it.
     property bool mouseHeldLong: false
-
-    // Counts from the last change of what is held (any other key restarts
-    // it). Called on both changes: the app sets the text before the button
-    // state, so on the text change alone the button state is still the old
-    // one (a release would start the timer). The last call sees both new.
-    function watchMouseHeld() {
-        page.mouseHeldLong = false;
-        if (AppController.liveMouseHeld)
-            mouseHeldTimer.restart();
-        else
-            mouseHeldTimer.stop();
-    }
 
     Timer {
         id: mouseHeldTimer
-        interval: 3000
+        interval: 30000
         onTriggered: page.mouseHeldLong = true
     }
     Connections {
         target: AppController
-        function onLiveTextChanged() { page.watchMouseHeld(); }
-        function onLiveMouseHeldChanged() { page.watchMouseHeld(); }
+        function onLiveMouseButtonsChanged() {
+            page.mouseHeldLong = false;
+            if (AppController.liveMouseButtons !== 0)
+                mouseHeldTimer.restart();
+            else
+                mouseHeldTimer.stop();
+        }
     }
 
     // What is held, as chips: ["Shift", "A", "mouse: left"] (in the app's language).
@@ -263,7 +258,7 @@ AppPage {
                 Layout.fillWidth: true
                 visible: AppController.active && page.mouseHeldLong
                 kind: "warn"
-                text: I18n.tr("A mouse button has been held for a few seconds. If you are not pressing it, the mouse or its wireless receiver lost the release: click that button once, or use \"Release all keys\" (also available as a trigger action).")
+                text: I18n.tr("A mouse button has been held for 30 seconds. If you are not pressing it, the mouse or its wireless receiver lost the release: click that button once, or use \"Release all keys\" (also available as a trigger action).")
             }
         }
     }
