@@ -24,6 +24,8 @@ ColumnLayout {
     readonly property int selectedBlocked: groups.filter(g => g.selected && !g.accessible).length
     readonly property int selectedCount: groups.filter(g => g.selected).length
     property bool identify: false
+    // The access warning here (the wizard); pages show it on top (AppWarnings).
+    property bool accessBanner: false
 
     function sortNow() {
         order = parsed.filter(d => d.selected).concat(parsed.filter(d => !d.selected)).map(d => d.id);
@@ -81,7 +83,7 @@ ColumnLayout {
 
     Banner {
         kind: "warn"
-        visible: list.selectedBlocked > 0
+        visible: list.accessBanner && list.selectedBlocked > 0
         text: list.selectedBlocked === 1
               ? I18n.tr("1 selected device cannot be read yet. The app sets up access once (administrator password).")
               : I18n.trf("%1 selected devices cannot be read yet. The app sets up access once (administrator password).",
@@ -94,7 +96,7 @@ ColumnLayout {
     }
     Banner {
         kind: "warn"
-        visible: AppController.accessMessage !== ""
+        visible: list.accessBanner && AppController.accessMessage !== ""
         text: AppController.accessMessage
     }
 

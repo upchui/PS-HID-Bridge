@@ -230,4 +230,69 @@ AppPage {
             onAccepted: AppController.saveDiagnostics(selectedFile.toString())
         }
     }
+
+    // Before uninstalling (e.g. with Shelly, which cannot touch files of
+    // root): take back what the app set up with the administrator password.
+    Card {
+        title: I18n.tr("Before uninstalling")
+        icon: "trash"
+        subtitle: I18n.tr("The app set up rules in the system with the administrator password. This removes them and takes back the access they gave; uninstall the app afterwards, e.g. in Shelly. Settings and key stay.")
+        help: I18n.tr("Device access: /etc/udev/rules.d/70-ps-hid-bridge.rules lets you read keyboard and mouse. Low latency: /etc/udev/rules.d/70-ps-hid-bridge-latency.rules lets the app switch the network adapter's packet bundling and keep the processor awake. Settings and key stay in ~/.config/ps-hid-bridge; a reinstalled app finds them again.")
+
+        Repeater {
+            model: [
+                { name: I18n.tr("Device access (udev rule)"), on: AppController.accessRuleInstalled },
+                { name: I18n.tr("Low latency (udev rule)"), on: AppController.latencyRuleInstalled }
+            ]
+            delegate: RowLayout {
+                required property var modelData
+                Layout.fillWidth: true
+                spacing: 10
+                AppIcon {
+                    name: modelData.on ? "check" : ""
+                    color: Style.muted
+                    implicitWidth: 16
+                    implicitHeight: 16
+                }
+                Controls.Label {
+                    Layout.fillWidth: true
+                    text: modelData.name
+                    color: modelData.on ? Style.text : Style.muted
+                    wrapMode: Text.WordWrap
+                }
+                Controls.Label {
+                    text: modelData.on ? I18n.tr("set up") : I18n.tr("not set up")
+                    color: Style.muted
+                }
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 12
+            AppButton {
+                text: AppController.cleanupBusy ? I18n.tr("Removing …") : I18n.tr("Remove system changes")
+                icon.name: "trash"
+                icon.color: Style.text
+                enabled: !AppController.cleanupBusy && !AppController.active && !AppController.pending
+                         && (AppController.accessRuleInstalled || AppController.latencyRuleInstalled)
+                onClicked: AppController.removeSystemChanges()
+                Accessible.description: I18n.tr("Asks for the administrator password")
+            }
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: AppController.active || AppController.pending
+                wrapMode: Text.WordWrap
+                color: Style.muted
+                text: I18n.tr("Switch the bridge off first.")
+            }
+        }
+        Controls.Label {
+            Layout.fillWidth: true
+            visible: AppController.cleanupMessage !== ""
+            wrapMode: Text.WordWrap
+            color: Style.stateColor(AppController.cleanupLevel)
+            text: AppController.cleanupMessage
+        }
+    }
 }

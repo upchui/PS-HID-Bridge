@@ -163,6 +163,25 @@ fn remove_latency_script() -> String {
     )
 }
 
+/// Undo everything the app set up as root, in one go (one password): the
+/// device access rule and the low-latency rule, with the access they gave
+/// (before uninstalling the app; its settings stay).
+pub fn remove_all() -> Result<(), String> {
+    run_as_root(&remove_all_script(), "", "Removing the system changes")
+}
+
+fn remove_all_script() -> String {
+    format!(
+        "set -e; {REVOKE_FN}; rm -f {RULE_PATH} {OLD_RULE_PATH} {LATENCY_RULE_PATH} && \
+         udevadm control --reload && \
+         for f in /sys/class/net/*/{NCM_TIMER}; do if [ -e \"$f\" ]; then chown 0 \"$f\"; \
+         if [ \"$(cat \"$f\")\" = 0 ]; then echo {NCM_DEFAULT_TIMER_US} > \"$f\"; fi; fi; done && \
+         udevadm trigger --subsystem-match=input --action=change && \
+         udevadm trigger --action=change --subsystem-match=misc --sysname-match=cpu_dma_latency && udevadm settle && \
+         revoke /dev/input/event* /dev/cpu_dma_latency"
+    )
+}
+
 /// The cdc_ncm driver's own collection timer (CDC_NCM_TIMER_INTERVAL_USEC).
 const NCM_DEFAULT_TIMER_US: u32 = 400;
 
@@ -254,6 +273,18 @@ mod tests {
         assert!(!latency_rule(1000, false).contains("ATTR{"));
     }
 
+    /// Removing everything takes all three rule files and the access to the
+    /// input devices and /dev/cpu_dma_latency.
+    #[test]
+    fn remove_all_covers_every_rule() {
+        let s = remove_all_script();
+        for path in [RULE_PATH, OLD_RULE_PATH, LATENCY_RULE_PATH] {
+            assert!(s.contains(path), "{path}");
+        }
+        assert!(s.contains("revoke /dev/input/event* /dev/cpu_dma_latency"));
+        assert_eq!(s.matches("revoke()").count(), 1, "the function once");
+    }
+
     /// The root scripts are valid shell (checked with `sh -n`, nothing runs).
     #[test]
     fn root_scripts_parse() {
@@ -261,6 +292,7 @@ mod tests {
             install_latency_script(1000),
             remove_latency_script(),
             remove_rule_script(),
+            remove_all_script(),
         ] {
             let out = Command::new("sh").args(["-n", "-c", &script]).output().unwrap();
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));

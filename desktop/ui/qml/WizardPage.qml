@@ -5,6 +5,8 @@ import PSHIDBridge
 
 AppPage {
     id: page
+    // One step at a time, with its own messages (the device step its access warning).
+    warnings: false
     title: I18n.tr("Set up PS HID Bridge")
 
     signal finished()
@@ -293,6 +295,7 @@ AppPage {
                 DeviceList {
                     id: deviceList
                     Layout.fillWidth: true
+                    accessBanner: true
                     onSelectedCountChanged: page.devicesError = ""
                 }
                 Banner {

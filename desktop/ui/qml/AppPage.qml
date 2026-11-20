@@ -4,7 +4,8 @@ import QtQuick.Layouts
 import PSHIDBridge
 
 // A page: title (and subtitle) with optional buttons on the right, the
-// content scrolls below, an optional footer stays at the bottom.
+// content scrolls below, an optional footer stays at the bottom. The
+// warnings that concern the whole app (AppWarnings) come first.
 Item {
     id: page
     anchors.fill: parent
@@ -14,6 +15,8 @@ Item {
     default property alias content: column.data
     property alias actions: actionRow.data
     property alias footer: footerRow.data
+    // The app-wide warnings on top (the wizard shows its own per step).
+    property bool warnings: true
 
     ColumnLayout {
         anchors.fill: parent
@@ -82,6 +85,13 @@ Item {
                     width: Math.min(parent.width - 2 * Style.pad, Style.maxWidth)
                     x: (parent.width - width) / 2
                     spacing: Style.gap
+
+                    // Declared here, so before the page's own content.
+                    AppWarnings {
+                        id: appWarnings
+                        Layout.fillWidth: true
+                        visible: page.warnings && appWarnings.any
+                    }
                 }
             }
         }

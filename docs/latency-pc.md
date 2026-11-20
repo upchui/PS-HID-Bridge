@@ -28,7 +28,7 @@ While the app runs, other programs' packets through the adapter go out at once t
 
 ## Undoing it
 
-"Undo" on the Latency page ("This PC", administrator password) removes `70-ps-hid-bridge-latency.rules`, gives the adapters' setting back to root (at the driver's 400 µs) and takes back the permission for `/dev/cpu_dma_latency` (unless the system grants it anyway, e.g. to the group `audio`).
+"Undo" on the Latency page ("This PC", administrator password), or "Remove system changes" on "Firmware & updates" together with the device access rule, removes `70-ps-hid-bridge-latency.rules`, gives the adapters' setting back to root (at the driver's 400 µs) and takes back the permission for `/dev/cpu_dma_latency` (unless the system grants it anyway, e.g. to the group `audio`).
 
 By hand: `sudo rm /etc/udev/rules.d/70-ps-hid-bridge-latency.rules`, then plug the adapter in again; the permission ends with the next restart.
 

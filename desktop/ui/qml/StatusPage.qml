@@ -96,33 +96,6 @@ AppPage {
     // ------------------------------------------------------------ banners
     InstallBanner {}
     Banner {
-        kind: "error"
-        visible: AppController.lastError !== ""
-        text: AppController.lastError
-        actions: AppButton {
-            text: I18n.tr("Dismiss")
-            flat: true
-            onClicked: AppController.lastError = ""
-        }
-    }
-    Banner {
-        kind: "warn"
-        visible: AppController.boardWarning !== ""
-        text: AppController.boardWarning
-        actions: AppButton {
-            text: I18n.tr("Dismiss")
-            flat: true
-            onClicked: AppController.dismissBoardWarning()
-        }
-    }
-    Banner {
-        kind: "warn"
-        visible: AppController.counterError !== ""
-        text: I18n.trf("The packet counter cannot be saved (%1). Input still works; "
-                       + "free up disk space or fix the folder's permissions, the app keeps trying. Until then, a restart "
-                       + "with the computer's clock set back could reuse values that protect your input.", AppController.counterError)
-    }
-    Banner {
         // Green for the offer and progress, yellow when something failed.
         kind: AppController.updateStatus !== "" && AppController.updateLevel === "warn" ? "warn" : "ok"
         visible: AppController.appUpdateAvailable || AppController.boardUpdateAvailable
@@ -152,22 +125,6 @@ AppPage {
             }
         ]
     }
-    Banner {
-        kind: "warn"
-        visible: AppController.adapterMode === "delaying"
-        text: I18n.trf("The network adapter %1 holds every packet back up to about %2 before sending it, to bundle packets (USB adapter, cdc_ncm). "
-                       + "This comes on top of “Input → network” and shows in the round trip. "
-                       + "Set up once (administrator password); after that the adapter sends at once while the app runs and bundles again when it is closed, without a password.",
-                       AppController.adapterIface, page.us(AppController.adapterDelayMs))
-              + (AppController.latencySetupMessage !== "" ? "\n" + AppController.latencySetupMessage : "")
-        actions: AppButton {
-            text: AppController.latencySetupBusy ? I18n.tr("Setting up …") : I18n.tr("Set up")
-            enabled: !AppController.latencySetupBusy
-            onClicked: AppController.setupLowLatency()
-            Accessible.description: I18n.tr("Asks for the administrator password")
-        }
-    }
-
     // ------------------------------------------------------------ hero
     Rectangle {
         Layout.fillWidth: true

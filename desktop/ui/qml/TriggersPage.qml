@@ -9,30 +9,6 @@ AppPage {
 
     Component.onCompleted: AppController.refreshDevices()
 
-    // Triggers and the emergency stop work on every keyboard the app may
-    // read, also on keyboards that are not selected (those are never
-    // forwarded).
-    Banner {
-        kind: "warn"
-        visible: AppController.otherKeyboardsBlocked > 0
-        text: AppController.otherKeyboardsBlocked === 1
-              ? I18n.tr("Triggers and the emergency stop work on every keyboard, also on ones that are not selected. "
-                        + "1 keyboard cannot be read yet; the app sets up access once (administrator password).")
-              : I18n.trf("Triggers and the emergency stop work on every keyboard, also on ones that are not selected. "
-                         + "%1 keyboards cannot be read yet; the app sets up access once (administrator password).",
-                         AppController.otherKeyboardsBlocked)
-        actions: AppButton {
-            text: AppController.accessBusy ? I18n.tr("Setting up …") : I18n.tr("Set up access")
-            enabled: !AppController.accessBusy
-            onClicked: AppController.installAccess()
-        }
-    }
-    Banner {
-        kind: "warn"
-        visible: AppController.accessMessage !== ""
-        text: AppController.accessMessage
-    }
-
     Card {
         title: I18n.tr("Keys and mouse buttons")
         icon: "bolt"

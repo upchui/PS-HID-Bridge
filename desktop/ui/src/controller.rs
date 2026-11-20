@@ -146,6 +146,11 @@ pub mod qobject {
         #[qproperty(bool, install_busy)]
         #[qproperty(QString, install_message)]
         #[qproperty(QString, install_level)]
+        /// Removing what the app set up as root (before uninstalling):
+        /// busy, outcome.
+        #[qproperty(bool, cleanup_busy)]
+        #[qproperty(QString, cleanup_message)]
+        #[qproperty(QString, cleanup_level)]
         #[qproperty(QString, last_error)]
         /// Settings that could not be written; stays until a save works.
         #[qproperty(QString, save_error)]
@@ -338,6 +343,11 @@ pub mod qobject {
         /// Hide the offer (until the next start).
         #[qinvokable]
         fn dismiss_install(self: Pin<&mut AppController>);
+        /// Remove every rule the app installed as root and the access they
+        /// gave (asks for the administrator password once); the settings
+        /// stay. `cleanup_busy` meanwhile, then `cleanup_message`.
+        #[qinvokable]
+        fn remove_system_changes(self: Pin<&mut AppController>);
         /// Touchpads and touchscreens: speed factor, tap to click, natural scrolling.
         #[qinvokable]
         fn set_touchpad(self: Pin<&mut AppController>, speed: f64, tap: bool, natural: bool);
@@ -493,6 +503,9 @@ pub struct AppControllerRust {
     install_busy: bool,
     install_message: QString,
     install_level: QString,
+    cleanup_busy: bool,
+    cleanup_message: QString,
+    cleanup_level: QString,
     /// This app in Shelly's record (the installed copy).
     installed: Option<install::Installed>,
     last_error: QString,
@@ -692,6 +705,9 @@ impl Default for AppControllerRust {
             install_busy: false,
             install_message: QString::default(),
             install_level: QString::default(),
+            cleanup_busy: false,
+            cleanup_message: QString::default(),
+            cleanup_level: QString::default(),
             installed: None,
             last_error: QString::default(),
             save_error: QString::default(),
@@ -1801,6 +1817,55 @@ impl qobject::AppController {
         if let Err(e) = spawned {
             self.as_mut().set_access_busy(false);
             self.as_mut().set_access_message(QString::from(&e.to_string()));
+        }
+    }
+
+    pub fn remove_system_changes(mut self: Pin<&mut Self>) {
+        if *self.cleanup_busy() {
+            return;
+        }
+        if *self.active() || *self.pending() {
+            self.as_mut().set_cleanup_level(QString::from("warn"));
+            self.as_mut()
+                .set_cleanup_message(QString::from(&tr("Switch the bridge off first.")));
+            return;
+        }
+        self.as_mut().set_cleanup_busy(true);
+        self.as_mut().set_cleanup_message(QString::default());
+        let qt = self.qt_thread();
+        let spawned = thread::Builder::new().name("pshb-cleanup".into()).spawn(move || {
+            let result = pshb_core::access::remove_all();
+            if result.is_ok() {
+                thread::sleep(Duration::from_millis(500));
+            }
+            let _ = qt.queue(move |obj| obj.system_changes_removed(result));
+        });
+        if let Err(e) = spawned {
+            self.as_mut().set_cleanup_busy(false);
+            self.as_mut().set_cleanup_level(QString::from("bad"));
+            self.as_mut().set_cleanup_message(QString::from(&e.to_string()));
+        }
+    }
+
+    fn system_changes_removed(mut self: Pin<&mut Self>, result: Result<(), String>) {
+        self.as_mut().set_cleanup_busy(false);
+        self.as_mut().publish_rules();
+        match result {
+            Ok(()) => {
+                pshb_core::logln!("PS HID Bridge: the rules installed as root were removed");
+                self.as_mut().set_cleanup_level(QString::from("ok"));
+                self.as_mut().set_cleanup_message(QString::from(&trf(
+                    "Removed: device access and low-latency rules. Settings and key are still there (%1).",
+                    &[&config::config_dir().display().to_string()],
+                )));
+                self.as_mut().refresh_devices();
+                // Devices still open keep working until they are closed: start over.
+                self.restart_service();
+            }
+            Err(e) => {
+                self.as_mut().set_cleanup_level(QString::from("bad"));
+                self.as_mut().set_cleanup_message(QString::from(&e));
+            }
         }
     }
 

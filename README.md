@@ -158,7 +158,7 @@ The window rule switches the bridge on by itself while a certain window has the 
 
 ### Device access
 
-A normal user may not read mouse and keyboard directly. "Set up access" (in the wizard, and on the Input and Triggers pages) allows it once for the selected devices and every keyboard; it asks for the administrator password. "Remove access" on the Input page takes it back (the bridge must be off). To do it by hand, see [Device access by hand](docs/advanced-setup.md#device-access-by-hand).
+A normal user may not read mouse and keyboard directly. "Set up access" (in the wizard, and on the Input and Triggers pages) allows it once for the selected devices and every keyboard; it asks for the administrator password. "Remove access" on the Input page takes it back (the bridge must be off); "Remove system changes" on "Firmware & updates" removes everything the app set up as administrator (also the low-latency rule) before you uninstall it, the settings stay. To do it by hand, see [Device access by hand](docs/advanced-setup.md#device-access-by-hand).
 
 ## Updates
 
