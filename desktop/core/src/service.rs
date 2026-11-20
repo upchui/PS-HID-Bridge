@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use crate::config::Config;
 use crate::controller::{Controller, Watchdog};
 use crate::engine::{Engine, EngineProfile, Notice};
+use crate::follow::{FollowConfig, MoveReason};
 use crate::idle::IdleInhibitor;
 use crate::input::{self, DeviceInfo, GrabGuard, InputMsg, InputSet, Waker};
 use crate::keymap;
@@ -60,9 +61,13 @@ pub enum ServiceCmd {
     /// Look at the network adapter and the CPU permissions again now (after
     /// setting up low latency).
     CheckLowLatency,
-    /// The board has a new address (DHCP): send there from now on, with the
-    /// bridge left as it is (on stays on).
+    /// The board is at another address (set by hand): send there from now
+    /// on, with the bridge left as it is (on stays on). A board that moves
+    /// by itself (DHCP) is followed by the link, see ServiceEvent::BoardMoved.
     Board(SocketAddr),
+    /// The name the link looks up when the board stops answering (its
+    /// network name, once known; None: the one it started with).
+    FollowName(Option<String>),
     /// Type text on the PlayStation: these key states one after the other
     /// (crate::typing::plan), while the bridge is off.
     Type(Vec<KeyState>),
@@ -116,6 +121,10 @@ pub struct ServiceStatus {
     /// Profile in effect, and the one chosen by hand or by a trigger.
     pub profile: String,
     pub manual_profile: String,
+    /// The board's MAC address and name from its discovery answer, once it
+    /// answered (with a search set up, ServiceConfig::follow).
+    pub board_mac: Option<String>,
+    pub board_name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -140,6 +149,12 @@ pub enum ServiceEvent {
         text: String,
         device: String,
         state: KeyState,
+    },
+    /// The board is at `to` now (it got another address): the link sends
+    /// there, the bridge stays as it was.
+    BoardMoved {
+        to: SocketAddr,
+        reason: MoveReason,
     },
     Error(String),
 }
@@ -170,6 +185,8 @@ pub struct ServiceConfig {
     /// File noting a network adapter the service switched (see
     /// [`AdapterTimer`]); None = not noted.
     pub adapter_state: Option<PathBuf>,
+    /// Look for the board when it stops answering (crate::follow).
+    pub follow: Option<FollowConfig>,
 }
 
 pub type Sink = Box<dyn Fn(ServiceEvent) + Send>;
@@ -186,6 +203,7 @@ impl Service {
         let mut link_cfg = LinkConfig::new(cfg.board, cfg.key);
         link_cfg.counter_store = cfg.counter_store;
         link_cfg.realtime = true;
+        link_cfg.follow = cfg.follow;
         let link = Arc::new(Link::start(link_cfg).map_err(|e| format!("UDP: {e}"))?);
         let waker = Arc::new(Waker::new().map_err(|e| e.to_string())?);
         let (tx, rx) = mpsc::channel();
@@ -319,6 +337,8 @@ struct Runner {
     net_check_again: bool,
     next_net_check: Instant,
     typing: Option<Typing>,
+    /// The link's moves reported so far (BoardMove::seq).
+    moves_seen: u64,
 }
 
 impl Runner {
@@ -364,6 +384,7 @@ impl Runner {
             net_check_again: false,
             next_net_check: Instant::now(),
             typing: None,
+            moves_seen: 0,
         }
     }
 
@@ -619,6 +640,16 @@ impl Runner {
             self.logged_resyncs = resyncs;
         }
         let st = self.link.status();
+        if let Some(m) = st.last_move.filter(|m| m.seq != self.moves_seen) {
+            self.moves_seen = m.seq;
+            self.board = Some(m.to);
+            // Possibly another adapter on the way there.
+            self.check_network();
+            self.emit(ServiceEvent::BoardMoved {
+                to: m.to,
+                reason: m.reason,
+            });
+        }
         let now = Instant::now();
         let dt = now.duration_since(self.last_sent_at).as_secs_f64();
         let pps = if dt > 0.0 {
@@ -654,6 +685,8 @@ impl Runner {
             counter_error: self.link.counter_error(),
             profile: self.profile_name(self.ctl.engine.profile()),
             manual_profile: self.profile_name(self.ctl.engine.manual_profile()),
+            board_mac: st.board_mac,
+            board_name: st.board_name,
         };
         if status != self.last_status {
             self.last_status = status.clone();
@@ -801,6 +834,7 @@ impl Runner {
                         // Possibly another adapter on the way there.
                         self.check_network();
                     }
+                    Ok(ServiceCmd::FollowName(name)) => self.link.set_follow_name(name),
                     Ok(ServiceCmd::Type(states)) => self.start_typing(states),
                     Ok(ServiceCmd::CancelTyping) => self.stop_typing(Some(TypingStop::Cancelled)),
                     Ok(ServiceCmd::Devices(list)) => self.devices_listed(list),
@@ -965,6 +999,98 @@ mod tests {
     }
 
     #[test]
+    fn a_board_that_moves_by_itself_is_followed() {
+        use crate::follow::Finder;
+        // The network: the board answers discovery where `at` says.
+        use std::sync::Mutex;
+        struct Net(Mutex<std::net::SocketAddr>);
+        impl Finder for Net {
+            fn find_mac(&self, _mac: &str) -> Option<std::net::SocketAddr> {
+                Some(*self.0.lock().unwrap())
+            }
+            fn probe(&self, ip: std::net::Ipv4Addr) -> Option<(String, String)> {
+                (self.0.lock().unwrap().ip() == ip).then(|| ("02:68:9d:96:c3:3d".into(), "board".into()))
+            }
+            fn resolve(&self, _host: &str) -> Vec<std::net::IpAddr> {
+                Vec::new()
+            }
+        }
+        let key = [6u8; KEY_LEN];
+        let (a, stop_a) = fake_board_session(key, 77);
+        let net = Arc::new(Net(Mutex::new(a)));
+        let (tx, rx) = mpsc::channel();
+        let sink: Sink = Box::new(move |e| {
+            let _ = tx.send(e);
+        });
+        let svc = Service::start(
+            ServiceConfig {
+                config: Config::default(),
+                key,
+                board: a,
+                counter_store: None,
+                adapter_state: None,
+                follow: Some(FollowConfig {
+                    name: None,
+                    mac: None,
+                    finder: net.clone(),
+                }),
+            },
+            sink,
+        )
+        .unwrap();
+        let wait_for = |want: &dyn Fn(&ServiceEvent) -> bool, within: Duration| -> Option<ServiceEvent> {
+            let end = Instant::now() + within;
+            while let Some(left) = end.checked_duration_since(Instant::now()) {
+                match rx.recv_timeout(left) {
+                    Ok(ServiceEvent::Notice(Notice::Deactivated)) => panic!("the bridge went off"),
+                    Ok(e) if want(&e) => return Some(e),
+                    Ok(_) => {}
+                    Err(_) => return None,
+                }
+            }
+            None
+        };
+        // Who the board is, once it answers.
+        let known =
+            |e: &ServiceEvent| matches!(e, ServiceEvent::Status(s) if s.connected && s.board_mac.is_some());
+        let Some(ServiceEvent::Status(st)) = wait_for(&known, Duration::from_secs(2)) else {
+            panic!("no MAC address learned")
+        };
+        assert_eq!(st.board_mac.as_deref(), Some("02:68:9d:96:c3:3d"));
+        assert_eq!(st.board_name.as_deref(), Some("board"));
+        svc.send(ServiceCmd::Action(Action::On));
+        assert!(
+            wait_for(
+                &|e| *e == ServiceEvent::Notice(Notice::Activated),
+                Duration::from_millis(500)
+            )
+            .is_some()
+        );
+        // Gone from its address without a word, there at another one.
+        stop_a.store(true, std::sync::atomic::Ordering::Release);
+        let (b, stop_b) = fake_board_session(key, 77);
+        *net.0.lock().unwrap() = b;
+        let moved = wait_for(
+            &|e| matches!(e, ServiceEvent::BoardMoved { .. }),
+            Duration::from_secs(4),
+        );
+        assert_eq!(
+            moved,
+            Some(ServiceEvent::BoardMoved {
+                to: b,
+                reason: MoveReason::Discovery
+            })
+        );
+        let back = |e: &ServiceEvent| matches!(e, ServiceEvent::Status(s) if s.connected);
+        let Some(ServiceEvent::Status(st)) = wait_for(&back, Duration::from_secs(2)) else {
+            panic!("not connected at the new address")
+        };
+        assert!(st.active, "the bridge stays on");
+        drop(svc);
+        stop_b.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    #[test]
     fn types_text_while_the_bridge_is_off() {
         let key = [5u8; KEY_LEN];
         let (board, stop, inputs) = fake_board_counting(key, 77);
@@ -979,6 +1105,7 @@ mod tests {
                 board,
                 counter_store: None,
                 adapter_state: None,
+                follow: None,
             },
             sink,
         )
@@ -1057,6 +1184,7 @@ mod tests {
                 board,
                 counter_store: None,
                 adapter_state: None,
+                follow: None,
             },
             sink,
         )
@@ -1110,6 +1238,7 @@ mod tests {
                 board: a,
                 counter_store: None,
                 adapter_state: None,
+                follow: None,
             },
             sink,
         )

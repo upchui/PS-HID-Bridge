@@ -13,6 +13,7 @@ pub mod crypto;
 pub mod diagnostics;
 pub mod discover;
 pub mod engine;
+pub mod follow;
 pub mod idle;
 pub mod input;
 pub mod install;

@@ -107,7 +107,11 @@ pub fn report(i: &ReportInput) -> String {
 
     section(&mut out, "Board");
     let _ = writeln!(out, "- address: {}", i.config.board);
-    match discover::board_ipv4(&i.config.board) {
+    if !i.config.board_ip.is_empty() {
+        let _ = writeln!(out, "- answered last at: {}", i.config.board_ip);
+    }
+    // Set up under a name: where it answered last.
+    match discover::board_ipv4(&i.config.board).or_else(|| i.config.board_ip.parse().ok()) {
         Some(ip) => match discover::probe(ip, protocol::DISCOVERY_PORT, discover::DISCOVER_TIMEOUT) {
             Ok(Some(b)) => {
                 let _ = writeln!(

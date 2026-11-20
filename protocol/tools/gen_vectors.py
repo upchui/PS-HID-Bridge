@@ -85,6 +85,9 @@ def packets() -> list[dict]:
                          61_000_500_123, 61_000_500_187)
     out.append(packet("pong_timed", p.DIR_BOARD_TO_APP, p.TYPE_PONG_TIMED, BOARD_COUNTER + 1,
                       pong_t.encode(), dict(vars(pong_t))))
+    moved = p.Moved(SESSION, "192.168.178.57", 45045)
+    out.append(packet("moved", p.DIR_BOARD_TO_APP, p.TYPE_MOVED, BOARD_COUNTER + 2,
+                      moved.encode(), dict(vars(moved))))
     return out
 
 

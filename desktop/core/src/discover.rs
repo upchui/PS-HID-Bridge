@@ -265,6 +265,33 @@ pub fn discover(timeout: Duration) -> io::Result<Vec<FoundBoard>> {
 /// The boards that answer a request to `targets` (port `port`) within
 /// `timeout`; each board once (by MAC address).
 pub fn discover_at(targets: &[Ipv4Addr], port: u16, timeout: Duration) -> io::Result<Vec<FoundBoard>> {
+    let mut found = ask(targets, port, timeout, |_| false)?;
+    found.sort_by(|a: &FoundBoard, b| a.name.cmp(&b.name).then(a.ip.cmp(&b.ip)));
+    Ok(found)
+}
+
+/// The board with this MAC address ("02:68:9d:96:c3:3d") among those that
+/// answer a request to `targets`: as soon as it answers, None after
+/// `timeout` (crate::follow, while the bridge waits for it).
+pub fn find_mac(
+    mac: &str,
+    targets: &[Ipv4Addr],
+    port: u16,
+    timeout: Duration,
+) -> io::Result<Option<FoundBoard>> {
+    let is_it = |b: &FoundBoard| b.mac_string().eq_ignore_ascii_case(mac);
+    let found = ask(targets, port, timeout, |found| found.iter().any(is_it))?;
+    Ok(found.into_iter().find(is_it))
+}
+
+/// Send the request to `targets` and collect the answers until `timeout`
+/// or until `enough` says so.
+fn ask(
+    targets: &[Ipv4Addr],
+    port: u16,
+    timeout: Duration,
+    mut enough: impl FnMut(&[FoundBoard]) -> bool,
+) -> io::Result<Vec<FoundBoard>> {
     let start = Instant::now();
     let sock = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
     sock.set_broadcast(true)?;
@@ -280,13 +307,16 @@ pub fn discover_at(targets: &[Ipv4Addr], port: u16, timeout: Duration) -> io::Re
         if i % 64 == 63 {
             // Take in what arrived meanwhile: the receive buffer is limited.
             drain(&sock, &mut buf, &mut found)?;
+            if enough(&found) {
+                return Ok(found);
+            }
             if start.elapsed() > SEND_BUDGET.min(timeout) {
                 break;
             }
         }
     }
     let deadline = start + timeout;
-    loop {
+    while !enough(&found) {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
             break;
@@ -299,7 +329,6 @@ pub fn discover_at(targets: &[Ipv4Addr], port: u16, timeout: Duration) -> io::Re
             Err(_) => continue,
         }
     }
-    found.sort_by(|a: &FoundBoard, b| a.name.cmp(&b.name).then(a.ip.cmp(&b.ip)));
     Ok(found)
 }
 
@@ -512,6 +541,29 @@ mod tests {
 
         let b = probe(Ipv4Addr::LOCALHOST, port, Duration::from_millis(300)).unwrap();
         assert_eq!(b.map(|b| b.mac_string()), Some("02:68:9d:96:c3:3d".into()));
+    }
+
+    #[test]
+    fn find_mac_returns_as_soon_as_the_board_answers() {
+        let port = fake_board();
+        let t = Instant::now();
+        let b = find_mac(
+            "02:68:9D:96:C3:3D",
+            &[Ipv4Addr::LOCALHOST],
+            port,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(b.map(|b| b.ip), Some(Ipv4Addr::LOCALHOST));
+        assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
+        // Another board's MAC address: nothing, after the timeout.
+        let other = find_mac(
+            "02:00:00:00:00:01",
+            &[Ipv4Addr::LOCALHOST],
+            port,
+            Duration::from_millis(200),
+        );
+        assert_eq!(other.unwrap(), None);
     }
 
     #[test]

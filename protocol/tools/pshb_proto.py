@@ -19,6 +19,7 @@ TYPE_PING = 0x03
 TYPE_PONG = 0x04
 TYPE_PING_TIMED = 0x05
 TYPE_PONG_TIMED = 0x06
+TYPE_MOVED = 0x07  # board -> app, unasked: its new address
 
 DIR_APP_TO_BOARD = 1
 DIR_BOARD_TO_APP = 2
@@ -41,6 +42,7 @@ INPUT = struct.Struct("<QBB6sBhhbb")      # 23 bytes
 PING = struct.Struct("<QI")               # 12 bytes
 PONG = struct.Struct("<QIQIIBIIIII")      # 49 bytes
 PONG_TIMED = struct.Struct("<QIQIIBIIIIIQQ")  # 65 bytes: PONG + board_rx_us, board_tx_us
+MOVED = struct.Struct("<Q4sHH")           # 16 bytes: session_id, ip, udp_port, reserved
 NONCE = struct.Struct("<IQ")              # direction, counter
 
 PAYLOAD_LEN = {
@@ -50,6 +52,7 @@ PAYLOAD_LEN = {
     TYPE_PONG: PONG.size,
     TYPE_PING_TIMED: PING.size,
     TYPE_PONG_TIMED: PONG_TIMED.size,
+    TYPE_MOVED: MOVED.size,
 }
 
 
@@ -127,6 +130,23 @@ class PongTimed(Pong):
 
     def encode(self) -> bytes:
         return super().encode() + struct.pack("<QQ", self.board_rx_us, self.board_tx_us)
+
+
+@dataclass
+class Moved:
+    """MOVED: the board's address is about to change to ip:udp_port (sent
+    from the old address, see SPEC.md)."""
+    session_id: int
+    ip: str
+    udp_port: int
+
+    @classmethod
+    def decode(cls, data: bytes) -> "Moved":
+        sid, ip, port, _reserved = MOVED.unpack(data)
+        return cls(sid, ".".join(str(b) for b in ip), port)
+
+    def encode(self) -> bytes:
+        return MOVED.pack(self.session_id, bytes(int(x) for x in self.ip.split(".")), self.udp_port, 0)
 
 
 def header(version: int, ptype: int, counter: int) -> bytes:

@@ -223,6 +223,11 @@ test-protocol: image-firmware dirs
 # including Rust CLI <-> C core interop.
 test-sim: test-firmware desktop-cli
 	$(FW_RUN) python3 tools/test_sim.py --sim $(HOST_BUILD)/pshb-sim --cli out/pshb-cli
+	@# The board under a name whose lookup is stale: rewrites /etc/hosts, so
+	@# as root in a container of its own (nothing is written to /work).
+	docker run --rm --platform linux/amd64 -v $(CURDIR):/work -w /work -e PYTHONDONTWRITEBYTECODE=1 \
+		-e PSHB_VERSION=$(PSHB_VERSION) $(FW_IMAGE) \
+		python3 tools/test_sim.py --sim $(HOST_BUILD)/pshb-sim --cli out/pshb-cli NameMoveTests
 
 test-desktop: image-rust dirs
 	$(RUST_RUN) bash -c 'cd desktop && cargo fmt --all --check \

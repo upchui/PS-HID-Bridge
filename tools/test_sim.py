@@ -43,6 +43,9 @@ REPORT_RE = {
 
 
 KEY = bytes(range(32))
+# MoveTests run their pshb-cli at the same time as InteropTests: another key
+# (the CLI allows one sender per key) and their own packet counter.
+MOVE_KEY = bytes(range(32, 64))
 
 
 class Sim:
@@ -52,12 +55,17 @@ class Sim:
     simulator must be started with --plaintext.
     """
 
-    def __init__(self, *extra: str, key: bytes | None = None):
+    def __init__(self, *extra: str, key: bytes | None = None, control: bool = False,
+                 fixed_session: bool = True):
         self.key = key
         if key is not None:
             extra = ("--psk", key.hex(), *extra)
-        self.proc = subprocess.Popen([SIM, "--port", "0", "--session", f"{SESSION:x}", *extra],
-                                     stdout=subprocess.PIPE, text=True)
+        if fixed_session:
+            extra = ("--session", f"{SESSION:x}", *extra)
+        if control:
+            extra = ("--control", *extra)
+        self.proc = subprocess.Popen([SIM, "--port", "0", *extra], stdout=subprocess.PIPE, text=True,
+                                     stdin=subprocess.PIPE if control else subprocess.DEVNULL)
         self.lines: queue.Queue[str] = queue.Queue()
         # Never hang the whole test run on a simulator that does not start.
         if not select.select([self.proc.stdout], [], [], 10)[0]:
@@ -80,7 +88,14 @@ class Sim:
         for line in self.proc.stdout:
             self.lines.put(line.strip())
 
+    def command(self, line: str):
+        """A command for the simulator (--control): MOVE/JUMP <addr>, REBOOT."""
+        self.proc.stdin.write(line + "\n")
+        self.proc.stdin.flush()
+
     def close(self):
+        if self.proc.stdin:
+            self.proc.stdin.close()
         self.proc.terminate()
         self.proc.wait(timeout=5)
         self.reader.join(timeout=5)  # ends at EOF
@@ -398,6 +413,203 @@ class InteropTests(unittest.TestCase):
 
 
 DISCOVERY_REQUEST = b"PSHBDISC\x01\x01" + bytes(54)
+
+
+def move_script(seconds: float) -> str:
+    """Bridge on, "A" held, the mouse moving every 10 ms for `seconds`; then
+    everything let go and the bridge off."""
+    steps = ["combo Ctrl+Alt+P", "wait 50", "key A down"]
+    steps += ["move 1 0", "wait 10"] * int(seconds * 100)
+    steps += ["key A up", "wait 50", "combo Ctrl+Alt+P", "wait 100"]
+    return "\n".join(steps) + "\n"
+
+
+class Timed:
+    """Lines of a process's output with the time they arrived."""
+
+    def __init__(self, stream):
+        self.lines: list[tuple[float, str]] = []
+        self.lock = threading.Lock()
+        self.thread = threading.Thread(target=self._read, args=(stream,), daemon=True)
+        self.thread.start()
+
+    def _read(self, stream):
+        for line in stream:
+            with self.lock:
+                self.lines.append((time.monotonic(), line.strip()))
+
+    def snapshot(self) -> list[tuple[float, str]]:
+        with self.lock:
+            return list(self.lines)
+
+    def wait_for(self, pred, timeout: float, since: float = 0.0) -> tuple[float, str] | None:
+        """The first line from `since` on that `pred` likes (waiting for it)."""
+        deadline = time.monotonic() + timeout
+        seen = 0
+        while True:
+            lines = self.snapshot()
+            for t, line in lines[seen:]:
+                if t >= since and pred(line):
+                    return t, line
+            seen = len(lines)
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.01)
+
+
+class MoveTests(unittest.TestCase):
+    """The board gets another address (DHCP) while the bridge is on: the C
+    core in the simulator tells the app (MOVED) or not, pshb-cli (the
+    desktop core) follows. Every address 127.0.0.x is this machine."""
+
+    def setUp(self):
+        if not os.environ.get("PSHB_CLI"):
+            self.skipTest("no --cli given")
+        self.procs = []
+        self.files = []
+
+    def tearDown(self):
+        for p in self.procs:
+            if p.poll() is None:
+                p.kill()
+            p.wait(timeout=5)
+        for sim in getattr(self, "sims", []):
+            sim.close()
+        for f in self.files:
+            os.unlink(f)
+
+    def start(self, addr: str, *extra: str, fixed_session: bool = True) -> tuple[Sim, Timed]:
+        sim = Sim("--bind", addr, "--discovery-port", "0", *extra, key=MOVE_KEY, control=True,
+                  fixed_session=fixed_session)
+        self.sims = getattr(self, "sims", []) + [sim]
+        # The reader thread of Sim takes the lines: listen to its queue.
+        timed = Timed(iter(sim.lines.get, None))
+        return sim, timed
+
+    def replay(self, board: str, seconds: float, *extra: str) -> Timed:
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write(move_script(seconds))
+        self.files.append(f.name)
+        state = tempfile.mkdtemp()  # the packet counter of these runs
+        env = {**os.environ, "XDG_STATE_HOME": state}
+        p = subprocess.Popen([os.environ["PSHB_CLI"], "replay", f.name, "--board", board, "--psk", MOVE_KEY.hex(),
+                              "--config", f.name + ".none.toml", *extra],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        self.procs.append(p)
+        return Timed(p.stdout)
+
+    def held(self, line: str) -> bool:
+        return line.startswith("KBD") and "keys=04" in line
+
+    def after(self, timed: Timed, t0: float, pred) -> list[tuple[float, str]]:
+        return [(t, line) for t, line in timed.snapshot() if t >= t0 and pred(line)]
+
+    def test_the_board_tells_the_app(self):
+        sim, out = self.start("127.0.0.2")
+        cli = self.replay(f"127.0.0.2:{sim.port}", 3, "--discovery-host", "127.0.0.2",
+                          "--discovery-port", str(sim.discovery_port))
+        self.assertIsNotNone(out.wait_for(self.held, 5), "bridge on, A held")
+        time.sleep(0.5)
+        sim.command("MOVE 127.0.0.3")
+        moved = out.wait_for(lambda l: l.startswith("MOVED"), 2)
+        self.assertEqual(moved[1], "MOVED 127.0.0.3 NOTICE", "the app was told")
+        later = out.wait_for(lambda l: l.startswith("MOUSE"), 2, since=moved[0])
+        self.assertIsNotNone(later, "input goes on at the new address")
+        gap = later[0] - moved[0]
+        print(f"  notice: input again after {gap * 1000:.0f} ms")
+        self.assertLess(gap, 0.25)
+        self.assertIsNotNone(cli.wait_for(lambda l: l == f"Board moved to 127.0.0.3:{sim.port} (notice)", 2))
+        self.assertIsNotNone(out.wait_for(lambda l: l == "KBD mods=00 keys=00 00 00 00 00 00", 6, since=moved[0]),
+                             "let go at the end (at the new address)")
+        self.assertEqual(self.after(out, moved[0], lambda l: l == "FAILSAFE"), [],
+                         "never a pause long enough for the board to let go")
+        self.assertEqual(self.procs[-1].wait(timeout=10), 0)
+
+    def test_a_silent_move_is_found_by_the_mac_address(self):
+        sim, out = self.start("127.0.0.4")
+        cli = self.replay(f"127.0.0.4:{sim.port}", 6, "--discovery-host", "127.0.0.4",
+                          "--discovery-host", "127.0.0.5", "--discovery-port", str(sim.discovery_port))
+        self.assertIsNotNone(out.wait_for(self.held, 5))
+        time.sleep(0.5)  # the app has asked who the board is meanwhile
+        sim.command("JUMP 127.0.0.5")
+        jumped = out.wait_for(lambda l: l.startswith("JUMPED"), 2)
+        self.assertIsNotNone(out.wait_for(lambda l: l == "FAILSAFE", 1, since=jumped[0]), "the board lets go")
+        back = out.wait_for(self.held, 5, since=jumped[0])
+        self.assertIsNotNone(back, "found again: A held again")
+        gap = back[0] - jumped[0]
+        print(f"  silent move: input again after {gap * 1000:.0f} ms")
+        self.assertLess(gap, 3)
+        self.assertIsNotNone(cli.wait_for(lambda l: l == f"Board moved to 127.0.0.5:{sim.port} (discovery)", 2))
+        self.assertEqual(self.procs[-1].wait(timeout=15), 0)
+
+    def test_a_board_that_restarts_at_another_address(self):
+        sim, out = self.start("127.0.0.6", fixed_session=False)
+        cli = self.replay(f"127.0.0.6:{sim.port}", 6, "--discovery-host", "127.0.0.6",
+                          "--discovery-host", "127.0.0.7", "--discovery-port", str(sim.discovery_port))
+        self.assertIsNotNone(out.wait_for(self.held, 5))
+        time.sleep(0.5)
+        sim.command("JUMP 127.0.0.7")
+        sim.command("REBOOT")
+        rebooted = out.wait_for(lambda l: l == "REBOOT", 2)
+        back = out.wait_for(self.held, 5, since=rebooted[0])
+        self.assertIsNotNone(back, "the new session gets the keys held")
+        print(f"  restart elsewhere: input again after {(back[0] - rebooted[0]) * 1000:.0f} ms")
+        self.assertLess(back[0] - rebooted[0], 3.5)
+        self.assertIsNotNone(cli.wait_for(lambda l: l.startswith("Board moved to 127.0.0.7"), 2))
+        self.assertEqual(self.procs[-1].wait(timeout=15), 0)
+
+
+class NameMoveTests(MoveTests):
+    """The board set up under a name whose lookup is stale (a cache still
+    has the old address). Needs root: rewrites /etc/hosts (make test-sim
+    runs it in a container of its own)."""
+
+    HOSTS = "/etc/hosts"
+
+    def setUp(self):
+        if os.geteuid() != 0:
+            self.skipTest("needs root (writes /etc/hosts)")
+        super().setUp()
+        with open(self.HOSTS) as f:
+            self.original = f.read()
+
+    def tearDown(self):
+        super().tearDown()
+        if hasattr(self, "original"):
+            with open(self.HOSTS, "w") as f:  # in place: Docker mounts the file
+                f.write(self.original)
+
+    def point(self, name: str, addr: str):
+        with open(self.HOSTS, "w") as f:
+            f.write(self.original + f"\n{addr} {name}\n")
+
+    # The cases above are not repeated here.
+    test_the_board_tells_the_app = None
+    test_a_silent_move_is_found_by_the_mac_address = None
+    test_a_board_that_restarts_at_another_address = None
+
+    def test_an_old_address_from_a_cache_does_not_count(self):
+        self.point("board.test", "127.0.0.8")
+        sim, out = self.start("127.0.0.8")
+        # Discovery gets no answer (nothing at .20): only the name is left.
+        cli = self.replay(f"board.test:{sim.port}", 12, "--discovery-host", "127.0.0.20",
+                          "--discovery-port", str(sim.discovery_port))
+        self.assertIsNotNone(out.wait_for(self.held, 5))
+        time.sleep(0.5)
+        sim.command("JUMP 127.0.0.9")
+        jumped = out.wait_for(lambda l: l.startswith("JUMPED"), 2)
+        # The name still gives the old address: nothing found.
+        time.sleep(3)
+        self.assertEqual(self.after(out, jumped[0], self.held), [], "not found under the old address")
+        self.assertIsNone(cli.wait_for(lambda l: l.startswith("Board moved"), 0.1))
+        # The name catches up: the next search finds the board there.
+        self.point("board.test", "127.0.0.9")
+        back = out.wait_for(self.held, 6, since=jumped[0])
+        self.assertIsNotNone(back, "found under the name's new address")
+        print(f"  stale name: input again {(back[0] - jumped[0]):.1f} s after the move")
+        self.assertIsNotNone(cli.wait_for(lambda l: l == f"Board moved to 127.0.0.9:{sim.port} (name)", 2))
+        self.assertEqual(self.procs[-1].wait(timeout=20), 0)
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -1276,7 +1488,8 @@ def main() -> int:
         prog = unittest.main(argv=[sys.argv[0], *rest], exit=False, verbosity=2)
         return 0 if prog.result.wasSuccessful() else 1
     # Every test class in its own process at the same time: each starts its
-    # own simulators on free ports, and only InteropTests uses pshb-cli.
+    # own simulators on free ports; InteropTests and MoveTests use pshb-cli,
+    # each with a key and packet counter of its own.
     classes = [name for name, obj in globals().items()
                if isinstance(obj, type) and issubclass(obj, unittest.TestCase)]
     cmd = [sys.executable, os.path.abspath(__file__), "--sim", SIM]

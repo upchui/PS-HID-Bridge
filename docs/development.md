@@ -109,6 +109,7 @@ For a new board or a bigger firmware change. The order is chosen so that each st
 14. Typing text into a PlayStation text field with its keyboard language set to German: `@`, umlauts, `é` (dead key), `^` alone; and with US English.
 15. Pairing: "Get the key" on a board after a factory reset (asks for an own password first), then on a board that has a key; the browser stays logged in or can log in again.
 16. Window rule on Hyprland, Sway or an X11 desktop besides KDE Plasma (the Triggers page names the backend).
+17. The board gets another address while you play: give it another fixed address in the router (DHCP reservation), then pull its network cable for a moment and plug it back in (it renews its lease at once). With the bridge on and a key held, play goes on without a pause, the board's log says "told the app ... about the new address", and the app shows "Board at a new address". With older firmware on the board the app finds it within about 2 s. Then the name: once the app shows the board's `.local` name as its address (Board page), change the reservation again.
 
 ## Directories
 

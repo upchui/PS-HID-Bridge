@@ -37,6 +37,7 @@ The first 10 bytes (version, type, counter) are not encrypted but enter the tag 
 | `0x04` | PONG | board → app | 49 B | 75 B |
 | `0x05` | PING_TIMED | app → board | 12 B | 38 B |
 | `0x06` | PONG_TIMED | board → app | 65 B | 91 B |
+| `0x07` | MOVED | board → app | 16 B | 42 B |
 
 ### Nonce
 
@@ -117,15 +118,30 @@ With them the app can take the board's processing time (`board_tx_us - board_rx_
 
 Only boards that set status bit 4 in their PONGs answer PING_TIMED; the app sends it only to them (older boards count an unknown type as malformed). Everything a PONG does, a PONG_TIMED does as well (session, connection, round trip).
 
+### MOVED (16 bytes)
+
+The board's address is about to change: its DHCP server gave it another one (a renewal with another address, or a new lease after a NAK while the old address is still in use). Before it switches, the board tells the app, unasked, **from the old address and the input port**: the app's socket takes packets only from the address it sends to, and a firewall on the PC lets them in as answers.
+
+| Offset | Size | Field | Content |
+|---|---|---|---|
+| 0 | 8 | session_id | the board's current session |
+| 8 | 4 | ip | the new IPv4 address, a.b.c.d in this order |
+| 12 | 2 | udp_port | u16, the input port (unchanged) |
+| 14 | 2 | reserved | 0 |
+
+- It goes to the sender (IP and port) of the last packet that passed the tag check, if that came within the last 30 s; without such an app the board switches without a word. It is sealed like a PONG, with the next value of the board's counter.
+- Twice in a row (one may be lost), then once more from the new address: the network chip asks the PC for its MAC address first (ARP), so the PC knows at once where the new address is (its own request may have reached the board before the switch). The app ignores the repeats.
+- The board waits at most 20 ms for this before it takes the new address. Without the old address (the lease ended, the link was down, a conflict) there is nothing to send from: the app looks for the board itself (see "Behaviour of the app").
+
 ## Processing on the board
 
 For every received packet the board checks, in this order:
 
-1. Length at least header + tag, version `0x01`, type INPUT, HEARTBEAT, PING or PING_TIMED, length matches the type. Otherwise `rx_malformed`.
+1. Length at least header + tag, version `0x01`, type INPUT, HEARTBEAT, PING or PING_TIMED (the board's own types, PONG, PONG_TIMED and MOVED, are refused), length matches the type. Otherwise `rx_malformed`.
 2. Sender IP inside the allowed address or subnet (if a sender filter is configured, e.g. `192.168.1.20` or `192.168.1.0/24`). Otherwise `rx_filtered`.
 3. `counter > last valid counter`. Otherwise `rx_replay`. This check is cheap and therefore comes before the cryptography.
 4. Verify the tag and decrypt. Otherwise `rx_auth_fail`.
-5. Only now: `last valid counter = counter`. A forged packet can therefore not push the counter up.
+5. Only now: `last valid counter = counter`, and the sender (IP and port) is where a MOVED would go. A forged packet can therefore neither push the counter up nor redirect a MOVED.
 6. INPUT/HEARTBEAT: `session_id` must match the current session. Otherwise `rx_replay`; at most every 100 ms (one limit for all senders together) the board answers with a PONG with `t_app_us = seq = 0` as a **session hint**, so the app learns at once that the session changed. A hint is always a plain PONG, also for a sender that uses PING_TIMED.
 7. PING: PONG to the sender (IP and port of the received packet); PING_TIMED: PONG_TIMED. If the network chip is still sending the previous answer, the new one is dropped; the next ping gets one.
 
@@ -147,6 +163,13 @@ The board creates a new **session id** from the TRNG on every boot. After a rest
 5. When deactivating, on "release all" and when closing: INPUT with `RELEASE_ALL`, once.
 
 A PONG counts only if it opens with the key and its `t_app_us` is from the last 2 s (and not in the future); other authentic PONGs are counted as stale. The app is "connected" while the last PONG that counted is less than 3 s old. A session hint does not switch the session by itself (it answers no ping, so a recorded one could be replayed): when it names another session, the app pings at once (at most every 5 ms), and the answer switches the session.
+
+**The board moves.** A MOVED counts only if it opens with the key, names the current session and its counter is higher than that of every PONG or MOVED of this session that counted before (the board's counter only rises within a session, so a recorded MOVED never counts again). Then the app sends to the new address at once and pings there; the bridge stays as it is (on stays on, the state is the same). Without a notice, the app looks for the board when it has not answered for 1.5 s with the bridge on (3 s with it off, or since the start without an answer):
+
+1. Discovery (below) for the board's MAC address, learned from the board's discovery answer once it answered with the key; the first matching answer ends the wait.
+2. Its name, if it is set up under one (e.g. `ps-hid-bridge-96c33d.local`). An address from a name is only a candidate: DNS and mDNS caches may still give the old address. The old address is skipped, any other must answer discovery with the board's MAC address.
+
+After a switch the board has 3 s to answer a ping there, else the search goes on. Without a result the next search follows after 3 s, then after twice as long each time, up to 30 s with the bridge on and 5 minutes with it off.
 
 ## Unencrypted debug mode (version 0)
 
@@ -185,7 +208,7 @@ Board name:
 
 - `POST /api/name` (logged in or signed) with `{"name": "…"}`: the name shown in the app, the search and the web interface. At most 31 bytes of UTF-8 after spaces at either end are removed, no control characters; `""` = the default name `ps-hid-bridge-xxxxxx`. Answers `{"ok": true, "name": …, "hostname": …}`, 400 with the reason otherwise. Takes effect at once, no restart.
 - The **network name** follows from it: lower-case letters and digits, `ä ö ü ß` as `ae oe ue ss`, everything else one `-`, no `-` at either end, at most 31 characters; the default name if nothing is left ("Wohnzimmer PS5" → `wohnzimmer-ps5`). The board sends it to the router as DHCP host name (option 12, at once with a lease renewal) and accepts it as `Host`, besides its default name.
-- `GET /api/status` carries `name` (as shown), `name_set` (a name of its own), `default_name` and `hostname` (the network name).
+- `GET /api/status` carries `name` (as shown), `name_set` (a name of its own), `default_name`, `hostname` (the network name) and `local_name`: the mDNS name it answers to right now (`<network name>.local`, the default one after a conflict; `""` while it checks the name or when both are taken). The app keeps that name instead of the address in its settings once it leads to the board on the PC.
 
 ## Host header
 
@@ -224,7 +247,7 @@ Rules:
 - Only requests of exactly 64 bytes with this magic, version and type are answered: the answer is never larger than the request (no amplification).
 - At most 16 answers per second; further requests are dropped.
 - The board answers once it has an address (DHCP or static). Firmware before this feature does not answer.
-- The app sends the request to 255.255.255.255, to the broadcast address of each of its IPv4 networks and, in networks of up to 512 addresses, to every address once more. A firewall on the PC (ufw, firewalld) drops answers to a broadcast, which it cannot match to a request it let out; it lets in answers to a request to that address. The app keeps the MAC address of the board it uses and looks for it this way when the board no longer answers at its address (a new address from DHCP): 3 seconds after the last answer, then less often. A running bridge then sends to the new address and stays on.
+- The app sends the request to 255.255.255.255, to the broadcast address of each of its IPv4 networks and, in networks of up to 512 addresses, to every address once more. A firewall on the PC (ufw, firewalld) drops answers to a broadcast, which it cannot match to a request it let out; it lets in answers to a request to that address. The app keeps the MAC address of the board it uses and looks for it this way when the board no longer answers at its address and did not say where it went (MOVED): see "Behaviour of the app". A running bridge then sends to the new address and stays on.
 
 ## Test vectors
 

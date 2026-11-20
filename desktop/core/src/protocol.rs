@@ -15,6 +15,8 @@ pub const PING_LEN: usize = 12;
 pub const PONG_LEN: usize = 49;
 /// PONG_TIMED: a PONG and the board's time stamps (see [`PongTimed`]).
 pub const PONG_TIMED_LEN: usize = 65;
+/// MOVED: session_id u64 | ip [4] | udp_port u16 | reserved u16.
+pub const MOVED_LEN: usize = 16;
 
 pub const FLAG_RELEASE_ALL: u8 = 0x01;
 
@@ -38,6 +40,9 @@ pub enum PacketType {
     /// Like PING, answered with PONG_TIMED (boards with STATUS_TIMED_PING).
     PingTimed = 0x05,
     PongTimed = 0x06,
+    /// Board -> app, unasked: the board's address is about to change (DHCP);
+    /// sent from the old address (see [`Moved`]).
+    Moved = 0x07,
 }
 
 impl PacketType {
@@ -49,6 +54,7 @@ impl PacketType {
             0x04 => Some(Self::Pong),
             0x05 => Some(Self::PingTimed),
             0x06 => Some(Self::PongTimed),
+            0x07 => Some(Self::Moved),
             _ => None,
         }
     }
@@ -59,6 +65,7 @@ impl PacketType {
             Self::Ping | Self::PingTimed => PING_LEN,
             Self::Pong => PONG_LEN,
             Self::PongTimed => PONG_TIMED_LEN,
+            Self::Moved => MOVED_LEN,
         }
     }
 }
@@ -264,6 +271,34 @@ impl PongTimed {
             pong: Pong::decode(&b[..PONG_LEN]),
             board_rx_us: u64::from_le_bytes(b[49..57].try_into().unwrap()),
             board_tx_us: u64::from_le_bytes(b[57..65].try_into().unwrap()),
+        }
+    }
+}
+
+/// MOVED: from now on the board is at `ip:udp_port`. Valid only for the
+/// session it names, and only once (its counter is higher than that of
+/// every board packet before it, see crate::transport).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Moved {
+    pub session_id: u64,
+    pub ip: std::net::Ipv4Addr,
+    pub udp_port: u16,
+}
+
+impl Moved {
+    pub fn encode(&self) -> [u8; MOVED_LEN] {
+        let mut b = [0u8; MOVED_LEN];
+        b[0..8].copy_from_slice(&self.session_id.to_le_bytes());
+        b[8..12].copy_from_slice(&self.ip.octets());
+        b[12..14].copy_from_slice(&self.udp_port.to_le_bytes());
+        b
+    }
+
+    pub fn decode(b: &[u8]) -> Self {
+        Self {
+            session_id: u64::from_le_bytes(b[0..8].try_into().unwrap()),
+            ip: std::net::Ipv4Addr::new(b[8], b[9], b[10], b[11]),
+            udp_port: u16::from_le_bytes([b[12], b[13]]),
         }
     }
 }

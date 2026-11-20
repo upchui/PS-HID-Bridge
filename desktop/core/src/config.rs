@@ -248,12 +248,19 @@ impl Default for TouchpadConfig {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// Board address, "192.168.1.50" or "192.168.1.50:45045".
+    /// Board address, "192.168.1.50" or "192.168.1.50:45045", or a name
+    /// ("ps-hid-bridge-96c33d.local", the app takes the board's network name
+    /// once it leads to the board on this PC).
     pub board: String,
     /// MAC address of the board at `board` ("02:68:9d:96:c3:3d"; empty =
     /// not known yet), learned from its discovery answer: the app finds the
-    /// board again when it got another address (crate::discover).
+    /// board again when it got another address (crate::follow).
     pub board_mac: String,
+    /// The address the board answered at last (`board` is a name): the app
+    /// starts there while it looks the name up (it may not resolve, or give
+    /// an old address from a cache).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub board_ip: String,
     /// Device selectors (path, "vvvv:pppp" or part of the name).
     pub devices: Vec<String>,
     pub triggers: Vec<TriggerConfig>,
@@ -304,6 +311,7 @@ impl Default for Config {
         Self {
             board: String::new(),
             board_mac: String::new(),
+            board_ip: String::new(),
             devices: Vec::new(),
             triggers: vec![TriggerConfig {
                 keys: "Ctrl+Alt+P".into(),

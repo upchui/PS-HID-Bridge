@@ -19,6 +19,7 @@ use pshb_core::controller::{Controller, Watchdog};
 use pshb_core::crypto::parse_key_hex;
 use pshb_core::discover::{self, FoundBoard};
 use pshb_core::engine::{Engine, Notice};
+use pshb_core::follow::{self, FollowConfig, NetFinder};
 use pshb_core::idle::IdleInhibitor;
 use pshb_core::input::{self, GrabGuard, InputMsg, InputSet, Waker};
 use pshb_core::lowlat::{self, AdapterTimer, CpuWake, CpuWakeState};
@@ -55,6 +56,18 @@ struct BoardArgs {
     psk_file: Option<PathBuf>,
 }
 
+/// Finding the board again when it moves (DHCP) while `run` or `replay` sends.
+#[derive(Args, Clone, Default)]
+struct FollowArgs {
+    /// Where to look for the board when it stops answering (discovery
+    /// requests; default: every network of this PC); can be repeated
+    #[arg(long = "discovery-host")]
+    discovery_hosts: Vec<std::net::Ipv4Addr>,
+    /// Discovery port of the board
+    #[arg(long, default_value_t = protocol::DISCOVERY_PORT)]
+    discovery_port: u16,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// List input devices
@@ -72,6 +85,8 @@ enum Command {
         /// Print the input latency (event -> packet sent) every 5 seconds
         #[arg(long)]
         stats: bool,
+        #[command(flatten)]
+        follow: FollowArgs,
     },
     /// Play input from a script file (test without real devices)
     Replay {
@@ -81,6 +96,8 @@ enum Command {
         file: PathBuf,
         #[arg(long)]
         hotkey: Option<String>,
+        #[command(flatten)]
+        follow: FollowArgs,
     },
     /// Find boards in the network (no key needed)
     Discover {
@@ -384,15 +401,51 @@ fn load_key(args: &BoardArgs) -> Result<[u8; 32], String> {
 }
 
 fn start_link(ctx: &Ctx, args: &BoardArgs, ping: Duration) -> Result<Link, String> {
-    start_link_rt(ctx, args, ping, false)
+    start_link_rt(ctx, args, ping, false, None)
 }
 
-fn start_link_rt(ctx: &Ctx, args: &BoardArgs, ping: Duration, realtime: bool) -> Result<Link, String> {
+/// With `follow`: the link finds the board again when it moves (its notice,
+/// its MAC address, its name; see pshb_core::follow).
+fn start_link_rt(
+    ctx: &Ctx,
+    args: &BoardArgs,
+    ping: Duration,
+    realtime: bool,
+    follow: Option<&FollowArgs>,
+) -> Result<Link, String> {
     let mut cfg = LinkConfig::new(board_addr(ctx, args)?, load_key(args)?);
     cfg.ping_interval = ping;
     cfg.realtime = realtime;
     cfg.counter_store = Some(config::counter_path());
+    if let Some(f) = follow {
+        let board = args.board.as_deref().unwrap_or(&ctx.config.board);
+        // The stored MAC address belongs to the stored board.
+        let mac = (board == ctx.config.board && !ctx.config.board_mac.is_empty())
+            .then(|| ctx.config.board_mac.clone());
+        let mut fc = FollowConfig::new(follow::host_name(board), mac);
+        fc.finder = Arc::new(NetFinder {
+            targets: (!f.discovery_hosts.is_empty()).then(|| f.discovery_hosts.clone()),
+            port: f.discovery_port,
+        });
+        cfg.follow = Some(fc);
+    }
     Link::start(cfg).map_err(|e| format!("UDP: {e}"))
+}
+
+/// Say so when the board moves while the link lives.
+fn report_moves(link: &Arc<Link>) {
+    let link = Arc::downgrade(link);
+    thread::spawn(move || {
+        let mut seen = 0;
+        while let Some(l) = link.upgrade() {
+            if let Some(m) = l.status().last_move.filter(|m| m.seq != seen) {
+                seen = m.seq;
+                println!("Board moved to {} ({})", m.to, m.reason.as_str());
+            }
+            drop(l);
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
 }
 
 fn no_answer_reason(link: &Link) -> String {
@@ -527,6 +580,7 @@ fn cmd_run(
     devices: &[String],
     hotkey: Option<&str>,
     stats: bool,
+    follow: &FollowArgs,
 ) -> Result<(), String> {
     let specs = if devices.is_empty() {
         ctx.config.devices.clone()
@@ -563,7 +617,14 @@ fn cmd_run(
         println!("Device: {} ({}, {})", d.name, d.kind(), d.path.display());
     }
 
-    let link = Arc::new(start_link_rt(ctx, board, Duration::from_secs(1), true)?);
+    let link = Arc::new(start_link_rt(
+        ctx,
+        board,
+        Duration::from_secs(1),
+        true,
+        Some(follow),
+    )?);
+    report_moves(&link);
     // Switches the bundling of a USB network adapter towards the board off
     // while this runs (if set up, see the README); puts back what a crashed
     // run left switched.
@@ -834,11 +895,27 @@ fn cmd_run(
     result
 }
 
-fn cmd_replay(ctx: &Ctx, board: &BoardArgs, file: &Path, hotkey: Option<&str>) -> Result<(), String> {
+fn cmd_replay(
+    ctx: &Ctx,
+    board: &BoardArgs,
+    file: &Path,
+    hotkey: Option<&str>,
+    follow: &FollowArgs,
+) -> Result<(), String> {
     let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
     let steps = script::parse(&text)?;
     let ecfg = engine_config(ctx, hotkey)?;
-    let link = Arc::new(connect(ctx, board, Duration::from_secs(1))?);
+    let link = Arc::new(start_link_rt(
+        ctx,
+        board,
+        Duration::from_secs(1),
+        false,
+        Some(follow),
+    )?);
+    if !link.wait_connected(Duration::from_secs(2)) {
+        return Err(no_answer_reason(&link));
+    }
+    report_moves(&link);
     let mut ctl = Controller::new(Engine::new(ecfg), link.clone());
     for step in steps {
         thread::sleep(step.delay);
@@ -1519,8 +1596,14 @@ fn main() -> ExitCode {
             devices,
             hotkey,
             stats,
-        } => cmd_run(&ctx, board, devices, hotkey.as_deref(), *stats),
-        Command::Replay { board, file, hotkey } => cmd_replay(&ctx, board, file, hotkey.as_deref()),
+            follow,
+        } => cmd_run(&ctx, board, devices, hotkey.as_deref(), *stats, follow),
+        Command::Replay {
+            board,
+            file,
+            hotkey,
+            follow,
+        } => cmd_replay(&ctx, board, file, hotkey.as_deref(), follow),
         Command::Discover {
             host,
             port,

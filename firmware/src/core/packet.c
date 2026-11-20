@@ -88,6 +88,19 @@ void pshb_pong_timed_decode(const uint8_t in[PSHB_PONG_TIMED_PAYLOAD_LEN], pshb_
     p->board_tx_us = pshb_rd64(&in[57]);
 }
 
+void pshb_moved_encode(uint8_t out[PSHB_MOVED_PAYLOAD_LEN], const pshb_moved_t *m) {
+    pshb_wr64(&out[0], m->session_id);
+    memcpy(&out[8], m->ip, 4);
+    pshb_wr16(&out[12], m->udp_port);
+    pshb_wr16(&out[14], 0);
+}
+
+void pshb_moved_decode(const uint8_t in[PSHB_MOVED_PAYLOAD_LEN], pshb_moved_t *m) {
+    m->session_id = pshb_rd64(&in[0]);
+    memcpy(m->ip, &in[8], 4);
+    m->udp_port = pshb_rd16(&in[12]);
+}
+
 size_t pshb_payload_len(uint8_t type) {
     switch (type) {
     case PSHB_TYPE_INPUT:
@@ -96,6 +109,7 @@ size_t pshb_payload_len(uint8_t type) {
     case PSHB_TYPE_PING_TIMED: return PSHB_PING_PAYLOAD_LEN;
     case PSHB_TYPE_PONG: return PSHB_PONG_PAYLOAD_LEN;
     case PSHB_TYPE_PONG_TIMED: return PSHB_PONG_TIMED_PAYLOAD_LEN;
+    case PSHB_TYPE_MOVED: return PSHB_MOVED_PAYLOAD_LEN;
     default: return 0;
     }
 }

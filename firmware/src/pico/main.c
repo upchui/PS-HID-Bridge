@@ -276,6 +276,7 @@ static void net_service(void) {
             uint8_t reply[PSHB_MAX_PACKET_LEN];
             g_bridge.input_applied = false;
             g_bridge.rx_at_us = edge;  // PONG_TIMED: when the datagram arrived (INTn)
+            g_bridge.rx_port = port;   // where a MOVED notice would go
             size_t rlen = bridge_handle_packet_pre(&g_bridge, pkt, (size_t)n, ip_to_u32(ip), t1, reply,
                                                    sizeof(reply), &s_pre);
             if (s_pre.valid) pshb_wipe(&s_pre, sizeof(s_pre));  // keystream
@@ -309,6 +310,61 @@ static void net_service(void) {
         g_diag.datagrams += (uint32_t)got;
         latency_add(&g_diag.bus, (uint32_t)(locked - noticed));
         if (had_edge) latency_add(&g_diag.detect, (uint32_t)(noticed - edge));
+    }
+}
+
+// Send a datagram on the input socket, waiting for the one before it (it
+// leaves within microseconds). Core 0, inside w5500_lock().
+static void send_on_input_socket(const uint8_t *pkt, size_t n, const uint8_t dst[4], uint16_t port) {
+    absolute_time_t until = make_timeout_time_us(2000);
+    while (!w5500_udp_send_nb(W5500_SOCK_UDP, pkt, (uint16_t)n, dst, port) && !time_reached(until)) {
+    }
+}
+
+// Core 1 is about to switch to another address (net_shared.h): tell the
+// app first, from the old address on the input socket -- the app takes
+// packets only from the address it sends to. Twice, in case one is lost
+// (the app ignores the repeat). Once the new address is set, the same
+// datagram once more from there: the chip asks the PC for its MAC address
+// first (ARP), and from that request the PC learns where the new address
+// is, without waiting for its own request to be answered (that one may
+// have arrived before the switch). Without an app: only the answer to core 1.
+static void move_service(void) {
+    static uint32_t done;
+    static uint8_t pkt[PSHB_MAX_PACKET_LEN];
+    static size_t len;
+    static uint32_t new_ip;
+    static uint8_t dst[4];
+    static uint16_t dst_port;
+    uint32_t seq = atomic_load(&g_net.move_seq);
+    if (seq != done) {
+        done = seq;
+        new_ip = atomic_load(&g_net.move_ip);
+        uint32_t to_ip;
+        len = bridge_build_moved(&g_bridge, new_ip, (uint16_t)atomic_load(&g_net.udp_port), time_us_64(), pkt,
+                                 sizeof(pkt), &to_ip, &dst_port);
+        if (len && atomic_load(&g_net.udp_enable) && w5500_lock_for(W5500_LOCK_TIMEOUT_US)) {
+            dst[0] = (uint8_t)(to_ip >> 24);
+            dst[1] = (uint8_t)(to_ip >> 16);
+            dst[2] = (uint8_t)(to_ip >> 8);
+            dst[3] = (uint8_t)to_ip;
+            send_on_input_socket(pkt, len, dst, dst_port);
+            send_on_input_socket(pkt, len, dst, dst_port);
+            w5500_unlock();
+            printf("net: told the app at %u.%u.%u.%u:%u about the new address\n", dst[0], dst[1], dst[2], dst[3],
+                   (unsigned)dst_port);
+        } else {
+            len = 0;
+        }
+        atomic_store(&g_net.move_done, seq);
+        return;
+    }
+    // Core 1 publishes the new address right after setting it.
+    if (len && atomic_load(&g_net.ip) == new_ip && atomic_load(&g_net.udp_enable) &&
+        w5500_lock_for(W5500_LOCK_TIMEOUT_US)) {
+        send_on_input_socket(pkt, len, dst, dst_port);
+        w5500_unlock();
+        len = 0;
     }
 }
 
@@ -461,6 +517,7 @@ int main(void) {
         tud_task();
         if (s_chip_ok) {
             net_service();
+            move_service();
         } else {
             chip_retry();
         }

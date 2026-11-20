@@ -13,23 +13,31 @@
 //! learns the board's session id and measures the round trip time. Only a
 //! PONG that answers one of our recent pings counts: a recorded old one
 //! must neither switch the session nor fake a connection.
+//!
+//! The board may get another address (DHCP) while the bridge is on. It says
+//! so first, from the old address (MOVED): the receiver switches at once if
+//! the notice belongs to the session and is newer than every board packet
+//! before it (a recorded one is not). Without a notice a search thread finds
+//! it again ([`crate::follow`]).
 
 use std::collections::VecDeque;
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::clock;
 use crate::counter::{CounterHealth, TxCounter};
 use crate::crypto::PacketKey;
+use crate::follow::{self, BoardMove, FollowConfig, MoveReason};
 use crate::oneway::{OneWay, OneWayStats};
 use crate::protocol::{
-    Direction, FLAG_RELEASE_ALL, InputPayload, KEY_LEN, PacketType, Ping, Pong, PongTimed, STATUS_TIMED_PING,
+    Direction, FLAG_RELEASE_ALL, InputPayload, KEY_LEN, Moved, PacketType, Ping, Pong, PongTimed,
+    STATUS_TIMED_PING,
 };
 use crate::rt;
 
@@ -65,6 +73,8 @@ pub struct LinkConfig {
     pub min_send_interval: Duration,
     /// Run the timer thread with real-time priority (see [`crate::rt`]).
     pub realtime: bool,
+    /// Look for the board when it stops answering (None: stay at `board`).
+    pub follow: Option<FollowConfig>,
 }
 
 impl LinkConfig {
@@ -77,6 +87,7 @@ impl LinkConfig {
             ping_interval: Duration::from_secs(1),
             min_send_interval: Duration::from_millis(1),
             realtime: false,
+            follow: None,
         }
     }
 }
@@ -109,6 +120,14 @@ pub struct LinkStatus {
     pub bad_replies: u64,
     /// Authentic replies that did not answer a recent ping (replayed?).
     pub stale_replies: u64,
+    /// Where the packets go now.
+    pub board_addr: Option<SocketAddr>,
+    /// The latest move to another address (its notice or the search).
+    pub last_move: Option<BoardMove>,
+    /// The board's MAC address and name from its discovery answer (learned
+    /// by the search once it answers; None without a search).
+    pub board_mac: Option<String>,
+    pub board_name: Option<String>,
 }
 
 impl LinkStatus {
@@ -182,6 +201,8 @@ struct Shared {
     oneway: Mutex<OneWay>,
     /// Whether the packet counter's floor reaches the disk.
     counter_health: Option<CounterHealth>,
+    /// The name the search looks up (set later: Link::set_follow_name).
+    follow_name: Mutex<Option<String>>,
 }
 
 impl Shared {
@@ -346,6 +367,7 @@ impl Link {
             last_pong_us: AtomicU64::new(0),
             session_since_us: AtomicU64::new(0),
             oneway: Mutex::new(OneWay::default()),
+            follow_name: Mutex::new(None),
         });
 
         let rx_thread = {
@@ -366,6 +388,14 @@ impl Link {
                 timer(&shared)
             })?
         };
+        // Not joined: its lookups may take seconds, and it ends by itself
+        // once the link is gone.
+        if let Some(follow) = cfg.follow {
+            let weak = Arc::downgrade(&shared);
+            thread::Builder::new()
+                .name("pshb-follow".into())
+                .spawn(move || follower(weak, follow))?;
+        }
         Ok(Self {
             shared,
             threads: vec![timer_thread, rx_thread],
@@ -441,6 +471,12 @@ impl Link {
         });
     }
 
+    /// The name the search looks up from now on (None: the one it started
+    /// with), e.g. the board's network name once it is known.
+    pub fn set_follow_name(&self, name: Option<String>) {
+        *self.shared.follow_name.lock().unwrap() = name;
+    }
+
     pub fn set_ping_interval(&self, interval: Duration) {
         self.with_tx(|tx| {
             tx.ping_interval = interval;
@@ -449,7 +485,9 @@ impl Link {
     }
 
     pub fn status(&self) -> LinkStatus {
+        let board = self.shared.tx.lock().unwrap().board;
         let mut st = self.shared.status.lock().unwrap();
+        st.board_addr = Some(board);
         if !st.is_connected() && (st.board.is_some() || st.rtt.is_some()) {
             // The board went away: don't keep showing what it last said.
             st.board = None;
@@ -534,6 +572,9 @@ impl Drop for Link {
 
 fn receiver(sock: Arc<UdpSocket>, key: PacketKey, shared: Arc<Shared>) {
     let mut buf = [0u8; 512];
+    // The highest counter of the board's authentic answers in its current
+    // session: a MOVED notice must be newer (a recorded one is not).
+    let mut board_counter: Option<(u64, u64)> = None;
     while !shared.stop.load(Ordering::Acquire) {
         let n = match sock.recv(&mut buf) {
             Ok(0) => continue, // shut down by Drop (or an empty datagram)
@@ -545,17 +586,38 @@ fn receiver(sock: Arc<UdpSocket>, key: PacketKey, shared: Arc<Shared>) {
                 continue;
             }
         };
+        let Ok((h, payload)) = key.open(Direction::BoardToApp, &buf[..n]) else {
+            shared.status.lock().unwrap().bad_replies += 1;
+            continue;
+        };
         // A PONG_TIMED is a PONG with the board's time stamps.
-        let (pong, stamps) = match key.open(Direction::BoardToApp, &buf[..n]) {
-            Ok((h, payload)) if h.ptype == PacketType::Pong as u8 => (Pong::decode(&payload), None),
-            Ok((h, payload)) if h.ptype == PacketType::PongTimed as u8 => {
-                let t = PongTimed::decode(&payload);
-                (t.pong, Some((t.board_rx_us, t.board_tx_us)))
+        let (pong, stamps) = if h.ptype == PacketType::Pong as u8 {
+            (Pong::decode(&payload), None)
+        } else if h.ptype == PacketType::PongTimed as u8 {
+            let t = PongTimed::decode(&payload);
+            (t.pong, Some((t.board_rx_us, t.board_tx_us)))
+        } else if h.ptype == PacketType::Moved as u8 {
+            let m = Moved::decode(&payload);
+            match board_counter {
+                Some((sid, newest))
+                    if shared.session() == Some(sid) && m.session_id == sid && h.counter > newest =>
+                {
+                    board_counter = Some((sid, h.counter));
+                    if m.udp_port != 0 && !m.ip.is_unspecified() {
+                        move_to(
+                            &shared,
+                            SocketAddr::new(IpAddr::V4(m.ip), m.udp_port),
+                            MoveReason::Notice,
+                        );
+                    }
+                }
+                // Another session's, or not newer than what came before.
+                _ => shared.status.lock().unwrap().stale_replies += 1,
             }
-            _ => {
-                shared.status.lock().unwrap().bad_replies += 1;
-                continue;
-            }
+            continue;
+        } else {
+            shared.status.lock().unwrap().bad_replies += 1;
+            continue;
         };
         let now_us = shared.micros();
         let changed = shared.session() != Some(pong.session_id);
@@ -574,6 +636,10 @@ fn receiver(sock: Arc<UdpSocket>, key: PacketKey, shared: Arc<Shared>) {
             shared.status.lock().unwrap().stale_replies += 1;
             continue;
         }
+        board_counter = match board_counter {
+            Some((sid, newest)) if sid == pong.session_id => Some((sid, newest.max(h.counter))),
+            _ => Some((pong.session_id, h.counter)),
+        };
         shared.last_pong_us.store(now_us, Ordering::Relaxed);
         shared
             .timed_ping
@@ -610,6 +676,111 @@ fn receiver(sock: Arc<UdpSocket>, key: PacketKey, shared: Arc<Shared>) {
             shared.session_known.store(true, Ordering::Release);
             // The new session knows nothing of our state: send it now.
             shared.tx.lock().unwrap().pump_and_plan(&shared, false);
+        }
+    }
+}
+
+/// Send to the board at `to` from now on (it moved: its notice or the
+/// search), and note that. The bridge state, the input held and the packet
+/// counter stay. False if it is there already (or `to` is of the other
+/// address family: the socket is bound to one).
+fn move_to(shared: &Shared, to: SocketAddr, reason: MoveReason) -> bool {
+    {
+        let mut tx = shared.tx.lock().unwrap();
+        if tx.board == to || tx.board.is_ipv4() != to.is_ipv4() {
+            return false;
+        }
+        tx.board = to;
+        reconnect(&tx.sock, to);
+        let now = Instant::now();
+        tx.last_reconnect = now;
+        tx.next_ping = now; // ask it right away
+        tx.pump_and_plan(shared, false);
+    }
+    let mut st = shared.status.lock().unwrap();
+    let seq = st.last_move.map_or(1, |m| m.seq + 1);
+    st.last_move = Some(BoardMove { to, reason, seq });
+    drop(st);
+    crate::logln!("PS HID Bridge: the board is at {to} now ({})", reason.as_str());
+    true
+}
+
+/// The search for a board that stopped answering (crate::follow), and who
+/// the board is once it answers (its MAC address, for the search). Holds
+/// the link only weakly: lookups may take seconds, the link does not wait
+/// for them when it goes away.
+fn follower(shared: Weak<Shared>, cfg: FollowConfig) {
+    const TICK: Duration = Duration::from_millis(100);
+    let started = Instant::now();
+    let mut mac = cfg.mac.clone();
+    // The address whose board was asked who it is.
+    let mut probed: Option<SocketAddr> = None;
+    let mut wait = follow::FIRST_WAIT;
+    let mut next_search: Option<Instant> = None;
+    // After a switch: until then the board may answer at its new address.
+    let mut confirm_until: Option<Instant> = None;
+    loop {
+        thread::sleep(TICK);
+        let (board, active, last_pong, name) = {
+            let Some(s) = shared.upgrade() else { return };
+            if s.stop.load(Ordering::Acquire) {
+                return;
+            }
+            let (board, active) = {
+                let tx = s.tx.lock().unwrap();
+                (tx.board, tx.active)
+            };
+            let last_pong = s.status.lock().unwrap().last_pong;
+            let name = s.follow_name.lock().unwrap().clone().or_else(|| cfg.name.clone());
+            (board, active, last_pong, name)
+        };
+        let now = Instant::now();
+        let silent = now.duration_since(last_pong.map_or(started, |t| t.max(started)));
+        // Never answered yet (a start at the last known address): soon.
+        let lost_after = if active || last_pong.is_none() {
+            follow::LOST_ACTIVE
+        } else {
+            follow::LOST_IDLE
+        };
+        if silent < lost_after {
+            wait = follow::FIRST_WAIT;
+            next_search = None;
+            confirm_until = None;
+            if probed != Some(board) {
+                probed = Some(board);
+                if let IpAddr::V4(ip) = board.ip()
+                    && let Some((m, n)) = cfg.finder.probe(ip)
+                {
+                    // It answers encrypted pings there: this is the board,
+                    // whatever MAC address was known before.
+                    mac = Some(m.clone());
+                    let Some(s) = shared.upgrade() else { return };
+                    let mut st = s.status.lock().unwrap();
+                    st.board_mac = Some(m);
+                    st.board_name = Some(n);
+                }
+            }
+            continue;
+        }
+        if confirm_until.is_some_and(|t| now < t) || next_search.is_some_and(|t| now < t) {
+            continue;
+        }
+        let found = follow::search(&*cfg.finder, board, mac.as_deref(), name.as_deref());
+        let max = if active {
+            follow::MAX_WAIT_ACTIVE
+        } else {
+            follow::MAX_WAIT_IDLE
+        };
+        next_search = Some(Instant::now() + wait.min(max));
+        wait = (wait * 2).min(max);
+        if let Some((to, reason)) = found {
+            let Some(s) = shared.upgrade() else { return };
+            if s.stop.load(Ordering::Acquire) {
+                return;
+            }
+            if move_to(&s, to, reason) {
+                confirm_until = Some(Instant::now() + follow::CONFIRM);
+            }
         }
     }
 }
@@ -898,11 +1069,18 @@ mod tests {
         timed: Option<Instant>,
         /// Without `timed`: drop PING_TIMED silently, like firmware before it.
         ignore_timed: bool,
+        /// Where the app's packets came from.
+        app: Option<SocketAddr>,
     }
 
     impl FakeBoard {
         fn new() -> Self {
-            let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+            Self::bound("127.0.0.1:0")
+        }
+
+        /// At this address (all of 127.0.0.0/8 is this machine).
+        fn bound(addr: &str) -> Self {
+            let sock = UdpSocket::bind(addr).unwrap();
             sock.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
             Self {
                 sock,
@@ -912,7 +1090,28 @@ mod tests {
                 fake_t_app_us: None,
                 timed: None,
                 ignore_timed: false,
+                app: None,
             }
+        }
+
+        /// Tell the app that the board is at `to` from now on (MOVED);
+        /// returns the datagram.
+        fn send_moved(&mut self, to: SocketAddr, session: u64) -> Vec<u8> {
+            self.counter += 1;
+            let IpAddr::V4(ip) = to.ip() else { unreachable!() };
+            let m = Moved {
+                session_id: session,
+                ip,
+                udp_port: to.port(),
+            };
+            let pkt = self.key.seal(
+                Direction::BoardToApp,
+                PacketType::Moved,
+                self.counter,
+                &m.encode(),
+            );
+            self.sock.send_to(&pkt, self.app.unwrap()).unwrap();
+            pkt
         }
 
         fn reply_timed(&mut self, pong: PongTimed, to: SocketAddr) {
@@ -951,6 +1150,7 @@ mod tests {
                 let Ok((n, from)) = self.sock.recv_from(&mut buf) else {
                     continue;
                 };
+                self.app = Some(from);
                 let (h, payload) = self.key.open(Direction::AppToBoard, &buf[..n]).unwrap();
                 match PacketType::from_u8(h.ptype).unwrap() {
                     t @ (PacketType::Ping | PacketType::PingTimed) => {
@@ -1004,6 +1204,226 @@ mod tests {
             }
             got
         }
+    }
+
+    const A_KEY: KeyState = KeyState {
+        mods: 0,
+        keys: [0x04, 0, 0, 0, 0, 0],
+        buttons: 0,
+    };
+
+    /// The key "A" held in what reached the board.
+    fn holds_a(got: &[(PacketType, InputPayload, u64)]) -> bool {
+        got.iter().any(|(_, p, _)| p.keys[0] == 0x04)
+    }
+
+    /// Collect what reaches `board` until the key "A" is there (or `limit`).
+    fn until_a(board: &mut FakeBoard, limit: Duration) -> (bool, Duration) {
+        let t = Instant::now();
+        while t.elapsed() < limit {
+            if holds_a(&board.run_for(Duration::from_millis(20))) {
+                return (true, t.elapsed());
+            }
+        }
+        (false, t.elapsed())
+    }
+
+    /// A link to `board` with the bridge on and "A" held.
+    fn holding_a(board: &mut FakeBoard, cfg: impl FnOnce(SocketAddr) -> LinkConfig) -> Link {
+        let link = Link::start(cfg(board.addr())).unwrap();
+        board.run_for(Duration::from_millis(100));
+        assert!(link.wait_connected(Duration::from_millis(500)));
+        link.set_active(true);
+        link.set_state(A_KEY, None);
+        assert!(holds_a(&board.run_for(Duration::from_millis(100))));
+        link
+    }
+
+    #[test]
+    fn the_board_says_where_it_moved() {
+        let mut old = FakeBoard::bound("127.0.0.2:0");
+        let mut new = FakeBoard::bound("127.0.0.3:0");
+        new.counter = 5000; // the same board: its counter goes on
+        let link = holding_a(&mut old, |a| LinkConfig::new(a, KEY));
+        old.send_moved(new.addr(), SESSION);
+        let (held, after) = until_a(&mut new, Duration::from_secs(1));
+        assert!(held, "the key held reaches the board at its new address");
+        // Within a heartbeat: the board lets go only after 250 ms.
+        assert!(after < Duration::from_millis(150), "{after:?}");
+        let st = link.status();
+        assert_eq!(st.board_addr, Some(new.addr()));
+        assert_eq!(
+            st.last_move.map(|m| (m.to, m.reason, m.seq)),
+            Some((new.addr(), MoveReason::Notice, 1))
+        );
+        assert!(st.is_connected());
+        assert!(
+            old.run_for(Duration::from_millis(100)).is_empty(),
+            "nothing to the old address"
+        );
+    }
+
+    #[test]
+    fn recorded_or_foreign_move_notices_are_ignored() {
+        let mut board = FakeBoard::bound("127.0.0.4:0");
+        let link = holding_a(&mut board, |a| LinkConfig::new(a, KEY));
+        let elsewhere: SocketAddr = "127.0.0.9:45045".parse().unwrap();
+        let before = link.status();
+        // Another session's notice.
+        board.send_moved(elsewhere, SESSION + 1);
+        // One older than the board's answers before it (recorded earlier).
+        let counter = board.counter;
+        board.counter = 10;
+        board.send_moved(elsewhere, SESSION);
+        board.counter = counter;
+        // One sealed with another key.
+        board.key = PacketKey::new(&[7; 32]);
+        board.send_moved(elsewhere, SESSION);
+        board.key = PacketKey::new(&KEY);
+        // A valid one (to where the board is), then the same once more.
+        let pkt = board.send_moved(board.addr(), SESSION);
+        board.sock.send_to(&pkt, board.app.unwrap()).unwrap();
+        assert!(holds_a(&board.run_for(Duration::from_millis(200))));
+        let st = link.status();
+        assert_eq!(st.board_addr, Some(board.addr()));
+        assert_eq!(st.last_move, None);
+        assert_eq!(st.stale_replies, before.stale_replies + 3);
+        assert_eq!(st.bad_replies, before.bad_replies + 1);
+    }
+
+    const MAC: &str = "02:68:9d:96:c3:3d";
+
+    /// The network as the search sees it: the board answers discovery where
+    /// it is, a name resolves to `names` (maybe stale, like a cache).
+    struct Net {
+        at: Mutex<SocketAddr>,
+        names: Mutex<Vec<IpAddr>>,
+        broadcast: AtomicBool,
+        searches: AtomicU64,
+    }
+
+    impl Net {
+        fn new(at: SocketAddr) -> Arc<Self> {
+            Arc::new(Self {
+                at: Mutex::new(at),
+                names: Mutex::new(Vec::new()),
+                broadcast: AtomicBool::new(true),
+                searches: AtomicU64::new(0),
+            })
+        }
+    }
+
+    impl follow::Finder for Net {
+        fn find_mac(&self, mac: &str) -> Option<SocketAddr> {
+            self.searches.fetch_add(1, Ordering::Relaxed);
+            (mac == MAC && self.broadcast.load(Ordering::Relaxed)).then(|| *self.at.lock().unwrap())
+        }
+        fn probe(&self, ip: std::net::Ipv4Addr) -> Option<(String, String)> {
+            (self.at.lock().unwrap().ip() == IpAddr::V4(ip)).then(|| (MAC.to_string(), "board".to_string()))
+        }
+        fn resolve(&self, _host: &str) -> Vec<IpAddr> {
+            self.names.lock().unwrap().clone()
+        }
+    }
+
+    fn following(board: SocketAddr, net: &Arc<Net>, name: Option<&str>, mac: Option<&str>) -> LinkConfig {
+        let mut cfg = LinkConfig::new(board, KEY);
+        cfg.follow = Some(FollowConfig {
+            name: name.map(str::to_string),
+            mac: mac.map(str::to_string),
+            finder: net.clone(),
+        });
+        cfg
+    }
+
+    #[test]
+    fn a_silent_move_is_found_by_the_mac_address() {
+        let mut old = FakeBoard::bound("127.0.0.5:0");
+        let mut new = FakeBoard::bound("127.0.0.6:0");
+        new.counter = 5000;
+        let net = Net::new(old.addr());
+        // The MAC address is learned once the board answers.
+        let link = holding_a(&mut old, |a| following(a, &net, None, None));
+        old.run_for(Duration::from_millis(200));
+        assert_eq!(link.status().board_mac.as_deref(), Some(MAC));
+        // Gone without a word (older firmware, or the notice got lost).
+        *net.at.lock().unwrap() = new.addr();
+        let (held, after) = until_a(&mut new, Duration::from_secs(4));
+        assert!(held);
+        // Lost after 1.5 s with the bridge on, then found at once.
+        assert!(after < Duration::from_millis(2500), "{after:?}");
+        let st = link.status();
+        assert_eq!(
+            st.last_move.map(|m| (m.to, m.reason)),
+            Some((new.addr(), MoveReason::Discovery))
+        );
+        assert!(link.status().is_connected());
+    }
+
+    #[test]
+    fn a_name_with_the_old_address_from_a_cache_does_not_count() {
+        let mut old = FakeBoard::bound("127.0.0.7:0");
+        // Same port: a name gives only the address.
+        let mut new = FakeBoard::bound(&format!("127.0.0.8:{}", old.addr().port()));
+        new.counter = 5000;
+        let net = Net::new(old.addr());
+        net.broadcast.store(false, Ordering::Relaxed); // discovery gets no answer (firewall)
+        *net.names.lock().unwrap() = vec![old.addr().ip()];
+        let link = holding_a(&mut old, |a| following(a, &net, Some("board.test"), Some(MAC)));
+        *net.at.lock().unwrap() = new.addr();
+        // The name still gives the old address: no move.
+        let (held, _) = until_a(&mut new, Duration::from_millis(2500));
+        assert!(!held);
+        assert_eq!(link.status().board_addr, Some(old.addr()));
+        assert!(net.searches.load(Ordering::Relaxed) >= 1);
+        // The cache catches up: the next search (3 s after the first) finds it.
+        *net.names.lock().unwrap() = vec![old.addr().ip(), new.addr().ip()];
+        let (held, _) = until_a(&mut new, Duration::from_secs(3));
+        assert!(held);
+        let st = link.status();
+        assert_eq!(
+            st.last_move.map(|m| (m.to, m.reason)),
+            Some((new.addr(), MoveReason::Name))
+        );
+    }
+
+    #[test]
+    fn with_the_bridge_off_the_search_waits_longer() {
+        let mut old = FakeBoard::bound("127.0.0.10:0");
+        let mut new = FakeBoard::bound("127.0.0.11:0");
+        new.counter = 5000;
+        let net = Net::new(old.addr());
+        let link = Link::start(following(old.addr(), &net, None, Some(MAC))).unwrap();
+        old.run_for(Duration::from_millis(200));
+        assert!(link.wait_connected(Duration::from_millis(500)));
+        *net.at.lock().unwrap() = new.addr();
+        let t = Instant::now();
+        while link.status().board_addr != Some(new.addr()) && t.elapsed() < Duration::from_secs(5) {
+            new.run_for(Duration::from_millis(50));
+        }
+        let after = t.elapsed();
+        assert_eq!(link.status().board_addr, Some(new.addr()));
+        assert!(
+            after > Duration::from_millis(2500) && after < Duration::from_millis(4000),
+            "{after:?}"
+        );
+    }
+
+    #[test]
+    fn a_start_at_an_old_address_finds_the_board_by_its_name() {
+        let old: SocketAddr = "127.0.0.12:45045".parse().unwrap(); // nothing there
+        let mut board = FakeBoard::bound("127.0.0.13:45045");
+        let net = Net::new(board.addr());
+        net.broadcast.store(false, Ordering::Relaxed);
+        *net.names.lock().unwrap() = vec![board.addr().ip()];
+        let link = Link::start(following(old, &net, Some("board.test"), Some(MAC))).unwrap();
+        let t = Instant::now();
+        while !link.status().is_connected() && t.elapsed() < Duration::from_secs(4) {
+            board.run_for(Duration::from_millis(50));
+        }
+        assert!(link.status().is_connected());
+        assert!(t.elapsed() < Duration::from_millis(2500), "{:?}", t.elapsed());
+        assert_eq!(link.status().board_addr, Some(board.addr()));
     }
 
     #[test]

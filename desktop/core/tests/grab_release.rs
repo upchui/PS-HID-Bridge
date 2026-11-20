@@ -257,6 +257,7 @@ impl Svc {
                 board: "127.0.0.1:9".parse().unwrap(),
                 counter_store: None,
                 adapter_state: None,
+                follow: None,
             },
             Box::new(move |e| {
                 let _ = tx.send(e);

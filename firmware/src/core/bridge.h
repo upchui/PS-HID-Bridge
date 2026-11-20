@@ -19,6 +19,10 @@
 #define PSHB_FAILSAFE_US_DEFAULT  250000u
 #define PSHB_SESSION_HINT_GAP_US  100000u
 #define PSHB_TX_COUNTER_MASK      ((1ull << 62) - 1)
+// A MOVED notice goes to the app that sent the last authentic packet, if
+// that was at most this long ago (an app with the bridge on sends every
+// 50 ms, one with it off pings every second).
+#define PSHB_MOVED_PEER_US        30000000u
 
 typedef struct {
     uint32_t rx_ok;
@@ -52,6 +56,10 @@ typedef struct {
     // answer is built (NULL = use now_us).
     uint64_t rx_at_us;
     uint64_t (*clock_us)(void);
+    // The sender's UDP port of the datagram being handled (set before each
+    // call, like rx_at_us; 0 = unknown): remembered with the address of the
+    // last authentic packet, where a MOVED notice goes.
+    uint16_t rx_port;
 
     // protocol state
     uint64_t last_rx_counter; // last counter that passed authentication
@@ -61,6 +69,10 @@ typedef struct {
     uint64_t last_hint_us;
     bool hint_sent;
     bool input_applied;       // set by every applied INPUT/HEARTBEAT; the caller clears it
+    // The app that sent the last authentic packet (MOVED goes there).
+    uint32_t peer_ip;         // a.b.c.d as 0xaabbccdd
+    uint16_t peer_port;       // 0 = none yet
+    uint64_t peer_us;
 
     bridge_stats_t stats;
 } bridge_t;
@@ -85,6 +97,14 @@ size_t bridge_handle_packet_pre(bridge_t *b, const uint8_t *pkt, size_t len, uin
 static inline bool bridge_sender_allowed(const bridge_t *b, uint32_t src_ip) {
     return ((src_ip ^ b->allowed_net) & b->allowed_mask) == 0;
 }
+
+// The board's address is about to change to `new_ip` (a.b.c.d as
+// 0xaabbccdd), its input port is `udp_port`: build a MOVED notice for the
+// app that sent the last authentic packet (within PSHB_MOVED_PEER_US), to
+// be sent from the old address before the switch. Returns its length (0 =
+// no app to tell, no key) and where it goes.
+size_t bridge_build_moved(bridge_t *b, uint32_t new_ip, uint16_t udp_port, uint64_t now_us, uint8_t *out,
+                          size_t cap, uint32_t *to_ip, uint16_t *to_port);
 
 // Periodic work (failsafe). Call at least every few milliseconds.
 void bridge_tick(bridge_t *b, uint64_t now_us);

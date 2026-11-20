@@ -21,6 +21,7 @@ enum {
     PSHB_TYPE_PONG = 0x04,
     PSHB_TYPE_PING_TIMED = 0x05,  // like PING, answered with PONG_TIMED
     PSHB_TYPE_PONG_TIMED = 0x06,
+    PSHB_TYPE_MOVED = 0x07,  // board -> app, unasked: "from now on at this address"
 };
 
 // Nonce = direction u32 LE || counter u64 LE
@@ -48,6 +49,12 @@ enum {
 // (the board's clock in µs since its start: when the PING arrived and when the
 // answer was built), for the one-way time PC -> board.
 #define PSHB_PONG_TIMED_PAYLOAD_LEN 65
+
+// MOVED payload (16 bytes): 0 session_id u64 | 8 ip[4] | 12 udp_port u16
+// | 14 reserved u16 (0). The board's address is about to change (a DHCP
+// lease with another address): sent from the old address to the last app
+// that sent an authentic packet, right before the board switches.
+#define PSHB_MOVED_PAYLOAD_LEN 16
 enum {
     PSHB_STATUS_USB_MOUNTED = 0x01,
     PSHB_STATUS_USB_SUSPENDED = 0x02,

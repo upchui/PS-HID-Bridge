@@ -46,6 +46,9 @@
 // A firmware on trial is confirmed after core 1 ran this long (core1_main),
 // well inside GUARD_TRIAL_MS.
 #define CONFIRM_AFTER_MS    3000
+// Before switching to another address, core 0 tells the app (MOVED): it
+// answers within one round of its loop, this is only the limit.
+#define MOVE_WAIT_MS        20
 
 typedef enum { C1_NO_LINK, C1_DHCP, C1_DHCP_WAIT, C1_READY } c1_state_t;
 
@@ -85,8 +88,14 @@ static bool s_settings_erased;
 
 // ---------------------------------------------------------------- network
 
+// A lease with another address than the one in use: set only after core 0
+// told the app (apply_lease), the notice must leave from the old address.
+static wiz_NetInfo s_lease_ni;
+static bool s_lease_moves;
+
 // Our own handlers: the ioLibrary default for "IP changed" soft-resets the
-// whole chip, which would kill the input socket.
+// whole chip, which would kill the input socket. Called inside DHCP_run;
+// the address is set in apply_lease, after it.
 static void on_dhcp_assign(void) {
     wiz_NetInfo ni;
     wizchip_getnetinfo(&ni);
@@ -95,8 +104,25 @@ static void on_dhcp_assign(void) {
     getSNfromDHCP(ni.sn);
     getDNSfromDHCP(ni.dns);
     ni.dhcp = NETINFO_DHCP;
-    wizchip_setnetinfo(&ni);
+    s_lease_ni = ni;
+    uint32_t now = atomic_load(&g_net.ip);
+    s_lease_moves = now != 0 && now != ip_to_u32(ni.ip);
     s_dhcp_assigned = true;
+}
+
+// Set the address of the lease DHCP_run just brought. Another address than
+// the one in use: core 0 tells the app first (protocol MOVED, net_shared.h),
+// so the bridge goes on at the new address without a pause.
+static void apply_lease(void) {
+    if (s_lease_moves) {
+        s_lease_moves = false;
+        atomic_store(&g_net.move_ip, ip_to_u32(s_lease_ni.ip));
+        uint32_t seq = atomic_load(&g_net.move_seq) + 1;
+        atomic_store(&g_net.move_seq, seq);
+        absolute_time_t until = make_timeout_time_ms(MOVE_WAIT_MS);
+        while (atomic_load(&g_net.move_done) != seq && !time_reached(until)) tight_loop_contents();
+    }
+    wizchip_setnetinfo(&s_lease_ni);
 }
 
 // Called by our copy of dhcp.c (cmake/iolibrary.cmake) after it declined a
@@ -282,6 +308,7 @@ static void network_service(void) {
         lease_track();
         if (s_dhcp_assigned) {
             s_dhcp_assigned = false;
+            apply_lease();
             publish_ip("DHCP lease");
             if (!s_udp_open) udp_open(g_settings.udp_port);
             set_state(C1_READY);

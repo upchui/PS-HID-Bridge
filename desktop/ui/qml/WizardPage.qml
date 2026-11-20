@@ -266,7 +266,10 @@ AppPage {
                 PairBox {
                     Layout.fillWidth: true
                     address: address.text
-                    keySet: finder.boards.some(b => b.address === address.text.trim() && b.key_set)
+                    // The board in the field, also when set up under its name (the list has addresses).
+                    keySet: finder.boards.some(b => (b.address === address.text.trim()
+                                                     || (b.current && address.text.trim() === AppController.boardAddress))
+                                                    && b.key_set)
                 }
                 Banner {
                     kind: "error"

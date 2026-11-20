@@ -191,6 +191,28 @@ TEST(pong_fields_decode) {
     CHECK_EQ_I(seen, 2);
 }
 
+// MOVED: the board's new address where the vectors say.
+TEST(moved_fields_decode) {
+    int seen = 0;
+    for (size_t i = 0; i < COUNT(k_packets); i++) {
+        const vec_packet_t *v = &k_packets[i];
+        if (v->type != PSHB_TYPE_MOVED) continue;
+        seen++;
+        CHECK_EQ_U(v->payload_len, PSHB_MOVED_PAYLOAD_LEN);
+        pshb_moved_t m;
+        pshb_moved_decode(v->payload, &m);
+        CHECK_EQ_U(m.ip[0], 192);
+        CHECK_EQ_U(m.ip[1], 168);
+        CHECK_EQ_U(m.ip[2], 178);
+        CHECK_EQ_U(m.ip[3], 57);
+        CHECK_EQ_U(m.udp_port, 45045);
+        uint8_t re[PSHB_MOVED_PAYLOAD_LEN];
+        pshb_moved_encode(re, &m);
+        CHECK_MEM(re, v->payload, sizeof(re));
+    }
+    CHECK_EQ_I(seen, 1);
+}
+
 TEST(invalid_vectors_rejected) {
     for (size_t i = 0; i < COUNT(k_invalid); i++) {
         const vec_invalid_t *v = &k_invalid[i];
@@ -241,6 +263,7 @@ int main(void) {
     RUN(open_matches_vectors);
     RUN(input_fields_decode);
     RUN(pong_fields_decode);
+    RUN(moved_fields_decode);
     RUN(invalid_vectors_rejected);
     RUN(seal_rejects_small_buffer);
     RUN(hex_roundtrip);

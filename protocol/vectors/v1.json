@@ -188,6 +188,20 @@
         "board_rx_us": 61000500123,
         "board_tx_us": 61000500187
       }
+    },
+    {
+      "name": "moved",
+      "direction": 2,
+      "type": 7,
+      "counter": 2623536861340474337,
+      "key": "3e2fde8ca2d4145265effd8a752e4380a6c1d111855d70c96ec7df1380f61579",
+      "payload": "8877665544332211c0a8b239f5af0000",
+      "packet": "0107e19b5713e0ac68249f1e2fb8613f3ad0e1268fec57fca09aac462950ca8ec91f8414f9b684a4b1c7",
+      "fields": {
+        "session_id": 1234605616436508552,
+        "ip": "192.168.178.57",
+        "udp_port": 45045
+      }
     }
   ],
   "invalid": [

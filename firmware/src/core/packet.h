@@ -40,6 +40,12 @@ typedef struct {
     uint64_t board_rx_us, board_tx_us;  // PONG_TIMED only
 } pshb_pong_t;
 
+typedef struct {
+    uint64_t session_id;
+    uint8_t ip[4];
+    uint16_t udp_port;
+} pshb_moved_t;
+
 void pshb_header_encode(uint8_t out[PSHB_HDR_LEN], const pshb_header_t *h);
 void pshb_header_decode(const uint8_t in[PSHB_HDR_LEN], pshb_header_t *h);
 
@@ -54,6 +60,9 @@ void pshb_pong_decode(const uint8_t in[PSHB_PONG_PAYLOAD_LEN], pshb_pong_t *p);
 // PONG_TIMED: the PONG fields followed by the two time stamps.
 void pshb_pong_timed_encode(uint8_t out[PSHB_PONG_TIMED_PAYLOAD_LEN], const pshb_pong_t *p);
 void pshb_pong_timed_decode(const uint8_t in[PSHB_PONG_TIMED_PAYLOAD_LEN], pshb_pong_t *p);
+
+void pshb_moved_encode(uint8_t out[PSHB_MOVED_PAYLOAD_LEN], const pshb_moved_t *m);
+void pshb_moved_decode(const uint8_t in[PSHB_MOVED_PAYLOAD_LEN], pshb_moved_t *m);
 
 // Expected payload length for a packet type (0 for unknown types).
 size_t pshb_payload_len(uint8_t type);

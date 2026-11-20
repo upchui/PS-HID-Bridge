@@ -3,7 +3,7 @@
 use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use pshb_core::crypto::{OpenError, PacketKey};
-use pshb_core::protocol::{Direction, InputPayload, PacketType, Pong, PongTimed};
+use pshb_core::protocol::{Direction, InputPayload, Moved, PacketType, Pong, PongTimed};
 use serde_json::Value;
 
 const VECTORS: &str = include_str!("../../../protocol/vectors/v1.json");
@@ -97,6 +97,13 @@ fn packets() {
                 assert_eq!(p.board_rx_us, f["board_rx_us"].as_u64().unwrap(), "{name}");
                 assert_eq!(p.board_tx_us, f["board_tx_us"].as_u64().unwrap(), "{name}");
                 assert_eq!(p.encode().to_vec(), payload);
+            }
+            PacketType::Moved => {
+                let m = Moved::decode(&payload);
+                assert_eq!(m.session_id, f["session_id"].as_u64().unwrap(), "{name}");
+                assert_eq!(m.ip.to_string(), f["ip"].as_str().unwrap(), "{name}");
+                assert_eq!(m.udp_port as u64, f["udp_port"].as_u64().unwrap(), "{name}");
+                assert_eq!(m.encode().to_vec(), payload);
             }
             PacketType::Ping | PacketType::PingTimed => {}
         }

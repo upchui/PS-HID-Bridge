@@ -10,6 +10,15 @@
 //   MOUSE buttons=01 dx=15 dy=-3 wheel=0 pan=0
 //   FAILSAFE
 //   REBOOT
+//   MOVED <addr> NOTICE|SILENT   (--control: MOVE, the app was told or not)
+//   JUMPED <addr>                (--control: JUMP)
+//
+// With --control, commands on stdin (one per line):
+//   MOVE <addr>   the board gets another address (DHCP) and tells the app
+//                 (protocol MOVED) from the old one first, like core1.c/main.c
+//   JUMP <addr>   the same without telling (older firmware, a lost notice)
+//   REBOOT        restart (new session unless --session)
+// The sockets move to <addr>, their ports stay.
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 
@@ -79,6 +88,7 @@ typedef struct {
     uint8_t key_override[32];
     bool have_allowed_override;
     bool max_values;  // --max-values
+    bool control;     // --control
     uint32_t allowed_net, allowed_mask;
     unsigned failsafe_ms;
     const char *settings_file;
@@ -90,6 +100,9 @@ typedef struct {
     bridge_t bridge;
     uint64_t boot_us;
     bool reboot_requested;
+    // The address the sockets are bound to, as the board reports it
+    // (127.0.0.1 when bound to every address).
+    uint8_t addr[4];
 } sim_t;
 
 static sim_t S;
@@ -176,8 +189,8 @@ static void be_status(void *ctx, web_status_t *out) {
     out->fw_version = S.bridge.fw_version;
     out->uptime_ms = (now_us() - S.boot_us) / 1000;
     memcpy(out->mac, k_sim_mac, 6);
-    static const uint8_t ip[4] = {127, 0, 0, 1}, mask[4] = {255, 0, 0, 0};
-    memcpy(out->ip, S.settings.ip_mode == PSHB_IP_STATIC ? S.settings.ip : ip, 4);
+    static const uint8_t mask[4] = {255, 0, 0, 0};
+    memcpy(out->ip, S.settings.ip_mode == PSHB_IP_STATIC ? S.settings.ip : S.addr, 4);
     memcpy(out->mask, S.settings.ip_mode == PSHB_IP_STATIC ? S.settings.mask : mask, 4);
     memcpy(out->gw, S.settings.gw, 4);
     memcpy(out->dns, S.settings.dns, 4);
@@ -384,7 +397,8 @@ static void usage(const char *argv0) {
             "  --session HEX     fixed session id (default: random per boot)\n"
             "  --allow IP[/N]    only accept packets from this sender or subnet\n"
             "  --usb-unmounted   simulate a board that is not plugged in\n"
-            "  --max-values      status and diagnostics report their largest values\n",
+            "  --max-values      status and diagnostics report their largest values\n"
+            "  --control         read commands from stdin: MOVE <addr>, JUMP <addr>, REBOOT\n",
             argv0, PSHB_UDP_PORT_DEFAULT, PSHB_DISCOVERY_PORT, PSHB_MDNS_PORT);
 }
 
@@ -438,8 +452,7 @@ static pshb_mdns_info_t s_mdns_info;
 
 static void sim_mdns_info(pshb_mdns_info_t *info, int http_port) {
     memset(info, 0, sizeof(*info));
-    static const uint8_t loopback[4] = {127, 0, 0, 1};
-    memcpy(info->ip, S.settings.ip_mode == PSHB_IP_STATIC ? S.settings.ip : loopback, 4);
+    memcpy(info->ip, S.settings.ip_mode == PSHB_IP_STATIC ? S.settings.ip : S.addr, 4);
     // mask 0.0.0.0: no check of the asker's network (the tests ask from
     // 127.0.0.1, also with a static address set).
     const char *name = settings_board_name(&S.settings);
@@ -548,6 +561,89 @@ static void http_service(web_app_t *app, http_slot_t *slots, int listen_fd, uint
     }
 }
 
+// The simulator's sockets: input (UDP), web interface, discovery, mDNS
+// (-1 = off), and the ports they got (the same after a move).
+static struct {
+    int udp, listen, disc, mdns;
+    int udp_port, http_port, disc_port, mdns_port;
+} N = {-1, -1, -1, -1, 0, 0, 0, 0};
+
+// Bind every socket to `addr`; a port < 0 leaves that one off, 0 takes any
+// free port (kept for later moves).
+static void open_sockets(const char *addr, int udp_port, int http_port, int disc_port, int mdns_port) {
+    struct in_addr a;
+    if (inet_pton(AF_INET, addr, &a) == 1) {
+        uint32_t ip = ntohl(a.s_addr);
+        if (ip == 0) ip = 0x7F000001u;  // every address: reports 127.0.0.1
+        S.addr[0] = (uint8_t)(ip >> 24);
+        S.addr[1] = (uint8_t)(ip >> 16);
+        S.addr[2] = (uint8_t)(ip >> 8);
+        S.addr[3] = (uint8_t)ip;
+    }
+    N.udp = bind_socket(SOCK_DGRAM, addr, udp_port, &N.udp_port);
+    if (http_port >= 0) {
+        N.listen = bind_socket(SOCK_STREAM, addr, http_port, &N.http_port);
+        listen(N.listen, 4);
+    }
+    if (disc_port >= 0) {
+        N.disc = bind_socket(SOCK_DGRAM, addr, disc_port, &N.disc_port);
+        int one = 1;
+        setsockopt(N.disc, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
+    }
+    if (mdns_port >= 0) N.mdns = bind_socket(SOCK_DGRAM, addr, mdns_port, &N.mdns_port);
+}
+
+static void close_sockets(http_slot_t *slots, web_app_t *app) {
+    for (int i = 0; i < MAX_CONNS; i++) {
+        if (slots[i].fd < 0) continue;
+        web_conn_close(app, &slots[i].conn);
+        close(slots[i].fd);
+        slots[i].fd = -1;
+    }
+    int *fds[] = {&N.udp, &N.listen, &N.disc, &N.mdns};
+    for (size_t i = 0; i < sizeof(fds) / sizeof(fds[0]); i++) {
+        if (*fds[i] >= 0) close(*fds[i]);
+        *fds[i] = -1;
+    }
+}
+
+// A command from stdin (--control). Returns true if mDNS has to announce
+// anew (a new address).
+static bool control(const char *cmd, web_app_t *app, http_slot_t *slots) {
+    char verb[16], addr_s[64] = "";
+    if (sscanf(cmd, "%15s %63s", verb, addr_s) < 1) return false;
+    if (strcmp(verb, "REBOOT") == 0) {
+        S.reboot_requested = true;
+        return false;
+    }
+    bool notice = strcmp(verb, "MOVE") == 0;
+    struct in_addr a;
+    if ((!notice && strcmp(verb, "JUMP") != 0) || inet_pton(AF_INET, addr_s, &a) != 1) {
+        fprintf(stderr, "sim: unknown command: %s\n", cmd);
+        return false;
+    }
+    // Like the board (core1.c apply_lease, main.c move_service): the notice
+    // leaves from the old address, twice, and once more from the new one.
+    uint8_t pkt[PSHB_MAX_PACKET_LEN];
+    uint32_t to_ip = 0;
+    uint16_t to_port = 0;
+    size_t n = notice ? bridge_build_moved(&S.bridge, ntohl(a.s_addr), (uint16_t)N.udp_port, now_us(), pkt,
+                                           sizeof(pkt), &to_ip, &to_port)
+                      : 0;
+    struct sockaddr_in dst = {.sin_family = AF_INET, .sin_port = htons(to_port), .sin_addr.s_addr = htonl(to_ip)};
+    for (int i = 0; n && i < 2; i++) sendto(N.udp, pkt, n, 0, (struct sockaddr *)&dst, sizeof(dst));
+    close_sockets(slots, app);
+    open_sockets(addr_s, N.udp_port, N.http_port ? N.http_port : -1, N.disc_port ? N.disc_port : -1,
+                 N.mdns_port ? N.mdns_port : -1);
+    if (n) sendto(N.udp, pkt, n, 0, (struct sockaddr *)&dst, sizeof(dst));
+    if (notice) {
+        printf("MOVED %s %s\n", addr_s, n ? "NOTICE" : "SILENT");
+    } else {
+        printf("JUMPED %s\n", addr_s);
+    }
+    return true;
+}
+
 int main(int argc, char **argv) {
     const char *bind_addr = "127.0.0.1";
     int port = PSHB_UDP_PORT_DEFAULT;
@@ -572,6 +668,7 @@ int main(int argc, char **argv) {
         {"allow", required_argument, 0, 'a'},
         {"usb-unmounted", no_argument, 0, 'u'},
         {"max-values", no_argument, 0, 'M'},
+        {"control", no_argument, 0, 'C'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0},
     };
@@ -627,6 +724,7 @@ int main(int argc, char **argv) {
         }
         case 'u': S.usb_mounted = false; break;
         case 'M': S.max_values = true; break;
+        case 'C': S.control = true; break;
         default: usage(argv[0]); return c == 'h' ? 0 : 2;
         }
     }
@@ -646,13 +744,8 @@ int main(int argc, char **argv) {
     }
     boot();
 
-    int udp_port = 0, bound_http = 0;
-    int udp = bind_socket(SOCK_DGRAM, bind_addr, port, &udp_port);
-    int listen_fd = -1;
-    if (http_port >= 0) {
-        listen_fd = bind_socket(SOCK_STREAM, bind_addr, http_port, &bound_http);
-        listen(listen_fd, 4);
-    }
+    open_sockets(bind_addr, port, http_port, discovery_port, mdns_port);
+    if (S.control) fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
 
     web_app_t app;
     web_app_init(&app, &k_backend, &S.settings);
@@ -660,30 +753,23 @@ int main(int argc, char **argv) {
     app.bench_sink = true;
     http_slot_t slots[MAX_CONNS];
     for (int i = 0; i < MAX_CONNS; i++) slots[i].fd = -1;
-
-    int disc = -1, bound_disc = 0;
-    if (discovery_port >= 0) {
-        disc = bind_socket(SOCK_DGRAM, bind_addr, discovery_port, &bound_disc);
-        int one = 1;
-        setsockopt(disc, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
-    }
-
-    int mdns = -1, bound_mdns = 0;
     bool mdns_restart = true;
-    if (mdns_port >= 0) mdns = bind_socket(SOCK_DGRAM, bind_addr, mdns_port, &bound_mdns);
 
-    printf("READY %d HTTP %d DISCOVERY %d MDNS %d\n", udp_port, bound_http, bound_disc, bound_mdns);
+    printf("READY %d HTTP %d DISCOVERY %d MDNS %d\n", N.udp_port, N.http_port, N.disc_port, N.mdns_port);
 
+    char line[256];
+    size_t line_len = 0;
     uint64_t next_frame = now_us() + 1000;
     while (!s_stop) {
         uint64_t t = now_us();
         int timeout_ms = next_frame > t ? (int)((next_frame - t + 999) / 1000) : 0;
-        struct pollfd pfd[4 + MAX_CONNS];
+        struct pollfd pfd[5 + MAX_CONNS];
         int nfds = 0;
-        pfd[nfds++] = (struct pollfd){.fd = udp, .events = POLLIN};
-        if (disc >= 0) pfd[nfds++] = (struct pollfd){.fd = disc, .events = POLLIN};
-        if (mdns >= 0) pfd[nfds++] = (struct pollfd){.fd = mdns, .events = POLLIN};
-        if (listen_fd >= 0) pfd[nfds++] = (struct pollfd){.fd = listen_fd, .events = POLLIN};
+        pfd[nfds++] = (struct pollfd){.fd = N.udp, .events = POLLIN};
+        if (N.disc >= 0) pfd[nfds++] = (struct pollfd){.fd = N.disc, .events = POLLIN};
+        if (N.mdns >= 0) pfd[nfds++] = (struct pollfd){.fd = N.mdns, .events = POLLIN};
+        if (N.listen >= 0) pfd[nfds++] = (struct pollfd){.fd = N.listen, .events = POLLIN};
+        if (S.control) pfd[nfds++] = (struct pollfd){.fd = STDIN_FILENO, .events = POLLIN};
         for (int i = 0; i < MAX_CONNS; i++) {
             if (slots[i].fd >= 0) pfd[nfds++] = (struct pollfd){.fd = slots[i].fd, .events = POLLIN | POLLOUT};
         }
@@ -696,18 +782,40 @@ int main(int argc, char **argv) {
             uint8_t pkt[2048], reply[PSHB_MAX_PACKET_LEN];
             struct sockaddr_in src;
             socklen_t slen = sizeof(src);
-            ssize_t n = recvfrom(udp, pkt, sizeof(pkt), 0, (struct sockaddr *)&src, &slen);
+            ssize_t n = recvfrom(N.udp, pkt, sizeof(pkt), 0, (struct sockaddr *)&src, &slen);
             if (n < 0) break;
+            S.bridge.rx_port = ntohs(src.sin_port);  // where a MOVED notice would go
             size_t rlen = bridge_handle_packet(&S.bridge, pkt, (size_t)n, ntohl(src.sin_addr.s_addr), now_us(),
                                                reply, sizeof(reply));
-            if (rlen) sendto(udp, reply, rlen, 0, (struct sockaddr *)&src, slen);
+            if (rlen) sendto(N.udp, reply, rlen, 0, (struct sockaddr *)&src, slen);
         }
-        if (disc >= 0) discovery_service(disc, udp_port);
-        if (mdns >= 0) {
-            mdns_service(mdns, bound_http, mdns_restart);
+        if (N.disc >= 0) discovery_service(N.disc, N.udp_port);
+        if (N.mdns >= 0) {
+            mdns_service(N.mdns, N.http_port, mdns_restart);
             mdns_restart = false;
         }
-        if (listen_fd >= 0) http_service(&app, slots, listen_fd, now_us());
+        if (N.listen >= 0) http_service(&app, slots, N.listen, now_us());
+
+        // Commands (--control): whole lines only.
+        if (S.control) {
+            for (;;) {
+                ssize_t r = read(STDIN_FILENO, line + line_len, sizeof(line) - 1 - line_len);
+                if (r <= 0) {
+                    if (r == 0) S.control = false;  // stdin closed: no more commands
+                    break;
+                }
+                line_len += (size_t)r;
+                char *nl;
+                while ((nl = memchr(line, '\n', line_len)) != NULL) {
+                    *nl = '\0';
+                    if (control(line, &app, slots)) mdns_restart = true;
+                    size_t used = (size_t)(nl - line) + 1;
+                    memmove(line, nl + 1, line_len - used);
+                    line_len -= used;
+                }
+                if (line_len == sizeof(line) - 1) line_len = 0;  // no command is that long
+            }
+        }
 
         if (S.reboot_requested) {
             S.reboot_requested = false;
@@ -732,9 +840,6 @@ int main(int argc, char **argv) {
             }
         }
     }
-    close(udp);
-    if (listen_fd >= 0) close(listen_fd);
-    if (disc >= 0) close(disc);
-    if (mdns >= 0) close(mdns);
+    close_sockets(slots, &app);
     return 0;
 }

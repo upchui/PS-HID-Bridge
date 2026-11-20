@@ -339,6 +339,69 @@ TEST(release_all_flag) {
     CHECK_EQ_I(f.input.dx, 0);
 }
 
+static void feed_from(fixture_t *f, const uint8_t *pkt, size_t len, uint32_t ip, uint16_t port, uint64_t now) {
+    f->b.rx_port = port;
+    f->reply_len = bridge_handle_packet(&f->b, pkt, len, ip, now, f->reply, sizeof(f->reply));
+}
+
+#define NEW_IP 0xC0A80132u  // 192.168.1.50
+
+TEST(moved_notice_goes_to_the_last_app) {
+    fixture_t f;
+    setup(&f);
+    uint8_t pkt[PSHB_MAX_PACKET_LEN], out[PSHB_MAX_PACKET_LEN];
+    uint32_t to_ip = 0;
+    uint16_t to_port = 0;
+    // No app yet: nobody to tell.
+    CHECK_EQ_U(bridge_build_moved(&f.b, NEW_IP, 45045, T0, out, sizeof(out), &to_ip, &to_port), 0);
+    // A forged packet does not make its sender the app.
+    feed_from(&f, pkt, make_input(pkt, OTHER_KEY, PSHB_TYPE_INPUT, 10, SESSION, 0, 0, 0), 0x0A000001u, 4000, T0);
+    CHECK_EQ_U(bridge_build_moved(&f.b, NEW_IP, 45045, T0, out, sizeof(out), &to_ip, &to_port), 0);
+    // An authentic packet does, also a ping; its port is for this datagram only.
+    feed_from(&f, pkt, make_ping(pkt, KEY, 11, 0, 1), APP_IP, 50123, T0 + 1000);
+    CHECK_EQ_U(f.b.rx_port, 0);
+    uint64_t before = f.b.tx_counter;
+    size_t n = bridge_build_moved(&f.b, NEW_IP, 45045, T0 + 2000, out, sizeof(out), &to_ip, &to_port);
+    CHECK_EQ_U(n, PSHB_HDR_LEN + PSHB_MOVED_PAYLOAD_LEN + PSHB_TAG_LEN);
+    CHECK_EQ_U(to_ip, APP_IP);
+    CHECK_EQ_U(to_port, 50123);
+    pshb_header_t h;
+    CHECK(proto_check(out, n, &h));
+    CHECK_EQ_U(h.type, PSHB_TYPE_MOVED);
+    CHECK_EQ_U(h.counter, (before + 1) & PSHB_TX_COUNTER_MASK);  // counts on from the PONGs
+    uint8_t payload[PSHB_MOVED_PAYLOAD_LEN];
+    CHECK(proto_decrypt(KEY, PSHB_DIR_BOARD_TO_APP, out, n, payload));
+    pshb_moved_t m;
+    pshb_moved_decode(payload, &m);
+    CHECK_EQ_U(m.session_id, SESSION);
+    CHECK_EQ_U(m.ip[0], 192);
+    CHECK_EQ_U(m.ip[1], 168);
+    CHECK_EQ_U(m.ip[2], 1);
+    CHECK_EQ_U(m.ip[3], 50);
+    CHECK_EQ_U(m.udp_port, 45045);
+    CHECK_EQ_U(payload[14] | payload[15], 0);  // reserved
+
+    // A later app is told instead; one silent for too long is not.
+    feed_from(&f, pkt, make_input(pkt, KEY, PSHB_TYPE_HEARTBEAT, 12, SESSION, 0, 0, 0), APP_IP + 1, 40000,
+              T0 + 3000);
+    CHECK(bridge_build_moved(&f.b, NEW_IP, 45045, T0 + 4000, out, sizeof(out), &to_ip, &to_port) > 0);
+    CHECK_EQ_U(to_ip, APP_IP + 1);
+    CHECK_EQ_U(to_port, 40000);
+    CHECK_EQ_U(bridge_build_moved(&f.b, NEW_IP, 45045, T0 + 3000 + PSHB_MOVED_PEER_US + 1, out, sizeof(out),
+                                  &to_ip, &to_port),
+               0);
+    // Without a key: nothing.
+    bridge_set_key(&f.b, NULL);
+    CHECK_EQ_U(bridge_build_moved(&f.b, NEW_IP, 45045, T0 + 4000, out, sizeof(out), &to_ip, &to_port), 0);
+
+    // A MOVED sent to the board is never valid.
+    bridge_set_key(&f.b, KEY);
+    uint32_t malformed = f.b.stats.rx_malformed;
+    n = proto_seal(KEY, PSHB_DIR_APP_TO_BOARD, PSHB_TYPE_MOVED, 50, payload, sizeof(payload), pkt, sizeof(pkt));
+    feed(&f, pkt, n, T0 + 5000);
+    CHECK_EQ_U(f.b.stats.rx_malformed, malformed + 1);
+}
+
 int main(void) {
     RUN(ping_gets_encrypted_pong);
     RUN(timed_ping_gets_time_stamps);
@@ -354,5 +417,6 @@ int main(void) {
     RUN(failsafe_releases_after_timeout);
     RUN(pings_do_not_feed_failsafe);
     RUN(release_all_flag);
+    RUN(moved_notice_goes_to_the_last_app);
     return TEST_SUMMARY();
 }

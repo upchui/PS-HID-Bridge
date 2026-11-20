@@ -26,6 +26,13 @@ typedef struct {
     _Atomic bool udp_enable;      // socket 1 is open and may be used by core 0
     // written by core 0
     _Atomic bool udp_active;      // core 0 is currently using socket 1
+    // The address is about to change (a DHCP lease with another address):
+    // core 1 sets move_ip, then raises move_seq and waits; core 0 tells the
+    // app from the old address (protocol MOVED) and sets move_done to
+    // move_seq; then core 1 switches (or after MOVE_WAIT_MS at the latest).
+    _Atomic uint32_t move_ip;     // written by core 1: the new address
+    _Atomic uint32_t move_seq;    // written by core 1
+    _Atomic uint32_t move_done;   // written by core 0
 } net_shared_t;
 
 extern net_shared_t g_net;

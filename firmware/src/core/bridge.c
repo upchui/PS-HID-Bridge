@@ -63,8 +63,9 @@ static uint8_t status_bits(const bridge_t *b) {
     return s;
 }
 
-static bool is_pong(uint8_t type) {
-    return type == PSHB_TYPE_PONG || type == PSHB_TYPE_PONG_TIMED;
+// Types only the board sends: refused when they come in.
+static bool from_board(uint8_t type) {
+    return type == PSHB_TYPE_PONG || type == PSHB_TYPE_PONG_TIMED || type == PSHB_TYPE_MOVED;
 }
 
 // `timed`: PONG_TIMED with the time the PING arrived (`rx_us`) and the time
@@ -116,7 +117,7 @@ static size_t handle_plain(bridge_t *b, const uint8_t *pkt, size_t len, uint64_t
     pshb_header_t h;
     pshb_header_decode(pkt, &h);
     size_t payload_len = pshb_payload_len(h.type);
-    if (payload_len == 0 || is_pong(h.type) || len != PSHB_HDR_LEN + payload_len) {
+    if (payload_len == 0 || from_board(h.type) || len != PSHB_HDR_LEN + payload_len) {
         b->stats.rx_malformed++;
         return 0;
     }
@@ -144,6 +145,8 @@ size_t bridge_handle_packet_pre(bridge_t *b, const uint8_t *pkt, size_t len, uin
     // When this datagram arrived (for PONG_TIMED); good for this call only.
     uint64_t rx_us = b->rx_at_us ? b->rx_at_us : now_us;
     b->rx_at_us = 0;
+    uint16_t rx_port = b->rx_port;
+    b->rx_port = 0;
     if (len >= PSHB_HDR_LEN && pkt[0] == PSHB_PROTO_VERSION_PLAIN && b->allow_plaintext) {
         if (!bridge_sender_allowed(b, src_ip)) {
             b->stats.rx_filtered++;
@@ -154,7 +157,7 @@ size_t bridge_handle_packet_pre(bridge_t *b, const uint8_t *pkt, size_t len, uin
 
     // 1. structure
     pshb_header_t h;
-    if (!proto_check(pkt, len, &h) || is_pong(h.type)) {
+    if (!proto_check(pkt, len, &h) || from_board(h.type)) {
         b->stats.rx_malformed++;
         return 0;
     }
@@ -175,8 +178,14 @@ size_t bridge_handle_packet_pre(bridge_t *b, const uint8_t *pkt, size_t len, uin
         b->stats.rx_auth_fail++;
         return 0;
     }
-    // 5. only authentic packets may advance the counter
+    // 5. only authentic packets may advance the counter (and say where the
+    //    app is)
     b->last_rx_counter = h.counter;
+    if (rx_port) {
+        b->peer_ip = src_ip;
+        b->peer_port = rx_port;
+        b->peer_us = now_us;
+    }
 
     if (h.type == PSHB_TYPE_PING || h.type == PSHB_TYPE_PING_TIMED) {
         b->stats.rx_ok++;
@@ -203,4 +212,27 @@ size_t bridge_handle_packet_pre(bridge_t *b, const uint8_t *pkt, size_t len, uin
     b->stats.rx_ok++;
     apply_input(b, &in, now_us);
     return 0;
+}
+
+size_t bridge_build_moved(bridge_t *b, uint32_t new_ip, uint16_t udp_port, uint64_t now_us, uint8_t *out,
+                          size_t cap, uint32_t *to_ip, uint16_t *to_port) {
+    if (!b->key_set || b->peer_port == 0 || now_us - b->peer_us > PSHB_MOVED_PEER_US || new_ip == 0 ||
+        udp_port == 0) {
+        return 0;
+    }
+    pshb_moved_t m = {
+        .session_id = b->session_id,
+        .ip = {(uint8_t)(new_ip >> 24), (uint8_t)(new_ip >> 16), (uint8_t)(new_ip >> 8), (uint8_t)new_ip},
+        .udp_port = udp_port,
+    };
+    uint8_t payload[PSHB_MOVED_PAYLOAD_LEN];
+    pshb_moved_encode(payload, &m);
+    b->tx_counter = (b->tx_counter + 1) & PSHB_TX_COUNTER_MASK;
+    size_t n = proto_seal(b->key, PSHB_DIR_BOARD_TO_APP, PSHB_TYPE_MOVED, b->tx_counter, payload, sizeof(payload),
+                          out, cap);
+    if (n) {
+        *to_ip = b->peer_ip;
+        *to_port = b->peer_port;
+    }
+    return n;
 }

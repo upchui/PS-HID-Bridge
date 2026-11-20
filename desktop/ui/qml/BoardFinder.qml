@@ -61,7 +61,9 @@ ColumnLayout {
         delegate: Rectangle {
             id: row
             required property var modelData
+            // Also the board set up under its name (the list has addresses).
             readonly property bool chosen: modelData.address === finder.selectedAddress
+                                           || (modelData.current && finder.selectedAddress === AppController.boardAddress)
 
             Layout.fillWidth: true
             implicitHeight: rowLayout.implicitHeight + 16

@@ -14,6 +14,7 @@ use pshb_core::crypto::parse_key_hex;
 use pshb_core::diagnostics::{BoardHealth, HealthWarning};
 use pshb_core::discover::{self, FoundBoard, board_ipv4};
 use pshb_core::engine::Notice;
+use pshb_core::follow::{self, FollowConfig, MoveReason};
 use pshb_core::input::{self, DeviceInfo};
 use pshb_core::install::{self, Found};
 use pshb_core::protocol::{self, Pong};
@@ -573,11 +574,8 @@ pub struct AppControllerRust {
     rename_level: QString,
     /// The last search's boards (`found_boards_json`).
     found: Vec<FoundBoard>,
-    /// Service generation whose board was asked for its MAC address.
-    mac_checked: u64,
-    /// Wait before the next search for the board that moved (doubles while
-    /// it stays away).
-    follow_wait: Duration,
+    /// The network name prefer_name looked up last (once per name).
+    name_tried: String,
     clock_busy: bool,
     clock_message: QString,
     /// Newest release found by the last check.
@@ -630,17 +628,6 @@ impl ServiceSlot {
 /// Retry interval when the service could not be started (no network yet,
 /// board name not resolvable, another program sending).
 const RETRY: Duration = Duration::from_secs(5);
-/// Board configured by name and not answering: look the name up again this
-/// often (it may have a new address from DHCP).
-const RENAME_CHECK: Duration = Duration::from_secs(10);
-/// Board configured by address (its MAC known) and not answering: look for
-/// it in the network after this long (it counts as gone after 3 s without an
-/// answer), then after twice as long each time up to FOLLOW_MAX_ON while the
-/// bridge is on and FOLLOW_MAX otherwise (a board that is off is not looked
-/// for all the time).
-const FOLLOW_FIRST: Duration = Duration::from_secs(3);
-const FOLLOW_MAX_ON: Duration = Duration::from_secs(30);
-const FOLLOW_MAX: Duration = Duration::from_secs(300);
 
 impl Default for AppControllerRust {
     fn default() -> Self {
@@ -764,8 +751,7 @@ impl Default for AppControllerRust {
             rename_message: QString::default(),
             rename_level: QString::default(),
             found: Vec::new(),
-            mac_checked: 0,
-            follow_wait: FOLLOW_FIRST,
+            name_tried: String::new(),
             clock_busy: false,
             clock_message: QString::default(),
             latest: None,
@@ -929,6 +915,18 @@ impl qobject::AppController {
         self.as_mut().publish_found();
     }
 
+    /// The board's IPv4 address: the one in the settings, or (set up under
+    /// a name) where the link reaches it, or where it answered last.
+    fn current_board_ip(&self) -> Option<std::net::Ipv4Addr> {
+        let c = self.config_ref();
+        board_ipv4(&c.board)
+            .or_else(|| match self.rust().board_addr.map(|a| a.ip()) {
+                Some(std::net::IpAddr::V4(ip)) => Some(ip),
+                _ => None,
+            })
+            .or_else(|| c.board_ip.parse().ok())
+    }
+
     /// The last search's boards for QML, marked against the settings.
     fn publish_found(mut self: Pin<&mut Self>) {
         #[derive(Serialize)]
@@ -941,7 +939,7 @@ impl qobject::AppController {
             key_set: bool,
             current: bool,
         }
-        let current = board_ipv4(&self.config_ref().board);
+        let current = self.current_board_ip();
         if let Some(b) = self.rust().found.iter().find(|b| current == Some(b.ip)) {
             let name = QString::from(&b.name);
             self.as_mut().set_board_name(name);
@@ -1015,18 +1013,26 @@ impl qobject::AppController {
             drop(old); // releases devices and board, frees the packet counter
             let mut addr = None;
             let result = config::load_psk(&config::psk_path())
-                .and_then(|key| Ok((key, resolve(&cfg.board)?)))
+                .and_then(|key| Ok((key, start_address(&cfg)?)))
                 .and_then(|(key, board)| {
                     addr = Some(board);
                     let sink = Box::new(move |ev: ServiceEvent| {
                         let _ = events.queue(move |obj| obj.on_service_event(generation, ev));
                     });
+                    // The link finds the board again when it moves (DHCP):
+                    // by its MAC address, and by its name if it is set up
+                    // under one.
+                    let follow = FollowConfig::new(
+                        follow::host_name(&cfg.board),
+                        (!cfg.board_mac.is_empty()).then(|| cfg.board_mac.clone()),
+                    );
                     let sc = ServiceConfig {
                         config: cfg,
                         key,
                         board,
                         counter_store: Some(config::counter_path()),
                         adapter_state: Some(config::adapter_state_path()),
+                        follow: Some(follow),
                     };
                     Service::start(sc, sink)
                 });
@@ -1053,7 +1059,6 @@ impl qobject::AppController {
         self.as_mut().rust_mut().board_addr = addr;
         self.as_mut().set_connecting(false);
         self.as_mut().rust_mut().health.reset(std::time::Instant::now());
-        self.as_mut().schedule_name_check(generation); // in case it never answers
         self.as_mut().set_last_error(QString::default());
         // A new service knows nothing of what the GUI asked the old one for.
         if self.rust().identify_on {
@@ -1089,128 +1094,124 @@ impl qobject::AppController {
         });
     }
 
-    /// While the board does not answer: if its address is a host name,
-    /// look it up again every RENAME_CHECK and reconnect when it changed.
-    fn schedule_name_check(self: Pin<&mut Self>, generation: u64) {
+    /// The link found the board at another address (its notice, or the
+    /// search when it stopped answering, see pshb_core::follow) and sends
+    /// there already: the bridge stays as it was. Kept in the settings.
+    fn board_moved(mut self: Pin<&mut Self>, to: std::net::SocketAddr, reason: MoveReason) {
+        self.as_mut().rust_mut().board_addr = Some(to);
         let board = self.config_ref().board.clone();
-        let bare = board
-            .strip_prefix('[')
-            .and_then(|b| b.strip_suffix(']'))
-            .unwrap_or(&board);
-        if board.parse::<std::net::SocketAddr>().is_ok() || bare.parse::<std::net::IpAddr>().is_ok() {
-            // An address: nothing to look up, but the board may have got
-            // another one.
-            self.schedule_follow(generation);
-            return;
+        if follow::host_name(&board).is_none() {
+            // An address: the new one (a port written there stays written).
+            let address =
+                if board.parse::<std::net::SocketAddr>().is_ok() || to.port() != protocol::UDP_PORT_DEFAULT {
+                    to.to_string()
+                } else {
+                    to.ip().to_string()
+                };
+            self.as_mut().rust_mut().config.board = address;
         }
-        let qt = self.qt_thread();
-        let _ = thread::Builder::new().name("pshb-name".into()).spawn(move || {
-            thread::sleep(RENAME_CHECK);
-            let found = resolve(&board).ok();
-            let _ = qt.queue(move |obj| obj.name_checked(generation, found));
-        });
-    }
-
-    fn name_checked(mut self: Pin<&mut Self>, generation: u64, found: Option<std::net::SocketAddr>) {
-        if !self.rust().slot.is_current(generation) || *self.connected() {
-            return;
-        }
-        match found {
-            Some(a) if self.rust().board_addr.is_some_and(|old| old != a) => self.restart_service(),
-            _ => self.as_mut().schedule_name_check(generation),
-        }
-    }
-
-    /// While the board does not answer at its address: look for its MAC
-    /// address in the network (after `follow_wait`) and take its new address.
-    fn schedule_follow(mut self: Pin<&mut Self>, generation: u64) {
-        let mac = self.config_ref().board_mac.clone();
-        if mac.is_empty() {
-            return; // not known (yet): learned once it answers
-        }
-        let max = if *self.active() { FOLLOW_MAX_ON } else { FOLLOW_MAX };
-        let wait = self.rust().follow_wait.min(max);
-        self.as_mut().rust_mut().follow_wait = (wait * 2).min(max);
-        let qt = self.qt_thread();
-        let _ = thread::Builder::new().name("pshb-follow".into()).spawn(move || {
-            thread::sleep(wait);
-            let found = discover::discover(discover::DISCOVER_TIMEOUT)
-                .ok()
-                .and_then(|list| list.into_iter().find(|b| b.mac_string() == mac));
-            let _ = qt.queue(move |obj| obj.follow_checked(generation, found));
-        });
-    }
-
-    fn follow_checked(mut self: Pin<&mut Self>, generation: u64, found: Option<FoundBoard>) {
-        if !self.rust().slot.is_current(generation) || *self.connected() {
-            return;
-        }
-        let board = self.config_ref().board.clone();
-        let Some(b) = found.filter(|b| board_ipv4(&board) != Some(b.ip)) else {
-            self.schedule_follow(generation);
-            return;
-        };
-        let address = b.moved_from(&board);
-        self.as_mut().rust_mut().config.board = address.clone();
-        // Also when the file cannot be written: the board is here now
+        self.as_mut().rust_mut().config.board_ip = to.ip().to_string();
+        // Also when the file cannot be written: the board is there now
         // (save_error tells).
         self.as_mut().save_config();
-        self.as_mut().rust_mut().follow_wait = FOLLOW_FIRST;
         self.as_mut().set_board_info_json(QString::default());
         self.as_mut().set_board_info_error(QString::default());
-        notify::send(
-            &tr("Board found again"),
-            &trf("%1 has a new address in the network: %2.", &[&b.name, &address]),
-        );
         self.as_mut().publish_config();
-        // A running service only sends elsewhere from now on: the bridge
-        // stays as it is (on stays on), nothing is let go of or grabbed anew.
-        let running = self.rust().slot.service.lock().unwrap().is_some();
-        match config::board_socket_addr(&address) {
-            Ok(addr) if running => {
-                self.as_mut().rust_mut().board_addr = Some(addr);
-                self.command(ServiceCmd::Board(addr));
-            }
-            _ => self.restart_service(),
-        }
+        let name = match self.board_name().to_string() {
+            n if n.is_empty() => "PS HID Bridge".to_string(),
+            n => n,
+        };
+        pshb_core::logln!("PS HID Bridge: the board is at {to} now ({})", reason.as_str());
+        notify::send(
+            &tr("Board at a new address"),
+            &trf(
+                "%1 has a new address in the network: %2.",
+                &[&name, &to.ip().to_string()],
+            ),
+        );
     }
 
-    /// Once per service start, when the board answers: its MAC address from
-    /// its discovery answer, so it can be found again under another address.
-    fn learn_board_mac(mut self: Pin<&mut Self>) {
-        let generation = self.rust().slot.generation.load(Ordering::SeqCst);
-        if self.rust().mac_checked == generation {
-            return;
-        }
-        self.as_mut().rust_mut().mac_checked = generation;
-        let Some(std::net::IpAddr::V4(ip)) = self.rust().board_addr.map(|a| a.ip()) else {
+    /// The board answers under its network name (`local_name`, e.g.
+    /// "ps-hid-bridge-96c33d.local") and the settings hold its address:
+    /// keep the name instead if it leads to the board on this PC (DHCP may
+    /// change the address, the name stays). Looked up on a helper thread;
+    /// once per name.
+    fn prefer_name(mut self: Pin<&mut Self>, local_name: &str) {
+        let board = self.config_ref().board.clone();
+        let Some(addr) = self.rust().board_addr else {
             return;
         };
-        let qt = self.qt_thread();
-        let _ = thread::Builder::new()
-            .name("pshb-board-mac".into())
-            .spawn(move || {
-                let found = discover::probe(ip, protocol::DISCOVERY_PORT, discover::DISCOVER_TIMEOUT)
-                    .ok()
-                    .flatten();
-                let _ = qt.queue(move |obj| obj.board_mac_learned(generation, found));
-            });
-    }
-
-    fn board_mac_learned(mut self: Pin<&mut Self>, generation: u64, found: Option<FoundBoard>) {
-        // Older firmware does not answer: nothing to learn.
-        let Some(b) = found else { return };
-        if !self.rust().slot.is_current(generation) {
+        if local_name.is_empty()
+            || follow::host_name(&board).is_some()
+            || config::board_socket_addr(&board).map(|a| a.ip()).ok() != Some(addr.ip())
+            || self.rust().name_tried == local_name
+        {
             return;
         }
-        self.as_mut().set_board_name(QString::from(&b.name));
-        // It answered with the key: this is the board, whatever was stored.
-        let mac = b.mac_string();
-        if self.config_ref().board_mac != mac {
-            self.as_mut().rust_mut().config.board_mac = mac.clone();
-            self.as_mut().save_config();
-            self.as_mut().set_board_mac(QString::from(&mac));
+        self.as_mut().rust_mut().name_tried = local_name.to_string();
+        let name = local_name.to_string();
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new().name("pshb-name".into()).spawn(move || {
+            use std::net::ToSocketAddrs;
+            let ips: Vec<std::net::IpAddr> = (name.as_str(), 0)
+                .to_socket_addrs()
+                .map(|a| a.map(|a| a.ip()).collect())
+                .unwrap_or_default();
+            let _ = qt.queue(move |obj| obj.name_resolved(name, ips, addr));
+        });
+    }
+
+    /// Renamed to `host`: a board set up under its network name keeps it.
+    fn renamed_host(mut self: Pin<&mut Self>, host: &str) {
+        let board = self.config_ref().board.clone();
+        let Some(old) = follow::host_name(&board) else {
+            return;
+        };
+        if host.is_empty() || !old.ends_with(".local") {
+            return;
         }
+        let new = if host.ends_with(".local") {
+            host.to_string()
+        } else {
+            format!("{host}.local")
+        };
+        if new == old {
+            return;
+        }
+        let port = board.strip_prefix(&old).unwrap_or_default(); // ":45050" or ""
+        self.as_mut().rust_mut().config.board = format!("{new}{port}");
+        self.as_mut().save_config();
+        self.as_mut().publish_config();
+        self.command(ServiceCmd::FollowName(Some(new)));
+    }
+
+    fn name_resolved(
+        mut self: Pin<&mut Self>,
+        name: String,
+        ips: Vec<std::net::IpAddr>,
+        addr: std::net::SocketAddr,
+    ) {
+        // Meanwhile moved, set up anew or named by hand: not now.
+        if self.rust().board_addr != Some(addr) || follow::host_name(&self.config_ref().board).is_some() {
+            return;
+        }
+        // Exactly the board: not an old address from a cache, nor another
+        // device's (the board itself has only IPv4).
+        let v4: Vec<_> = ips.iter().filter(|ip| ip.is_ipv4()).collect();
+        if v4.is_empty() || v4.iter().any(|ip| **ip != addr.ip()) {
+            return;
+        }
+        let board = if addr.port() == protocol::UDP_PORT_DEFAULT {
+            name.clone()
+        } else {
+            format!("{name}:{}", addr.port())
+        };
+        pshb_core::logln!("PS HID Bridge: the board is set up under its network name {board} now");
+        self.as_mut().rust_mut().config.board = board;
+        self.as_mut().rust_mut().config.board_ip = addr.ip().to_string();
+        self.as_mut().save_config();
+        self.as_mut().publish_config();
+        self.command(ServiceCmd::FollowName(Some(name)));
     }
 
     fn retry_service(self: Pin<&mut Self>, generation: u64) {
@@ -1291,12 +1292,28 @@ impl qobject::AppController {
     }
 
     fn apply_status(mut self: Pin<&mut Self>, st: ServiceStatus) {
-        if *self.connected() && !st.connected {
-            let generation = self.rust().slot.generation.load(Ordering::SeqCst);
-            self.as_mut().schedule_name_check(generation);
-        } else if !*self.connected() && st.connected {
-            self.as_mut().rust_mut().follow_wait = FOLLOW_FIRST;
-            self.as_mut().learn_board_mac();
+        // Where it answers: where to start next time (a name may not
+        // resolve then, see start_address).
+        if st.connected
+            && let Some(addr) = self.rust().board_addr
+            && self.config_ref().board_ip != addr.ip().to_string()
+        {
+            self.as_mut().rust_mut().config.board_ip = addr.ip().to_string();
+            self.as_mut().save_config();
+        }
+        // Who it is (the link asks once it answers): it answered with the
+        // key, so this is the board, whatever MAC address was stored.
+        if let Some(mac) = st
+            .board_mac
+            .as_ref()
+            .filter(|m| **m != self.config_ref().board_mac)
+        {
+            self.as_mut().rust_mut().config.board_mac = mac.clone();
+            self.as_mut().save_config();
+            self.as_mut().set_board_mac(QString::from(mac));
+        }
+        if let Some(name) = st.board_name.as_ref() {
+            self.as_mut().set_board_name(QString::from(name));
         }
         self.as_mut().set_connected(st.connected);
         self.as_mut()
@@ -1448,6 +1465,7 @@ impl qobject::AppController {
         }
         match ev {
             ServiceEvent::Status(st) => self.as_mut().apply_status(*st),
+            ServiceEvent::BoardMoved { to, reason } => self.as_mut().board_moved(to, reason),
             ServiceEvent::Notice(n) => {
                 let msg = match n {
                     Notice::Activated => {
@@ -1557,7 +1575,7 @@ impl qobject::AppController {
             }
         }
         // The MAC address of a board picked from the search; else learned
-        // when it answers (learn_board_mac).
+        // when it answers (the link asks it, see apply_status).
         let found_mac = board_ipv4(&address)
             .and_then(|ip| self.rust().found.iter().find(|b| b.ip == ip))
             .map(FoundBoard::mac_string);
@@ -1614,6 +1632,7 @@ impl qobject::AppController {
                 match result {
                     Ok((shown, host)) => {
                         obj.as_mut().set_board_name(QString::from(&shown));
+                        obj.as_mut().renamed_host(&host);
                         obj.as_mut().set_rename_level(QString::from("ok"));
                         obj.as_mut().set_rename_message(QString::from(&trf(
                             "Renamed. In your router and the browser the board is now called %1.",
@@ -2776,10 +2795,20 @@ impl qobject::AppController {
     ) -> impl FnOnce() -> Result<(update::BoardApi, MutexGuard<'static, ()>), String> + Send + 'static {
         let key = config::load_psk(&config::psk_path());
         let board = self.config_ref().board.clone();
+        // Set up under a name: where the link reaches it now (a lookup could
+        // give an old address from a cache).
+        let known = self
+            .rust()
+            .board_addr
+            .filter(|_| follow::host_name(&board).is_some())
+            .map(|a| a.ip());
         move || {
             let key = key?;
-            let addr = resolve(&board)?;
-            let api = update::BoardApi::new(&addr.ip().to_string(), BOARD_HTTP_PORT, &key);
+            let ip = match known {
+                Some(ip) => ip,
+                None => resolve(&board)?.ip(),
+            };
+            let api = update::BoardApi::new(&ip.to_string(), BOARD_HTTP_PORT, &key);
             Ok((api, BOARD_API.lock().unwrap_or_else(|e| e.into_inner())))
         }
     }
@@ -2814,8 +2843,13 @@ impl qobject::AppController {
                     }
                     match result {
                         Ok(json) => {
+                            let local_name = serde_json::from_str::<serde_json::Value>(&json)
+                                .ok()
+                                .and_then(|v| v["status"]["local_name"].as_str().map(str::to_string))
+                                .unwrap_or_default();
                             obj.as_mut().set_board_info_json(QString::from(&json));
                             obj.as_mut().set_board_info_error(QString::default());
+                            obj.as_mut().prefer_name(&local_name);
                         }
                         // Waited for an update and ran into the restart.
                         Err(_) if obj.rust().board_expected.is_some() => {}
@@ -3203,6 +3237,23 @@ fn check_address(board: &str) -> Result<(), String> {
     } else {
         Err(format!("\"{board}\" is not a valid address."))
     }
+}
+
+/// Where the service starts sending: a name with a last known address
+/// starts there at once (the link looks the name up meanwhile, see
+/// pshb_core::follow), anything else at what it resolves to now.
+fn start_address(cfg: &Config) -> Result<std::net::SocketAddr, String> {
+    if follow::host_name(&cfg.board).is_some()
+        && let Ok(ip) = cfg.board_ip.parse::<std::net::IpAddr>()
+    {
+        let port = cfg
+            .board
+            .rsplit_once(':')
+            .and_then(|(_, p)| p.parse().ok())
+            .unwrap_or(protocol::UDP_PORT_DEFAULT);
+        return Ok(std::net::SocketAddr::new(ip, port));
+    }
+    resolve(&cfg.board)
 }
 
 fn resolve(board: &str) -> Result<std::net::SocketAddr, String> {
