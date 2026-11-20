@@ -74,7 +74,7 @@ Station by station, as in [How it works](#how-it-works).
 
 **Station 1, the PC:**
 
-5. **App:** start the AppImage for your processor, `PS-HID-Bridge-x86_64.AppImage` (Intel, AMD) or `PS-HID-Bridge-aarch64.AppImage` (ARM64). The wizard asks for the board address and key (pasted, or taken from the board with its web password), the devices, the keyboard type and the trigger.
+5. **App:** start the AppImage for your processor, `PS-HID-Bridge-x86_64.AppImage` (Intel, AMD) or `PS-HID-Bridge-aarch64.AppImage` (ARM64). The wizard asks for the board address and key (pasted, or taken from the board with its web password), the devices, the keyboard type and the trigger. On CachyOS (or wherever [Shelly](https://github.com/Seafoam-Labs/Shelly-ALPM) is installed) the app offers to install itself with Shelly on its first start: it is then in the application menu, see [Installing with Shelly](docs/advanced-setup.md#installing-with-shelly).
 
 **Station 3, the PlayStation:**
 
@@ -162,7 +162,7 @@ A normal user may not read mouse and keyboard directly. "Set up access" (in the 
 
 ## Updates
 
-When a new release is out, the Status page shows a banner with "Update app" (the AppImage replaces itself, then "Restart now") and "Update board" (the board's firmware over the network; the bridge must be off). If the new firmware does not start properly, the board returns to the previous version by itself. The app looks for updates at start and every six hours; the switch on "Firmware & updates" turns that off.
+When a new release is out, the Status page shows a banner with "Update app" (the AppImage replaces itself, then "Restart now") and "Update board" (the board's firmware over the network; the bridge must be off). If the new firmware does not start properly, the board returns to the previous version by itself. The app looks for updates at start and every six hours; the switch on "Firmware & updates" turns that off. Installed with Shelly, the app still updates itself, and Shelly then shows the new version.
 
 The board can also be updated in its web interface (System → firmware file). How updates are checked and signed, and how to recover a board: [docs/advanced-setup.md](docs/advanced-setup.md#board).
 

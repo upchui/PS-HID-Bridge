@@ -100,6 +100,8 @@ Main {
         C.otherKeyboardsBlocked = 3;
         C.windowRuleAvailable = true;
         C.windowBackend = "KDE Plasma";
+        C.installOffer = "install";
+        C.installFolder = "/home/someone/Downloads";
         C.windowRuleEnabled = true;
         C.windowRule = "chiaki-ng, org.chiaki.chiaki-ng, PlayStation Remote Play";
         C.triggersJson = JSON.stringify([

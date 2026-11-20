@@ -15,6 +15,7 @@ use pshb_core::diagnostics::{BoardHealth, HealthWarning};
 use pshb_core::discover::{self, FoundBoard, board_ipv4};
 use pshb_core::engine::Notice;
 use pshb_core::input::{self, DeviceInfo};
+use pshb_core::install::{self, Found};
 use pshb_core::protocol::{self, Pong};
 use pshb_core::service::{Service, ServiceCmd, ServiceConfig, ServiceEvent, ServiceStatus, TypingStop};
 use pshb_core::transport::KeyState;
@@ -136,6 +137,15 @@ pub mod qobject {
         #[qproperty(QString, diag_level)]
         /// The board refuses packets from somewhere else ("" = all fine).
         #[qproperty(QString, board_warning)]
+        /// Installing the AppImage with Shelly: what the app offers ("",
+        /// "install", "start-installed", "restart-installed"), the folder
+        /// it runs from, the installed copy's version, and the outcome.
+        #[qproperty(QString, install_offer)]
+        #[qproperty(QString, install_folder)]
+        #[qproperty(QString, installed_version)]
+        #[qproperty(bool, install_busy)]
+        #[qproperty(QString, install_message)]
+        #[qproperty(QString, install_level)]
         #[qproperty(QString, last_error)]
         /// Settings that could not be written; stays until a save works.
         #[qproperty(QString, save_error)]
@@ -319,6 +329,15 @@ pub mod qobject {
         fn save_diagnostics(self: Pin<&mut AppController>, url: &QString);
         #[qinvokable]
         fn dismiss_board_warning(self: Pin<&mut AppController>);
+        /// Install this AppImage with Shelly; `install_busy` meanwhile.
+        #[qinvokable]
+        fn install_with_shelly(self: Pin<&mut AppController>);
+        /// Start the installed copy instead of this file.
+        #[qinvokable]
+        fn start_installed(self: Pin<&mut AppController>);
+        /// Hide the offer (until the next start).
+        #[qinvokable]
+        fn dismiss_install(self: Pin<&mut AppController>);
         /// Touchpads and touchscreens: speed factor, tap to click, natural scrolling.
         #[qinvokable]
         fn set_touchpad(self: Pin<&mut AppController>, speed: f64, tap: bool, natural: bool);
@@ -468,6 +487,14 @@ pub struct AppControllerRust {
     diag_message: QString,
     diag_level: QString,
     board_warning: QString,
+    install_offer: QString,
+    install_folder: QString,
+    installed_version: QString,
+    install_busy: bool,
+    install_message: QString,
+    install_level: QString,
+    /// This app in Shelly's record (the installed copy).
+    installed: Option<install::Installed>,
     last_error: QString,
     save_error: QString,
     counter_error: QString,
@@ -659,6 +686,13 @@ impl Default for AppControllerRust {
             diag_message: QString::default(),
             diag_level: QString::default(),
             board_warning: QString::default(),
+            install_offer: QString::default(),
+            install_folder: QString::default(),
+            installed_version: QString::default(),
+            install_busy: false,
+            install_message: QString::default(),
+            install_level: QString::default(),
+            installed: None,
             last_error: QString::default(),
             save_error: QString::default(),
             counter_error: QString::default(),
@@ -2236,6 +2270,131 @@ impl qobject::AppController {
         self.set_board_warning(QString::default());
     }
 
+    /// Running as an AppImage on a system with Shelly: is the app
+    /// installed (offer it if not, or the installed copy), and does
+    /// Shelly's record show the version that runs (tell it if not)?
+    fn check_installation(self: Pin<&mut Self>) {
+        let Some(running) = std::env::var_os("APPIMAGE").map(std::path::PathBuf::from) else {
+            return;
+        };
+        if install::shelly().is_none() {
+            return;
+        }
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new()
+            .name("pshb-install-check".into())
+            .spawn(move || {
+                let found = install::list().map(|list| install::find(&list, &running));
+                let _ = qt.queue(move |obj| obj.installation_checked(running, found));
+            });
+    }
+
+    fn installation_checked(
+        mut self: Pin<&mut Self>,
+        running: std::path::PathBuf,
+        found: Result<Found, String>,
+    ) {
+        let found = match found {
+            Ok(f) => f,
+            Err(e) => {
+                pshb_core::logln!("PS HID Bridge: {e}");
+                return;
+            }
+        };
+        pshb_core::logln!(
+            "PS HID Bridge: Shelly: {}",
+            match &found {
+                Found::ThisFile(i) => format!("installed as {} (version {})", i.name, i.version),
+                Found::Elsewhere(i) => format!(
+                    "installed at {} (version {}), this is another file",
+                    i.path.display(),
+                    i.version
+                ),
+                Found::NotInstalled => "not installed".into(),
+            }
+        );
+        let folder = running
+            .parent()
+            .map(|d| d.display().to_string())
+            .unwrap_or_default();
+        self.as_mut().set_install_folder(QString::from(&folder));
+        let offer = match &found {
+            Found::ThisFile(i) => {
+                // Installed and running: Shelly's record follows the
+                // version the app updated itself to.
+                if install::record_outdated(&i.version, pshb_core::VERSION) {
+                    let name = i.name.clone();
+                    let _ = thread::Builder::new()
+                        .name("pshb-shelly-sync".into())
+                        .spawn(move || {
+                            if let Err(e) = install::sync(&name) {
+                                pshb_core::logln!("PS HID Bridge: {e}");
+                            }
+                        });
+                }
+                ""
+            }
+            Found::Elsewhere(i) => {
+                self.as_mut().set_installed_version(QString::from(&i.version));
+                "start-installed"
+            }
+            Found::NotInstalled => "install",
+        };
+        self.as_mut().rust_mut().installed = match found {
+            Found::ThisFile(i) | Found::Elsewhere(i) => Some(i),
+            Found::NotInstalled => None,
+        };
+        self.as_mut().set_install_offer(QString::from(offer));
+    }
+
+    pub fn install_with_shelly(mut self: Pin<&mut Self>) {
+        if *self.install_busy() {
+            return;
+        }
+        let Some(running) = std::env::var_os("APPIMAGE").map(std::path::PathBuf::from) else {
+            return;
+        };
+        self.as_mut().set_install_busy(true);
+        self.as_mut().set_install_message(QString::default());
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new().name("pshb-install".into()).spawn(move || {
+            let result = install::install(&running);
+            let _ = qt.queue(move |obj| obj.installed_with_shelly(result));
+        });
+    }
+
+    fn installed_with_shelly(mut self: Pin<&mut Self>, result: Result<install::Installed, String>) {
+        self.as_mut().set_install_busy(false);
+        match result {
+            Ok(i) => {
+                self.as_mut().set_install_level(QString::from("ok"));
+                self.as_mut().set_install_message(QString::from(&trf(
+                    "Installed: PS HID Bridge is in the application menu now (%1). The file you started can be deleted.",
+                    &[&i.path.display().to_string()],
+                )));
+                self.as_mut().set_installed_version(QString::from(&i.version));
+                self.as_mut().rust_mut().installed = Some(i);
+                self.as_mut()
+                    .set_install_offer(QString::from("restart-installed"));
+            }
+            Err(e) => {
+                self.as_mut().set_install_level(QString::from("bad"));
+                self.as_mut().set_install_message(QString::from(&e));
+            }
+        }
+    }
+
+    pub fn start_installed(self: Pin<&mut Self>) {
+        let Some(path) = self.rust().installed.as_ref().map(|i| i.path.clone()) else {
+            return;
+        };
+        self.restart_from(path);
+    }
+
+    pub fn dismiss_install(self: Pin<&mut Self>) {
+        self.set_install_offer(QString::default());
+    }
+
     pub fn set_app_language(mut self: Pin<&mut Self>, code: &QString) {
         let code = String::from(code);
         let code = if code == "de" { "de" } else { "en" };
@@ -2440,7 +2599,7 @@ impl qobject::AppController {
                         let pct = (got * 100).checked_div(total).unwrap_or(0);
                         if pct >= shown + 5 {
                             shown = pct;
-                            let text = format!("Downloading the app: {pct} %");
+                            let text = trf("Downloading the app: %1 %", &[&pct.to_string()]);
                             let _ = progress.queue(move |obj| obj.update_progress(text));
                         }
                     })
@@ -2448,6 +2607,10 @@ impl qobject::AppController {
                         update::replace_file(&path, &data).map_err(|e| format!("{}: {e}", path.display()))
                     })
                     .map(|()| release.version);
+                // Shelly's record follows (version, menu entry, icon).
+                if result.is_ok() {
+                    tell_shelly(&path);
+                }
                 let _ = done.queue(move |obj| obj.app_update_done(result));
             });
     }
@@ -2472,15 +2635,21 @@ impl qobject::AppController {
         }
     }
 
-    pub fn restart_app(mut self: Pin<&mut Self>) {
+    pub fn restart_app(self: Pin<&mut Self>) {
         let Some(path) = std::env::var_os("APPIMAGE") else {
             return;
         };
+        self.restart_from(std::path::PathBuf::from(path));
+    }
+
+    /// Quit and start the AppImage at `path` (this one after an update, or
+    /// the installed copy).
+    fn restart_from(mut self: Pin<&mut Self>, path: std::path::PathBuf) {
         // The new instance needs the devices, the board's attention, the
         // packet counter and the instance lock.
         self.as_mut().stop_everything();
         crate::release_instance_lock();
-        match fresh_command(&path).spawn() {
+        match install::host_command(&path).spawn() {
             Ok(_) => std::process::exit(0),
             Err(e) => {
                 self.as_mut()
@@ -2820,6 +2989,7 @@ impl cxx_qt::Initialize for qobject::AppController {
                 self.as_mut().restart_service();
             }
             self.as_mut().set_can_update_app(appimage_path().is_some());
+            self.as_mut().check_installation();
             // Look for updates shortly after the start, then every six hours.
             let qt = self.qt_thread();
             let _ = thread::Builder::new()
@@ -2879,35 +3049,6 @@ fn appimage_path() -> Option<std::path::PathBuf> {
     std::fs::File::create(&probe).ok()?;
     let _ = std::fs::remove_file(&probe);
     Some(path)
-}
-
-/// Command for the new AppImage without what the running one's AppRun set
-/// up: paths into its mount (PATH, LD_LIBRARY_PATH, Qt plugin paths ...)
-/// would point into a folder that is about to disappear.
-fn fresh_command(appimage: &std::ffi::OsStr) -> std::process::Command {
-    use std::os::unix::process::CommandExt;
-    let mut cmd = std::process::Command::new(appimage);
-    if let Some(appdir) = std::env::var("APPDIR").ok().filter(|d| !d.is_empty()) {
-        for (key, value) in std::env::vars() {
-            if !value.contains(&appdir) {
-                continue;
-            }
-            let kept: Vec<&str> = value.split(':').filter(|p| !p.contains(&appdir)).collect();
-            if kept.iter().all(|p| p.is_empty()) {
-                cmd.env_remove(&key);
-            } else {
-                cmd.env(&key, kept.join(":"));
-            }
-        }
-    }
-    for key in ["APPDIR", "APPIMAGE", "ARGV0"] {
-        cmd.env_remove(key);
-    }
-    if let Some(dir) = std::env::var_os("OWD") {
-        cmd.current_dir(dir);
-    }
-    cmd.process_group(0); // not ended together with this process
-    cmd
 }
 
 /// Drop the running service (and any start in progress) on a helper thread.
@@ -3054,3 +3195,18 @@ fn layouts_json() -> String {
 
 /// Marks a pairing that needs a new password first (internal, never shown).
 const NEEDS_NEW_PASSWORD: &str = "\u{0}new-password";
+
+/// The app replaced its AppImage at `path` with a new version: if Shelly
+/// installed it, Shelly reads it again (its record shows the new version).
+fn tell_shelly(path: &std::path::Path) {
+    if install::shelly().is_none() {
+        return;
+    }
+    let result = install::list().and_then(|list| match install::find(&list, path) {
+        Found::ThisFile(i) => install::sync(&i.name),
+        _ => Ok(()),
+    });
+    if let Err(e) = result {
+        pshb_core::logln!("PS HID Bridge: {e}");
+    }
+}

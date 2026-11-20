@@ -158,6 +158,9 @@ AppPage {
                     onActivated: v => AppController.setAppLanguage(v)
                 }
 
+                // Started from a download: install it first (Shelly).
+                InstallBanner {}
+
                 Repeater {
                     model: [
                         ["board", I18n.tr("The board with firmware, at the PlayStation's USB port and connected to the network.")],

@@ -22,6 +22,13 @@ mkdir -p "$ROOT/out" "$APPDIR/usr/share/metainfo"
 sed -e "s/@VERSION@/$PSHB_VERSION/" -e "s/@DATE@/$PSHB_DATE/" \
     "$ROOT/desktop/packaging/$APP_ID.metainfo.xml" > "$APPDIR/usr/share/metainfo/$APP_ID.metainfo.xml"
 
+# The desktop entry with the version: AppImage managers (Shelly, Gear
+# Lever, AppImageLauncher) read it from X-AppImage-Version. Same file name
+# (it is the desktop file ID the app announces), one folder per processor.
+DESKTOP_FILE=$ROOT/.cache/build/desktop-$(uname -m)/$APP_ID.desktop
+mkdir -p "$(dirname "$DESKTOP_FILE")"
+{ cat "$ROOT/desktop/packaging/$APP_ID.desktop"; echo "X-AppImage-Version=$PSHB_VERSION"; } > "$DESKTOP_FILE"
+
 export QMAKE=/opt/qt6/bin/qmake
 export QML_SOURCES_PATHS=$ROOT/desktop/ui/qml
 # Qt >= 6.10 ships the Wayland client platform plugin in qtbase; offscreen
@@ -45,7 +52,7 @@ linuxdeploy \
     "${EXCLUDES[@]}" \
     --appdir "$APPDIR" \
     --executable "$TARGET_DIR/release/ps-hid-bridge" \
-    --desktop-file "$ROOT/desktop/packaging/$APP_ID.desktop" \
+    --desktop-file "$DESKTOP_FILE" \
     --icon-file "$ROOT/desktop/packaging/icons/$APP_ID.svg" \
     --plugin qt
 

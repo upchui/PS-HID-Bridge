@@ -15,6 +15,7 @@ pub mod discover;
 pub mod engine;
 pub mod idle;
 pub mod input;
+pub mod install;
 pub mod keymap;
 pub mod lockfile;
 pub mod log;

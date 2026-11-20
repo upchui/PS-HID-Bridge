@@ -186,6 +186,17 @@ The app and `pshb-cli flash` can put the firmware, the HID test images and the e
 | `ps-hid-bridge-timing.uf2` | **measuring only:** normal firmware plus measuring pins GP2/GP3 (not with a USB socket soldered there, see [usb-host-port.md](usb-host-port.md)), a latency summary on the UART every 10 s and an upload sink for load tests (`tools/fw_bench.py`, see [latency.md](latency.md)) |
 | `ps-hid-bridge-nuke.uf2` | erases the whole flash |
 
+## Installing with Shelly
+
+[Shelly](https://github.com/Seafoam-Labs/Shelly-ALPM), CachyOS's package manager, installs AppImages: it copies the file to `~/.local/bin`, adds the app to the application menu with its icon and lists it with its version.
+
+- **The app offers it:** started as an AppImage on a system with Shelly (a download, the Desktop), the Status page and the wizard's first step offer "Install with Shelly"; afterwards "Restart" continues with the installed copy, and the file you started can be deleted. "Later" hides the offer until the next start. Is the app installed already and this is another file, it offers to start the installed one instead. Running the installed copy, it offers nothing.
+- **By hand:** `shelly install appimage PS-HID-Bridge-x86_64.AppImage`, or drag the file into Shelly.
+- **Updates:** the app updates itself as everywhere ("Update app"), in place, and then has Shelly read the file again (`shelly sync appimage <name>`), so Shelly lists the version that runs. The AppImage carries no update information of its own (Shelly would rename the file and update it a second time); Shelly reads the version from `X-AppImage-Version` in the AppImage's desktop entry.
+- **Removing:** "Remove access" on the Input page first (the device access rule lives in `/etc/udev/rules.d`, outside of Shelly), then `shelly remove appimage PS-HID-Bridge-x86_64`. Settings and key in `~/.config/ps-hid-bridge` stay, also with `--remove-config` (Shelly matches folders by the AppImage's name).
+
+The app calls Shelly with the AppImage's own library and plugin paths taken out of the environment, so Shelly runs with the system's libraries. What it found is in the diagnostics report ("Shelly: installed as …").
+
 ## Downloads and version numbers
 
 Every commit on `main` is built and tested automatically and published as a release on the [releases page](https://github.com/upchui/PS-HID-Bridge/releases), named after its version, e.g. `v1.0.3`; the newest one is marked "Latest". Each release contains the AppImage and the command line tool for x86_64 and for ARM64 (`PS-HID-Bridge-x86_64.AppImage`, `PS-HID-Bridge-aarch64.AppImage`, `pshb-cli-x86_64-linux`, `pshb-cli-aarch64-linux`), all firmware images and `SHA256SUMS`. The app and the CLI update themselves with the file for their own processor.

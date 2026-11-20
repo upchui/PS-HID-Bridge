@@ -228,10 +228,17 @@ fmt: image-rust dirs
 	$(RUST_RUN) bash -c 'cd desktop && cargo fmt --all'
 
 # Smoke test of the packaged app on a system without Qt: loads every page
-# offscreen (warnings are fatal) and quits.
+# offscreen (warnings are fatal) and quits. Then its desktop entry: under
+# the app's desktop file ID, with the version AppImage managers (Shelly)
+# read from it.
+DESKTOP_ENTRY := usr/share/applications/io.github.thealhu.pshidbridge.desktop
 test-appimage: desktop image-apptest dirs
 	$(DOCKER_RUN) -e APPIMAGE_EXTRACT_AND_RUN=1 -e TMPDIR=/tmp -e LANG=C.UTF-8 $(APPTEST_IMAGE) \
-		bash -c 'timeout $(SELFTEST_TIMEOUT) $(APPIMAGE) --self-test'
+		bash -c 'set -e; timeout $(SELFTEST_TIMEOUT) $(APPIMAGE) --self-test; \
+			cd "$$(mktemp -d)"; /work/$(APPIMAGE) --appimage-extract $(DESKTOP_ENTRY) >/dev/null; \
+			grep -qx "X-AppImage-Version=$(PSHB_VERSION)" squashfs-root/$(DESKTOP_ENTRY) \
+				|| { echo "AppImage: $(DESKTOP_ENTRY) without X-AppImage-Version=$(PSHB_VERSION)"; exit 1; }; \
+			echo "AppImage: desktop entry with version $(PSHB_VERSION)"'
 
 # Screenshots of every page at several window widths, light and dark, with
 # the demo values of tools/ui_demo.qml (every pill, warning and banner at

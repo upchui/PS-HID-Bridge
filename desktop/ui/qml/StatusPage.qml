@@ -94,6 +94,7 @@ AppPage {
     }
 
     // ------------------------------------------------------------ banners
+    InstallBanner {}
     Banner {
         kind: "error"
         visible: AppController.lastError !== ""
