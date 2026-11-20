@@ -230,7 +230,7 @@ fmt: image-rust dirs
 # Smoke test of the packaged app on a system without Qt: loads every page
 # offscreen (warnings are fatal) and quits. Then its desktop entry: under
 # the app's desktop file ID, with the version AppImage managers (Shelly)
-# read from it.
+# read from it, in the menu's games.
 DESKTOP_ENTRY := usr/share/applications/io.github.thealhu.pshidbridge.desktop
 test-appimage: desktop image-apptest dirs
 	$(DOCKER_RUN) -e APPIMAGE_EXTRACT_AND_RUN=1 -e TMPDIR=/tmp -e LANG=C.UTF-8 $(APPTEST_IMAGE) \
@@ -238,6 +238,8 @@ test-appimage: desktop image-apptest dirs
 			cd "$$(mktemp -d)"; /work/$(APPIMAGE) --appimage-extract $(DESKTOP_ENTRY) >/dev/null; \
 			grep -qx "X-AppImage-Version=$(PSHB_VERSION)" squashfs-root/$(DESKTOP_ENTRY) \
 				|| { echo "AppImage: $(DESKTOP_ENTRY) without X-AppImage-Version=$(PSHB_VERSION)"; exit 1; }; \
+			grep -qx "Categories=Game;" squashfs-root/$(DESKTOP_ENTRY) \
+				|| { echo "AppImage: $(DESKTOP_ENTRY) not in the category Game"; exit 1; }; \
 			echo "AppImage: desktop entry with version $(PSHB_VERSION)"'
 
 # Screenshots of every page at several window widths, light and dark, with
