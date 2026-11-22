@@ -436,6 +436,7 @@
   "The vertical speed, the inverted axis and the wheel apply to touchpads too.": "Vertikale Geschwindigkeit, umgekehrte Achse und Mausrad gelten auch für Touchpads.",
   "This PC": "Dieser PC",
   "This app does not run as an AppImage in a writable folder: download the new version from the release page.": "Diese App läuft nicht als AppImage in einem beschreibbaren Ordner: Lade die neue Version von der Release-Seite herunter.",
+  "This build has no list: it is made from the project's history when the app is built.": "Dieser Build hat keine Liste: Sie entsteht beim Bauen der App aus der Geschichte des Projekts.",
   "This erases the board's firmware and settings.": "Das löscht Firmware und Einstellungen des Boards.",
   "This keyboard language has no key for: %1": "Diese Tastatursprache hat keine Taste für: %1",
   "To the PlayStation": "An die PlayStation",

@@ -102,6 +102,12 @@ Main {
                     details: [{ bullet: true, text: "What it does, why, and how it was tested, as the commit says." }]
                 }]
             });
+            // Further contributors: one with a GitHub address, one known
+            // only by the name in git.
+            log.contributors = (log.contributors ?? []).concat([
+                { name: "maxm", aka: ["Max Mustermann"], github: "maxm" },
+                { name: "jan", aka: [], github: "" }
+            ]);
             C.changelogJson = JSON.stringify(log);
         }
         C.appUpdateAvailable = true;

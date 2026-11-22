@@ -9,9 +9,16 @@ AppPage {
     id: page
 
     readonly property string repoUrl: "https://github.com/" + AppController.repo
-    // Names, not texts: the same in every language.
-    readonly property string author: "Alexander Huthansl"
-    readonly property string authorAccounts: "upchui · theALHU"
+    // Everyone who took part, from the project's history when the app was
+    // built (tools/changelog.py): [{name, aka, github}], oldest first.
+    readonly property var contributors: {
+        try {
+            return JSON.parse(AppController.changelogJson).contributors ?? [];
+        } catch (e) {
+            return [];
+        }
+    }
+    // Not a text: the same in every language.
     readonly property string copyright: "Copyright © 2026 Alexander Huthansl"
     readonly property string licenseId: "GPL-2.0-or-later"
 
@@ -67,31 +74,46 @@ AppPage {
         title: I18n.tr("Contributors")
         icon: "person"
 
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 12
-            ColumnLayout {
+        // Each the same way: the GitHub name (or the name in git), below it
+        // further names.
+        Repeater {
+            model: page.contributors
+            delegate: RowLayout {
+                required property var modelData
                 Layout.fillWidth: true
-                spacing: 0
-                Controls.Label {
+                spacing: 12
+                ColumnLayout {
                     Layout.fillWidth: true
-                    text: page.author
-                    color: Style.text
-                    font.weight: Font.DemiBold
-                    wrapMode: Text.WordWrap
+                    spacing: 0
+                    Controls.Label {
+                        Layout.fillWidth: true
+                        text: modelData.name
+                        color: Style.text
+                        font.weight: Font.DemiBold
+                        wrapMode: Text.WordWrap
+                    }
+                    Controls.Label {
+                        Layout.fillWidth: true
+                        visible: modelData.aka.length > 0
+                        text: modelData.aka.join(" · ")
+                        color: Style.muted
+                        wrapMode: Text.WordWrap
+                    }
                 }
-                Controls.Label {
-                    Layout.fillWidth: true
-                    text: page.authorAccounts
-                    color: Style.muted
-                    wrapMode: Text.WordWrap
+                LinkButton {
+                    visible: modelData.github !== ""
+                    text: I18n.tr("GitHub profile")
+                    flat: true
+                    url: "https://github.com/" + modelData.github
                 }
             }
-            LinkButton {
-                text: I18n.tr("GitHub profile")
-                flat: true
-                url: "https://github.com/upchui"
-            }
+        }
+        Controls.Label {
+            Layout.fillWidth: true
+            visible: page.contributors.length === 0
+            text: I18n.tr("This build has no list: it is made from the project's history when the app is built.")
+            color: Style.muted
+            wrapMode: Text.WordWrap
         }
     }
 

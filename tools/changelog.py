@@ -10,6 +10,12 @@ paragraphs and "- " points with their lines joined (the page wraps them),
 without trailers such as Co-Authored-By. Build, CI and test commits are
 left out; a version with nothing else keeps its section, without changes.
 
+Also the project's contributors for the About page: every commit author and
+Co-Authored-By, each once, in the order they first took part, by their
+GitHub name where their address tells it (else by their name in git), with
+what PEOPLE adds. Never an e-mail address; AI assistants and bots are left
+out.
+
 Usage: tools/changelog.py [-o FILE]   write the JSON (default: stdout)
        tools/changelog.py --check     generate and check it (make test)
 
@@ -33,6 +39,16 @@ FALLBACK_COUNT = 50
 SEP_FIELD, SEP_RECORD = "\x1f", "\x1e"
 # Lines at the end of a commit text that name people, not changes.
 TRAILER = re.compile(r"^(co-authored-by|signed-off-by|reviewed-by|acked-by):", re.IGNORECASE)
+# What git does not tell about a contributor, by their name in git: the
+# GitHub account and further names (shown after the GitHub name).
+PEOPLE = {
+    "theALHU": {"github": "upchui", "aka": ["Alexander Huthansl"]},
+}
+NOT_PEOPLE = re.compile(r"^claude\b|\[bot\]$|^dependabot\b|^github-actions\b", re.IGNORECASE)
+NOT_PEOPLE_MAIL = re.compile(r"@anthropic\.com$", re.IGNORECASE)
+# GitHub's private addresses name the account: 123+name@users.noreply.github.com.
+GITHUB_MAIL = re.compile(r"^(?:\d+\+)?([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)@users\.noreply\.github\.com$", re.IGNORECASE)
+NAME_MAIL = re.compile(r"^\s*(.*?)\s*<([^>]*)>\s*$")
 
 
 def git(*args):
@@ -116,6 +132,57 @@ def count(rev_range):
     return int(git("rev-list", "--no-merges", "--count", *rev_range).strip())
 
 
+def person(name, mail):
+    """A contributor {"name", "aka", "github"} from a name and address in git,
+    or None for an assistant or a bot."""
+    name, mail = name.strip(), mail.strip()
+    if not name or NOT_PEOPLE.search(name) or NOT_PEOPLE_MAIL.search(mail):
+        return None
+    m = GITHUB_MAIL.match(mail)
+    rule = PEOPLE.get(name, {})
+    github = rule.get("github") or (m.group(1) if m else "")
+    aka = [name] if github and github.lower() != name.lower() else []
+    aka += [a for a in rule.get("aka", []) if a not in aka]
+    return {"name": github or name, "aka": aka, "github": github}
+
+
+def merge_people(found):
+    """One entry per person, in the order given: the same name (GitHub or git,
+    any case) means the same person; a GitHub name wins over a git name."""
+    people = []
+    for p in found:
+        names = {n.lower() for n in [p["name"], *p["aka"]]}
+        same = next((q for q in people if names & {n.lower() for n in [q["name"], *q["aka"]]}), None)
+        if same is None:
+            people.append(p)
+            continue
+        if p["github"] and not same["github"]:
+            same["aka"] = [same["name"]] + same["aka"]
+            same["name"] = same["github"] = p["github"]
+        for n in [p["name"], *p["aka"]]:
+            if n.lower() != same["name"].lower() and n.lower() not in {a.lower() for a in same["aka"]}:
+                same["aka"].append(n)
+    return people
+
+
+def contributors():
+    """Everyone who took part, oldest first (see the module text)."""
+    out = git("log", "--reverse", f"--format=%an{SEP_FIELD}%ae{SEP_FIELD}"
+              f"%(trailers:key=Co-authored-by,valueonly,separator=%x1d){SEP_RECORD}", "HEAD")
+    found = []
+    for rec in out.split(SEP_RECORD):
+        rec = rec.strip("\n")
+        if not rec:
+            continue
+        name, mail, co = rec.split(SEP_FIELD, 2)
+        found.append(person(name, mail))
+        for t in co.split("\x1d"):
+            m = NAME_MAIL.match(t)
+            if m:
+                found.append(person(m.group(1), m.group(2)))
+    return merge_people([p for p in found if p])
+
+
 def release_tags():
     """Release tags reachable from HEAD, oldest first: (name, commit date)."""
     names = git("tag", "--merged", "HEAD", "--list", "v*").split()
@@ -135,7 +202,7 @@ def build():
         tags = [] if shallow else release_tags()
     except (OSError, subprocess.CalledProcessError) as e:
         print(f"changelog: no git history ({e}): empty changelog", file=sys.stderr)
-        return {"repo": REPO, "releases": []}
+        return {"repo": REPO, "releases": [], "contributors": []}
 
     # A version whose commits are all left out (build, tests, the version
     # number) keeps its section, with no changes: the page shows it, so
@@ -172,7 +239,7 @@ def build():
             releases.append({"version": version or head, "tag": "", "date": newest[0]["date"],
                              "build": True, "compare": "", "changes": newest})
     releases.reverse()
-    return {"repo": REPO, "releases": releases}
+    return {"repo": REPO, "releases": releases, "contributors": contributors()}
 
 
 # A commit text and what the page gets from it (--check).
@@ -191,12 +258,36 @@ SAMPLE_DETAILS = [
     {"bullet": True, "text": "First point, continued here."},
     {"bullet": True, "text": "Second point. Tests: the cases."},
 ]
+# Names and addresses in git and the contributor they make (--check).
+SAMPLE_PEOPLE = [
+    (("Max Mustermann", "12345+maxm@users.noreply.github.com"),
+     {"name": "maxm", "aka": ["Max Mustermann"], "github": "maxm"}),
+    (("jan", "jan@example.com"), {"name": "jan", "aka": [], "github": ""}),
+    (("theALHU", "someone@example.com"),
+     {"name": "upchui", "aka": ["theALHU", "Alexander Huthansl"], "github": "upchui"}),
+    (("Claude Opus 5.5", "noreply@anthropic.com"), None),
+    (("dependabot[bot]", "49699333+dependabot[bot]@users.noreply.github.com"), None),
+]
 
 
 def check(data):
     errors = []
     if details_of(SAMPLE_BODY) != SAMPLE_DETAILS:
         errors.append(f"commit text split wrongly: {details_of(SAMPLE_BODY)}")
+    for (name, mail), want in SAMPLE_PEOPLE:
+        if person(name, mail) != want:
+            errors.append(f"contributor from {name!r}: {person(name, mail)}, not {want}")
+    merged = merge_people([person("Max Mustermann", "max@example.com"),
+                           person("Max Mustermann", "1+maxm@users.noreply.github.com")])
+    if merged != [{"name": "maxm", "aka": ["Max Mustermann"], "github": "maxm"}]:
+        errors.append(f"one person twice or merged wrongly: {merged}")
+    people = data.get("contributors", [])
+    if data["releases"] and not people:
+        errors.append("no contributors")
+    for p in people:
+        texts = [p["name"], p["github"], *p["aka"]]
+        if any("@" in t for t in texts) or NOT_PEOPLE.search(p["name"]):
+            errors.append(f"contributor {p}: an address, an assistant or a bot")
     if not data["releases"]:
         errors.append("no releases")
     for r in data["releases"]:
@@ -233,7 +324,8 @@ def main():
             print(f"changelog: {e}", file=sys.stderr)
         n = sum(len(r["changes"]) for r in data["releases"])
         detailed = sum(1 for r in data["releases"] for c in r["changes"] if c["details"])
-        print(f"changelog: {len(data['releases'])} versions, {n} changes ({detailed} with details)"
+        print(f"changelog: {len(data['releases'])} versions, {n} changes ({detailed} with details), "
+              f"{len(data['contributors'])} contributors"
               + (" -- FAILED" if errors else ""))
         sys.exit(1 if errors else 0)
     text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
