@@ -164,6 +164,9 @@ pub mod qobject {
         /// The project on GitHub, "owner/name" (update::REPO): the about
         /// page's links.
         #[qproperty(QString, repo)]
+        /// Contributors' pictures fetched so far: {"github name": "file:///…"}
+        /// (fetch_avatar).
+        #[qproperty(QString, avatars)]
         /// The changelog built into this version (tools/changelog.py), or
         /// the newest release's once the update check fetched it:
         /// {"repo", "releases": [{version, tag, date, build, compare,
@@ -361,6 +364,10 @@ pub mod qobject {
         /// The changes of this version were seen (or not wanted).
         #[qinvokable]
         fn dismiss_whats_new(self: Pin<&mut AppController>);
+        /// Fetch a contributor's GitHub picture (kept for a day) into
+        /// `avatars`, in the background; nothing if it fails.
+        #[qinvokable]
+        fn fetch_avatar(self: Pin<&mut AppController>, name: &QString);
         /// Remove every rule the app installed as root and the access they
         /// gave (asks for the administrator password once); the settings
         /// stay. `cleanup_busy` meanwhile, then `cleanup_message`.
@@ -544,6 +551,9 @@ pub struct AppControllerRust {
     access_message: QString,
     version: QString,
     repo: QString,
+    avatars: QString,
+    /// GitHub names whose picture is being fetched or there.
+    avatars_asked: std::collections::HashSet<String>,
 
     config: Config,
     devices: Vec<DeviceInfo>,
@@ -742,6 +752,8 @@ impl Default for AppControllerRust {
             access_message: QString::default(),
             version: QString::from(pshb_core::VERSION),
             repo: QString::from(update::REPO),
+            avatars: QString::from("{}"),
+            avatars_asked: Default::default(),
             config: Config::default(),
             devices: Vec::new(),
             slot: Arc::default(),
@@ -2551,6 +2563,36 @@ impl qobject::AppController {
             self.as_mut().rust_mut().config.changelog_seen = pshb_core::VERSION.into();
             self.as_mut().save_config();
         }
+    }
+
+    pub fn fetch_avatar(mut self: Pin<&mut Self>, name: &QString) {
+        let name = String::from(name);
+        if !update::valid_github_name(&name) || !self.as_mut().rust_mut().avatars_asked.insert(name.clone()) {
+            return;
+        }
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new().name("pshb-avatar".into()).spawn(move || {
+            let dir = config::cache_dir().join("avatars");
+            let result = update::avatar_file(&name, &dir, update::AVATAR_MAX_AGE, update::fetch_avatar);
+            let _ = qt.queue(move |obj| obj.avatar_fetched(name, result));
+        });
+    }
+
+    fn avatar_fetched(mut self: Pin<&mut Self>, name: String, result: Result<std::path::PathBuf, String>) {
+        let path = match result {
+            Ok(path) => path,
+            Err(e) => {
+                // Asked again the next time the page is shown.
+                self.as_mut().rust_mut().avatars_asked.remove(&name);
+                pshb_core::logln!("PS HID Bridge: no picture of {name} from GitHub: {e}");
+                return;
+            }
+        };
+        let mut map: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&self.avatars().to_string()).unwrap_or_default();
+        map.insert(name, update::file_url(&path).into());
+        self.as_mut()
+            .set_avatars(QString::from(&serde_json::Value::Object(map).to_string()));
     }
 
     pub fn dismiss_whats_new(mut self: Pin<&mut Self>) {

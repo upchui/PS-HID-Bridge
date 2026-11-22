@@ -262,6 +262,110 @@ pub fn latest_release() -> Result<Release, String> {
     release_from_location(location).ok_or_else(|| "No release found on GitHub.".into())
 }
 
+/// Largest picture taken from GitHub (at the size asked for, a few KiB).
+const MAX_AVATAR: u64 = 1024 * 1024;
+/// How long a contributor's picture is shown before it is fetched again.
+pub const AVATAR_MAX_AGE: Duration = Duration::from_secs(24 * 3600);
+
+/// A GitHub account name: letters, digits and hyphens (not at either end),
+/// at most 39 characters; nothing else reaches a URL or a file name.
+pub fn valid_github_name(name: &str) -> bool {
+    (1..=39).contains(&name.len())
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+}
+
+/// "png" or "jpg" for a picture in one of these formats.
+pub fn picture_kind(data: &[u8]) -> Option<&'static str> {
+    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("jpg")
+    } else {
+        None
+    }
+}
+
+/// The picture of a GitHub account, as on its profile (github.com/NAME.png,
+/// small): its bytes and "png" or "jpg".
+pub fn fetch_avatar(name: &str) -> Result<(Vec<u8>, &'static str), String> {
+    if !valid_github_name(name) {
+        return Err(format!("{name:?} is no GitHub name"));
+    }
+    let url = format!("https://github.com/{name}.png?size=96");
+    let mut resp = agent(Duration::from_secs(20), true)
+        .get(&url)
+        .call()
+        .map_err(http_error)?;
+    if resp.status() != 200 {
+        return Err(format!("GitHub answered {}", resp.status()));
+    }
+    let data = resp
+        .body_mut()
+        .with_config()
+        .limit(MAX_AVATAR)
+        .read_to_vec()
+        .map_err(http_error)?;
+    let kind = picture_kind(&data).ok_or("GitHub sent no PNG or JPEG picture")?;
+    Ok((data, kind))
+}
+
+/// The picture of a GitHub account as a file in `dir` (NAME.png or .jpg):
+/// the one there while it is younger than `max_age`, else fetched again
+/// with `fetch`; the older one if that fails (no network).
+pub fn avatar_file(
+    name: &str,
+    dir: &Path,
+    max_age: Duration,
+    fetch: impl FnOnce(&str) -> Result<(Vec<u8>, &'static str), String>,
+) -> Result<std::path::PathBuf, String> {
+    if !valid_github_name(name) {
+        return Err(format!("{name:?} is no GitHub name"));
+    }
+    let cached = ["png", "jpg"]
+        .iter()
+        .map(|kind| dir.join(format!("{name}.{kind}")))
+        .find(|p| p.is_file());
+    if let Some(p) = &cached {
+        let age = fs::metadata(p)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok());
+        if age.is_some_and(|a| a < max_age) {
+            return Ok(p.clone());
+        }
+    }
+    let (data, kind) = match fetch(name) {
+        Ok(picture) => picture,
+        Err(e) => return cached.ok_or(e),
+    };
+    let path = dir.join(format!("{name}.{kind}"));
+    let tmp = dir.join(format!(".{name}.{kind}.part"));
+    fs::create_dir_all(dir)
+        .and_then(|_| fs::write(&tmp, &data))
+        .and_then(|_| fs::rename(&tmp, &path))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if let Some(old) = cached.filter(|old| *old != path) {
+        let _ = fs::remove_file(old); // the other format of an older picture
+    }
+    Ok(path)
+}
+
+/// A local file as a URL for QML ("file:///…", percent encoded).
+pub fn file_url(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut url = String::from("file://");
+    for &b in path.as_os_str().as_bytes() {
+        if b.is_ascii_alphanumeric() || b"/-_.~".contains(&b) {
+            url.push(b as char);
+        } else {
+            url.push_str(&format!("%{b:02X}"));
+        }
+    }
+    url
+}
+
 /// Download an asset; `progress(done, total)` while it arrives (total 0 if
 /// the server does not say).
 pub fn download(asset: &Asset, progress: &mut dyn FnMut(u64, u64)) -> Result<Vec<u8>, String> {
@@ -1066,6 +1170,55 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"new");
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o755);
         assert!(!path.with_extension("update").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn github_names_and_pictures() {
+        for good in ["upchui", "a", "Max-M", "x1-2-3", &"a".repeat(39)] {
+            assert!(valid_github_name(good), "{good}");
+        }
+        for bad in ["", "-a", "a-", "a/b", "..", "a.b", "a b", "ä", &"a".repeat(40)] {
+            assert!(!valid_github_name(bad), "{bad}");
+        }
+        assert_eq!(picture_kind(b"\x89PNG\r\n\x1a\n...."), Some("png"));
+        assert_eq!(picture_kind(&[0xff, 0xd8, 0xff, 0xe0, 0]), Some("jpg"));
+        assert_eq!(picture_kind(b"<html>"), None);
+        assert_eq!(
+            file_url(Path::new("/home/a b/.cache/ps-hid-bridge/x%1.png")),
+            "file:///home/a%20b/.cache/ps-hid-bridge/x%251.png"
+        );
+    }
+
+    #[test]
+    fn avatars_are_kept_and_fetched_again_after_a_while() {
+        let dir = std::env::temp_dir().join(format!("pshb-avatars-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let png = b"\x89PNG\r\n\x1a\nfirst".to_vec();
+        let jpg = vec![0xff, 0xd8, 0xff, 1, 2];
+        let day = AVATAR_MAX_AGE;
+        let never = |_: &str| -> Result<(Vec<u8>, &'static str), String> { panic!("fetched again") };
+        let offline = |_: &str| -> Result<(Vec<u8>, &'static str), String> { Err("offline".into()) };
+
+        // Nothing there and no network: no picture.
+        assert_eq!(avatar_file("maxm", &dir, day, offline), Err("offline".into()));
+        // Fetched and kept: not fetched again while it is young.
+        let first = avatar_file("maxm", &dir, day, |n| {
+            assert_eq!(n, "maxm");
+            Ok((png.clone(), "png"))
+        })
+        .unwrap();
+        assert_eq!(first, dir.join("maxm.png"));
+        assert_eq!(fs::read(&first).unwrap(), png);
+        assert_eq!(avatar_file("maxm", &dir, day, never).unwrap(), first);
+        // Old: fetched again; without network the old one stays.
+        assert_eq!(avatar_file("maxm", &dir, Duration::ZERO, offline).unwrap(), first);
+        // A new picture in the other format replaces the old one.
+        let second = avatar_file("maxm", &dir, Duration::ZERO, |_| Ok((jpg.clone(), "jpg"))).unwrap();
+        assert_eq!(second, dir.join("maxm.jpg"));
+        assert!(!first.exists());
+        // A name that could leave the folder is refused before anything happens.
+        assert!(avatar_file("../x", &dir, day, never).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 }

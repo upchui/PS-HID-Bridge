@@ -108,6 +108,9 @@ Main {
                 { name: "maxm", aka: ["Max Mustermann"], github: "maxm" },
                 { name: "jan", aka: [], github: "" }
             ]);
+            // A GitHub picture for one of them (the app's icon instead of a
+            // photo, from the repository mounted at /work): drawn round.
+            C.avatars = JSON.stringify({ maxm: "file:///work/desktop/packaging/icons/io.github.thealhu.pshidbridge.svg" });
             C.changelogJson = JSON.stringify(log);
         }
         C.appUpdateAvailable = true;

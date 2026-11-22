@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
+import QtQuick.Shapes
 import PSHIDBridge
 
 // What the project is and where it lives, who made it, its license and
@@ -18,6 +19,17 @@ AppPage {
             return [];
         }
     }
+    // Their GitHub pictures fetched so far: {"name": "file:///…"}.
+    readonly property var avatars: {
+        try {
+            return JSON.parse(AppController.avatars);
+        } catch (e) {
+            return ({});
+        }
+    }
+    // Self-test and screenshots: nothing is fetched.
+    readonly property bool offline: Qt.application.arguments.indexOf("--self-test") >= 0
+                                    || Qt.application.arguments.indexOf("--screenshot") >= 0
     // Not a text: the same in every language.
     readonly property string copyright: "Copyright © 2026 Alexander Huthansl"
     readonly property string licenseId: "GPL-2.0-or-later"
@@ -74,14 +86,67 @@ AppPage {
         title: I18n.tr("Contributors")
         icon: "person"
 
-        // Each the same way: the GitHub name (or the name in git), below it
-        // further names.
+        // Each the same way: the GitHub picture, the GitHub name (or the
+        // name in git), below it further names.
         Repeater {
             model: page.contributors
             delegate: RowLayout {
                 required property var modelData
                 Layout.fillWidth: true
                 spacing: 12
+                Component.onCompleted: {
+                    if (modelData.github !== "" && !page.offline)
+                        AppController.fetchAvatar(modelData.github);
+                }
+                Item {
+                    implicitWidth: 40
+                    implicitHeight: 40
+                    Layout.alignment: Qt.AlignVCenter
+                    // Until the picture is there, or without one: a person.
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: width / 2
+                        color: Style.surfaceAlt
+                        border.color: Style.border
+                        visible: picture.status !== Image.Ready
+                        AppIcon {
+                            anchors.centerIn: parent
+                            name: "person"
+                            color: Style.muted
+                            implicitWidth: 22
+                            implicitHeight: 22
+                        }
+                    }
+                    Image {
+                        id: picture
+                        anchors.fill: parent
+                        source: page.avatars[modelData.github] ?? ""
+                        sourceSize: Qt.size(80, 80)
+                        fillMode: Image.PreserveAspectCrop
+                        asynchronous: true
+                        smooth: true
+                    }
+                    // Round like on GitHub: the corners in the card's colour.
+                    Shape {
+                        anchors.fill: parent
+                        visible: picture.status === Image.Ready
+                        preferredRendererType: Shape.CurveRenderer
+                        ShapePath {
+                            fillColor: Style.surface
+                            strokeColor: "transparent"
+                            fillRule: ShapePath.OddEvenFill
+                            startX: 0
+                            startY: 0
+                            PathLine { x: 40; y: 0 }
+                            PathLine { x: 40; y: 40 }
+                            PathLine { x: 0; y: 40 }
+                            PathLine { x: 0; y: 0 }
+                            PathMove { x: 40; y: 20 }
+                            PathArc { x: 0; y: 20; radiusX: 20; radiusY: 20 }
+                            PathArc { x: 40; y: 20; radiusX: 20; radiusY: 20 }
+                        }
+                    }
+                }
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 0
