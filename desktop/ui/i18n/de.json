@@ -241,6 +241,7 @@
   "Not reachable": "Nicht erreichbar",
   "Not set up": "Nicht eingerichtet",
   "Nothing (switched off)": "Nichts (ausgeschaltet)",
+  "Nothing changed in the app or on the board in this version (only the version number, builds or tests).": "In dieser Version hat sich an App und Board nichts geändert (nur Versionsnummer, Build oder Tests).",
   "Nothing changed.": "Nichts geändert.",
   "Noticed: interrupt until the main loop sees it. Network chip: waiting for the SPI bus. Reading: the datagram over SPI, while both cores already compute its keystream. Checking: tag check, decryption and applying the input.": "Bemerkt: Interrupt, bis die Hauptschleife ihn sieht. Netzwerkchip: Warten auf den SPI-Bus. Lesen: das Datagramm über SPI, während beide Kerne schon seinen Schlüsselstrom berechnen. Prüfen: Tag-Prüfung, Entschlüsselung und Anwenden der Eingabe.",
   "Now \"%1\", for the window that has the focus.": "Gerade „%1“, für das Fenster im Vordergrund.",

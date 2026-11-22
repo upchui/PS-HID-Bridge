@@ -41,10 +41,12 @@ AppPage {
     property int shown: 5
     // Every change's details open (else each opens on its own).
     property bool allDetails: false
-    // [{release, changes}] with the changes of the filter, versions without any left out.
+    // [{release, changes}] with the changes of the filter, versions without
+    // any left out; all of them when nothing is filtered (also a version that
+    // only changed its number, builds or tests, so it can be installed).
     readonly property var matching: releases
         .map(r => ({ release: r, changes: group === "all" ? r.changes : r.changes.filter(c => c.group === group) }))
-        .filter(m => m.changes.length > 0)
+        .filter(m => group === "all" || m.changes.length > 0)
 
     function dateText(iso) {
         const d = new Date(iso + "T12:00:00");
@@ -172,9 +174,10 @@ AppPage {
             property bool asking: false
 
             title: I18n.trf("Version %1", release.version)
-            subtitle: page.dateText(release.date) + " · "
-                      + (modelData.changes.length === 1 ? I18n.tr("1 change")
-                                                         : I18n.trf("%1 changes", modelData.changes.length))
+            subtitle: page.dateText(release.date)
+                      + (modelData.changes.length === 0 ? ""
+                         : " · " + (modelData.changes.length === 1 ? I18n.tr("1 change")
+                                                                   : I18n.trf("%1 changes", modelData.changes.length)))
             icon: installed ? "check" : "changelog"
             iconColor: installed ? Style.ok : Style.accent
             actions: [
@@ -309,6 +312,14 @@ AppPage {
                         onClicked: version.asking = false
                     }
                 }
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: version.modelData.changes.length === 0
+                text: I18n.tr("Nothing changed in the app or on the board in this version (only the version number, builds or tests).")
+                color: Style.muted
+                wrapMode: Text.WordWrap
             }
 
             Repeater {

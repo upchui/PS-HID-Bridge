@@ -8,7 +8,7 @@ area, a group for the page's filter (app, board, other) and its outcomes
 as items; the commit's text below the subject becomes its details,
 paragraphs and "- " points with their lines joined (the page wraps them),
 without trailers such as Co-Authored-By. Build, CI and test commits are
-left out.
+left out; a version with nothing else keeps its section, without changes.
 
 Usage: tools/changelog.py [-o FILE]   write the JSON (default: stdout)
        tools/changelog.py --check     generate and check it (make test)
@@ -111,6 +111,11 @@ def commits(rev_range, max_count=None):
     return out
 
 
+def count(rev_range):
+    """Commits in the range, also those left out of the changelog."""
+    return int(git("rev-list", "--no-merges", "--count", *rev_range).strip())
+
+
 def release_tags():
     """Release tags reachable from HEAD, oldest first: (name, commit date)."""
     names = git("tag", "--merged", "HEAD", "--list", "v*").split()
@@ -132,10 +137,15 @@ def build():
         print(f"changelog: no git history ({e}): empty changelog", file=sys.stderr)
         return {"repo": REPO, "releases": []}
 
+    # A version whose commits are all left out (build, tests, the version
+    # number) keeps its section, with no changes: the page shows it, so
+    # it can be installed and this build finds itself (1.1.0 was missing).
     releases = []
     prev = None
     for name, date in tags:
         rng = [f"{prev}..{name}"] if prev else [name]
+        if not count(rng):
+            continue  # a second tag on the same commit
         releases.append({
             "version": name[1:],
             "tag": name,
@@ -146,22 +156,21 @@ def build():
         })
         prev = name
     if prev:
-        after = commits([f"{prev}..HEAD"])
-        if after:
+        rng = [f"{prev}..HEAD"]
+        if count(rng):
             releases.append({
                 "version": version or head,
                 "tag": "",
-                "date": after[0]["date"],
+                "date": git("log", "-1", "--format=%cs", "HEAD").strip(),
                 "build": True,
                 "compare": f"{prev}...{head}",
-                "changes": after,
+                "changes": commits(rng),
             })
     else:
         newest = commits(["HEAD"], FALLBACK_COUNT)
         if newest:
             releases.append({"version": version or head, "tag": "", "date": newest[0]["date"],
                              "build": True, "compare": "", "changes": newest})
-    releases = [r for r in releases if r["changes"]]
     releases.reverse()
     return {"repo": REPO, "releases": releases}
 
