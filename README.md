@@ -17,7 +17,7 @@ So the input adds next to nothing to what you see. The app's status page shows t
 
 - **Safe, also in a shared network:** in a student hall, a shared flat or at a LAN party, any device in the network could otherwise send key presses to your PlayStation or read what you type on it (including passwords). The input travels encrypted with a key that only your PC and your board know: nobody else can control your PlayStation, read your input or replay it. What this covers and what not: [docs/security.md](docs/security.md).
 - **Fails safe:** if no valid input arrives for 250 ms, the board lets go of every key, so a dropped network never leaves your character running. `Ctrl+Alt+Shift+Esc` always gives mouse and keyboard back to the PC and lets go of everything on the PlayStation. What happens when the network, the app or the board fails: [When something goes wrong](docs/security.md#when-something-goes-wrong).
-- **Status:** version 1.0 works on real hardware (WIZnet W5500-EVB-Pico2 on a PlayStation 5, desktop app on Linux), and every part is tested automatically on each commit ([docs/development.md](docs/development.md)).
+- **Status:** version 1.1 works on real hardware (WIZnet W5500-EVB-Pico2 on a PlayStation 5, desktop app on Linux), and every part is tested automatically on each commit ([docs/development.md](docs/development.md)).
 
 ## How it works
 
