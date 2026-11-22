@@ -161,6 +161,9 @@ pub mod qobject {
         #[qproperty(bool, access_busy)]
         #[qproperty(QString, access_message)]
         #[qproperty(QString, version)]
+        /// The project on GitHub, "owner/name" (update::REPO): the about
+        /// page's links.
+        #[qproperty(QString, repo)]
         /// The changelog built into this version (tools/changelog.py), or
         /// the newest release's once the update check fetched it:
         /// {"repo", "releases": [{version, tag, date, build, compare,
@@ -540,6 +543,7 @@ pub struct AppControllerRust {
     access_busy: bool,
     access_message: QString,
     version: QString,
+    repo: QString,
 
     config: Config,
     devices: Vec<DeviceInfo>,
@@ -737,6 +741,7 @@ impl Default for AppControllerRust {
             access_busy: false,
             access_message: QString::default(),
             version: QString::from(pshb_core::VERSION),
+            repo: QString::from(update::REPO),
             config: Config::default(),
             devices: Vec::new(),
             slot: Arc::default(),

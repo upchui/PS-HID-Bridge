@@ -25,6 +25,8 @@ rm -rf "$APPDIR"
 mkdir -p "$ROOT/out" "$APPDIR/usr/share/metainfo"
 sed -e "s/@VERSION@/$PSHB_VERSION/" -e "s/@DATE@/$PSHB_DATE/" \
     "$ROOT/desktop/packaging/$APP_ID.metainfo.xml" > "$APPDIR/usr/share/metainfo/$APP_ID.metainfo.xml"
+# The license text goes with the program (GPL-2.0-or-later).
+install -D -m 644 "$ROOT/LICENSE" "$APPDIR/usr/share/licenses/ps-hid-bridge/LICENSE"
 
 # The desktop entry with the version: AppImage managers (Shelly, Gear
 # Lever, AppImageLauncher) read it from X-AppImage-Version. Same file name

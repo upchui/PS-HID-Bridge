@@ -34,7 +34,7 @@ AppPage {
         }
     }
     readonly property var releases: log.releases ?? []
-    readonly property string repo: log.repo ?? ""
+    readonly property string repo: log.repo || AppController.repo
     // Filter: "all", "app", "board" or "other".
     property string group: "all"
     // Versions shown (more on request: there are many).

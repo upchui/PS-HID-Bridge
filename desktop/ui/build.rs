@@ -28,6 +28,7 @@ fn main() {
             "qml/LeadMeter.qml",
             "qml/FirmwarePage.qml",
             "qml/ChangelogPage.qml",
+            "qml/AboutPage.qml",
             "qml/WizardPage.qml",
             // building blocks
             "qml/AppPage.qml",

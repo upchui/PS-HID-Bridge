@@ -77,7 +77,8 @@ Controls.ApplicationWindow {
         "latency": latencyPage,
         "firmware": firmwarePage,
         "changelog": changelogPage,
-        "wizard": wizardPage
+        "wizard": wizardPage,
+        "about": aboutPage
     })
     property string currentPage: ""
     property var currentItem: null
@@ -100,6 +101,7 @@ Controls.ApplicationWindow {
     Component { id: firmwarePage; FirmwarePage {} }
     Component { id: changelogPage; ChangelogPage {} }
     Component { id: wizardPage; WizardPage { onFinished: root.showPage("status") } }
+    Component { id: aboutPage; AboutPage {} }
 
     RowLayout {
         id: shell
@@ -181,6 +183,12 @@ Controls.ApplicationWindow {
 
                 Item { Layout.fillHeight: true }
 
+                NavItem {
+                    text: I18n.tr("About")
+                    iconName: "info"
+                    current: root.currentPage === "about"
+                    onClicked: root.showPage("about")
+                }
                 NavItem {
                     text: I18n.tr("Run setup again")
                     iconName: "setup"
@@ -282,7 +290,7 @@ Controls.ApplicationWindow {
                 liveWarmup.start();
                 return;
             }
-            autoPages = ["wizard"].concat(pageNames);
+            autoPages = ["wizard"].concat(pageNames, ["about"]);
             Qt.callLater(nextAutoPage);
             return;
         }

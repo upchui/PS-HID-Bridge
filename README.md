@@ -231,3 +231,11 @@ The board's side, stage by stage with measurements and clock speeds: [docs/laten
 | [docs/protocol.md](docs/protocol.md) | how the app and the board talk over UDP, step by step, and what happens when something goes wrong |
 | [docs/development.md](docs/development.md) | test status, building, continuous integration, testing without a board, screenshots, checks on real hardware, directories |
 | [protocol/SPEC.md](protocol/SPEC.md) | the packet format, byte by byte |
+
+## License
+
+Copyright (C) 2026 Alexander Huthansl ([upchui](https://github.com/upchui), theALHU).
+
+PS HID Bridge is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 2 of the License, or (at your option) any later version ([GPL-2.0-or-later](LICENSE)). It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+It is built with free software by others, each under its own license: [Qt 6](https://www.qt.io) (LGPL-3.0), [CXX-Qt](https://github.com/KDAB/cxx-qt) (MIT / Apache-2.0), the Rust libraries in [desktop/Cargo.lock](desktop/Cargo.lock) (MIT, Apache-2.0, ISC and others), the [Raspberry Pi Pico SDK](https://github.com/raspberrypi/pico-sdk) (BSD-3-Clause), [TinyUSB](https://github.com/hathach/tinyusb) (MIT), the [WIZnet ioLibrary](https://github.com/Wiznet/ioLibrary_Driver) (MIT) and [Monocypher](https://monocypher.org) (BSD-2-Clause / CC0-1.0). Some of them are Apache-2.0 only (e.g. ring, and the ARM CMSIS headers in the Pico SDK), which is why the license is "version 2 or later": together they are distributed under the GPL version 3. The app's "About" page lists them too.

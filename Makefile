@@ -240,8 +240,9 @@ fmt: image-rust dirs
 # Smoke test of the packaged app on a system without Qt: loads every page
 # offscreen (warnings are fatal) and quits. Then its desktop entry: under
 # the app's desktop file ID, with the version AppImage managers (Shelly)
-# read from it, in the menu's games.
+# read from it, in the menu's games. And the license text.
 DESKTOP_ENTRY := usr/share/applications/io.github.thealhu.pshidbridge.desktop
+APP_LICENSE := usr/share/licenses/ps-hid-bridge/LICENSE
 test-appimage: desktop image-apptest dirs
 	$(DOCKER_RUN) -e APPIMAGE_EXTRACT_AND_RUN=1 -e TMPDIR=/tmp -e LANG=C.UTF-8 $(APPTEST_IMAGE) \
 		bash -c 'set -e; timeout $(SELFTEST_TIMEOUT) $(APPIMAGE) --self-test; \
@@ -250,7 +251,12 @@ test-appimage: desktop image-apptest dirs
 				|| { echo "AppImage: $(DESKTOP_ENTRY) without X-AppImage-Version=$(PSHB_VERSION)"; exit 1; }; \
 			grep -qx "Categories=Game;" squashfs-root/$(DESKTOP_ENTRY) \
 				|| { echo "AppImage: $(DESKTOP_ENTRY) not in the category Game"; exit 1; }; \
-			echo "AppImage: desktop entry with version $(PSHB_VERSION)"'
+			echo "AppImage: desktop entry with version $(PSHB_VERSION)"; \
+			/work/$(APPIMAGE) --appimage-extract $(APP_LICENSE) >/dev/null; \
+			[ -f squashfs-root/$(APP_LICENSE) ] \
+				&& [ "$$(sha256sum < squashfs-root/$(APP_LICENSE))" = "$$(sha256sum < /work/LICENSE)" ] \
+				|| { echo "AppImage: $(APP_LICENSE) missing or not LICENSE"; exit 1; }; \
+			echo "AppImage: license text included"'
 
 # Screenshots of every page at several window widths, light and dark, with
 # the demo values of tools/ui_demo.qml (every pill, warning and banner at

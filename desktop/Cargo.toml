@@ -12,6 +12,7 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.99"
 publish = false
+license = "GPL-2.0-or-later"
 
 [profile.release]
 lto = "thin"

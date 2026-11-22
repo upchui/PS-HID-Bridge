@@ -2,6 +2,7 @@
 <component type="desktop-application">
   <id>io.github.thealhu.pshidbridge</id>
   <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-2.0-or-later</project_license>
   <name>PS HID Bridge</name>
   <summary>Use the mouse and keyboard of this computer on the PlayStation</summary>
   <description>
@@ -15,6 +16,11 @@
       <li>Status view with latency measurement to the board</li>
     </ul>
   </description>
+  <developer id="io.github.upchui">
+    <name>Alexander Huthansl</name>
+  </developer>
+  <url type="homepage">https://github.com/upchui/PS-HID-Bridge</url>
+  <url type="bugtracker">https://github.com/upchui/PS-HID-Bridge/issues</url>
   <launchable type="desktop-id">io.github.thealhu.pshidbridge.desktop</launchable>
   <categories>
     <category>Game</category>
