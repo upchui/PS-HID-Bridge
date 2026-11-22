@@ -283,7 +283,7 @@ pub struct Config {
     pub iso_keyboard: bool,
     /// The first-run wizard has been completed (GUI).
     pub setup_done: bool,
-    /// Look for new releases on GitHub (GUI: at start and every 6 hours).
+    /// Look for new releases on GitHub (GUI: at start and every 5 minutes).
     pub update_check: bool,
     /// Look of the app: "system" (follow the desktop), "light" or "dark".
     pub appearance: String,

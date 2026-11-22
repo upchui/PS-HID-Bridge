@@ -398,7 +398,7 @@ pub mod qobject {
         /// Look of the app: "system", "light" or "dark".
         #[qinvokable]
         fn choose_appearance(self: Pin<&mut AppController>, value: &QString);
-        /// Automatic check at start and every six hours.
+        /// Automatic check at start and every five minutes.
         #[qinvokable]
         fn enable_update_check(self: Pin<&mut AppController>, on: bool);
         /// Download the newest AppImage and replace this one (see restart_app).
@@ -2662,7 +2662,7 @@ impl qobject::AppController {
         }
     }
 
-    /// Timer tick (start and every six hours).
+    /// Timer tick (start and every five minutes).
     fn periodic_update_check(self: Pin<&mut Self>) {
         if self.config_ref().update_check {
             self.start_update_check(false);
@@ -3255,7 +3255,7 @@ impl cxx_qt::Initialize for qobject::AppController {
             self.as_mut().set_can_update_app(appimage_path().is_some());
             self.as_mut().check_installation();
             self.as_mut().check_whats_new();
-            // Look for updates shortly after the start, then every six hours.
+            // Look for updates shortly after the start, then every five minutes.
             let qt = self.qt_thread();
             let _ = thread::Builder::new()
                 .name("pshb-update-timer".into())

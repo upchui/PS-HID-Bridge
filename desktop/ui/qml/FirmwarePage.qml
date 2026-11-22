@@ -168,8 +168,8 @@ AppPage {
             Controls.Label {
                 Layout.fillWidth: true
                 text: AppController.latestVersion !== ""
-                      ? I18n.trf("Look for updates at start and every 6 hours · newest %1", AppController.latestVersion)
-                      : I18n.tr("Look for updates at start and every 6 hours")
+                      ? I18n.trf("Look for updates at start and every 5 minutes · newest %1", AppController.latestVersion)
+                      : I18n.tr("Look for updates at start and every 5 minutes")
                 color: Style.muted
                 wrapMode: Text.WordWrap
             }

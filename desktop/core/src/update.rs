@@ -47,7 +47,7 @@ pub const CHANGELOG_ASSET: &str = "changelog.json";
 const SUMS_ASSET: &str = "SHA256SUMS";
 
 /// How long to wait between automatic checks.
-pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 3600);
+pub const CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 const OTA_KEY_LABEL: &[u8] = b"pshb-ota-key-v1";
 const OTA_MAC_LABEL: &[u8] = b"pshb-ota-v1";
