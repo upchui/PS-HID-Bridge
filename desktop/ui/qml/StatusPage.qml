@@ -130,22 +130,26 @@ AppPage {
               ? I18n.trf("Version %1 is available for app and board.", AppController.latestVersion)
               : AppController.appUpdateAvailable ? I18n.trf("Version %1 is available for the app.", AppController.latestVersion)
               : I18n.trf("Version %1 is available for the board.", AppController.latestVersion)
+        // One installation at a time: app, board over the network, board over
+        // USB; the app restarts by itself after its update ("Restart now"
+        // only when that failed).
         actions: [
             AppButton {
                 text: I18n.tr("Update app")
                 visible: AppController.appUpdateAvailable && AppController.canUpdateApp
-                enabled: !AppController.updateBusy
+                enabled: !AppController.updateBusy && !AppController.usbBusy
                 onClicked: AppController.updateApp()
             },
             AppButton {
                 text: I18n.tr("Restart now")
                 visible: AppController.appUpdated
+                enabled: !AppController.updateBusy && !AppController.usbBusy
                 onClicked: AppController.restartApp()
             },
             AppButton {
                 text: I18n.tr("Update board")
                 visible: AppController.boardUpdateAvailable
-                enabled: !AppController.updateBusy && !AppController.active
+                enabled: !AppController.updateBusy && !AppController.usbBusy && !AppController.active
                 onClicked: AppController.updateBoard()
             }
         ]

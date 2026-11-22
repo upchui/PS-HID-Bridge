@@ -99,7 +99,9 @@ AppPage {
                     : I18n.trf("installed %1", AppController.version)
             showPill: AppController.latestVersion !== ""
             pillLevel: AppController.appUpdateAvailable ? "accent" : "ok"
-            pillText: AppController.appUpdated ? I18n.tr("restart to use it")
+            // After an update the app restarts by itself; "restart to use it"
+            // only when that failed.
+            pillText: AppController.appUpdated ? (AppController.updateBusy ? I18n.tr("restarts …") : I18n.tr("restart to use it"))
                       : AppController.appUpdateAvailable ? I18n.trf("%1 available", AppController.latestVersion)
                       : I18n.tr("up to date")
             AppButton {
@@ -107,7 +109,9 @@ AppPage {
                 highlighted: true
                 // Not an AppImage: nothing to update here (the line above says why).
                 visible: (AppController.appUpdateAvailable && AppController.canUpdateApp) || AppController.appUpdated
-                enabled: !AppController.updateBusy
+                // One installation at a time: not while the board's firmware
+                // is installed (over the network or USB).
+                enabled: !AppController.updateBusy && !AppController.usbBusy
                 onClicked: AppController.appUpdated ? AppController.restartApp() : AppController.updateApp()
             }
         }
@@ -131,7 +135,7 @@ AppPage {
                     anchors.fill: parent
                     text: I18n.tr("Update")
                     highlighted: true
-                    enabled: !AppController.updateBusy && !AppController.active
+                    enabled: !AppController.updateBusy && !AppController.usbBusy && !AppController.active
                     onClicked: AppController.updateBoard()
                 }
                 HoverHandler {

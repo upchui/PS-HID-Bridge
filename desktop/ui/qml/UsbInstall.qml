@@ -129,6 +129,7 @@ ColumnLayout {
             actions: [
                 AppButton {
                     text: I18n.tr("Erase")
+                    enabled: !AppController.updateBusy
                     onClicked: {
                         root.confirmErase = false;
                         AppController.usbFlash("erase", ""); // never an own file
@@ -148,7 +149,9 @@ ColumnLayout {
                 highlighted: true
                 icon.name: "usb"
                 icon.color: enabled ? Style.accent : Style.disabled
-                enabled: !AppController.usbBusy
+                // One installation at a time: not while the app or the
+                // board's firmware is updated over the network.
+                enabled: !AppController.usbBusy && !AppController.updateBusy
                 onClicked: {
                     if (imageBox.currentValue === "erase")
                         root.confirmErase = true;
@@ -167,6 +170,13 @@ ColumnLayout {
                 implicitWidth: 24
                 implicitHeight: 24
             }
+        }
+        Controls.Label {
+            Layout.fillWidth: true
+            visible: AppController.updateBusy && !AppController.usbBusy
+            text: I18n.tr("An update over the network is running: install over USB when it is done.")
+            color: Style.stateColor("warn")
+            wrapMode: Text.WordWrap
         }
         Controls.Label {
             Layout.fillWidth: true

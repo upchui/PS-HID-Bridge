@@ -401,17 +401,20 @@ pub mod qobject {
         /// Automatic check at start and every five minutes.
         #[qinvokable]
         fn enable_update_check(self: Pin<&mut AppController>, on: bool);
-        /// Download the newest AppImage and replace this one (see restart_app).
+        /// Download the newest AppImage, replace this one and restart into
+        /// it by itself. Only one installation at a time (app, board, USB).
         #[qinvokable]
         fn update_app(self: Pin<&mut AppController>);
-        /// Start the newly installed version and quit this one.
+        /// Start the newly installed version and quit this one (only needed
+        /// when the restart after an update failed; not while an
+        /// installation runs).
         #[qinvokable]
         fn restart_app(self: Pin<&mut AppController>);
         /// Install the newest firmware on the board (the bridge must be off).
         #[qinvokable]
         fn update_board(self: Pin<&mut AppController>);
         /// Install the app of release `tag` ("v1.0.89"), also an older one
-        /// (from update::OLDEST_APP_INSTALL); then restart_app.
+        /// (from update::OLDEST_APP_INSTALL); then the app restarts.
         #[qinvokable]
         fn install_app_version(self: Pin<&mut AppController>, tag: &QString);
         /// Install the firmware of release `tag` on the board, also an
@@ -2517,6 +2520,9 @@ impl qobject::AppController {
     }
 
     pub fn start_installed(self: Pin<&mut Self>) {
+        if self.installing() {
+            return;
+        }
         let Some(path) = self.rust().installed.as_ref().map(|i| i.path.clone()) else {
             return;
         };
@@ -2770,6 +2776,9 @@ impl qobject::AppController {
 
     pub fn install_app_version(mut self: Pin<&mut Self>, tag: &QString) {
         let tag = String::from(tag);
+        if self.installing() {
+            return;
+        }
         let Some(release) = update::release_for_tag(&tag) else {
             return;
         };
@@ -2797,7 +2806,7 @@ impl qobject::AppController {
 
     /// Download the app of `release` and replace this AppImage with it.
     fn install_app(mut self: Pin<&mut Self>, release: Release) {
-        if *self.update_busy() {
+        if self.installing() {
             return;
         }
         let Some(path) = appimage_path() else {
@@ -2837,32 +2846,56 @@ impl qobject::AppController {
     }
 
     fn app_update_done(mut self: Pin<&mut Self>, result: Result<Version, String>) {
-        self.as_mut().set_update_busy(false);
-        match result {
-            Ok(v) => {
-                self.as_mut().set_app_updated(true);
-                self.as_mut().set_app_update_available(false);
-                let older = Version::of_this_program().is_some_and(|mine| v < mine);
-                let text = if older {
-                    trf(
-                        "Version %1 is installed. Restart the app to use it. It offers the newest version again when it looks for updates (switch that off on \"Firmware & updates\").",
-                        &[&v.to_string()],
-                    )
-                } else {
-                    trf(
-                        "Version %1 is installed. Restart the app to use it.",
-                        &[&v.to_string()],
-                    )
-                };
-                self.as_mut().update_message("ok", &text);
+        let v = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.as_mut().set_update_busy(false);
+                self.as_mut()
+                    .update_message("warn", &trf("App update failed: %1", &[&e]));
+                return;
             }
-            Err(e) => self
+        };
+        // Restarts by itself, nothing to ask. Until then the installation
+        // goes on (update_busy): no board update or USB installation starts
+        // that the restart would cut off.
+        self.as_mut().set_app_updated(true);
+        self.as_mut().set_app_update_available(false);
+        self.as_mut().update_message(
+            "ok",
+            &trf("Version %1 is installed. The app restarts …", &[&v.to_string()]),
+        );
+        let qt = self.qt_thread();
+        let _ = thread::Builder::new().name("pshb-restart".into()).spawn(move || {
+            // The message shows for a moment.
+            thread::sleep(RESTART_AFTER_UPDATE);
+            let _ = qt.queue(|obj| obj.restart_after_update());
+        });
+    }
+
+    /// Start the version just installed and quit this one.
+    fn restart_after_update(mut self: Pin<&mut Self>) {
+        match std::env::var_os("APPIMAGE") {
+            Some(path) => self.as_mut().restart_from(std::path::PathBuf::from(path)),
+            None => self
                 .as_mut()
-                .update_message("warn", &trf("App update failed: %1", &[&e])),
+                .update_message("warn", &tr("Restart the app to use the new version.")),
         }
+        // Still here: it did not start ("Restart failed"); "Restart now"
+        // tries again.
+        self.as_mut().set_update_busy(false);
+    }
+
+    /// An installation runs: the app (until it restarts), the board's
+    /// firmware over the network (until the board is back) or over USB.
+    /// One at a time, and no restart meanwhile.
+    fn installing(&self) -> bool {
+        *self.update_busy() || *self.usb_busy()
     }
 
     pub fn restart_app(self: Pin<&mut Self>) {
+        if self.installing() {
+            return;
+        }
         let Some(path) = std::env::var_os("APPIMAGE") else {
             return;
         };
@@ -3022,7 +3055,7 @@ impl qobject::AppController {
 
     /// Download the firmware of `release` and install it on the board.
     fn install_board(mut self: Pin<&mut Self>, release: Release) {
-        if *self.update_busy() {
+        if self.installing() {
             return;
         }
         if *self.active() {
@@ -3124,7 +3157,7 @@ impl qobject::AppController {
     }
 
     pub fn usb_flash(mut self: Pin<&mut Self>, image: &QString, file: &QString) {
-        if *self.usb_busy() {
+        if self.installing() {
             return;
         }
         let Some(image) = Image::from_id(&String::from(image)) else {
@@ -3276,6 +3309,9 @@ const LATENCY_VIEW_PING: Duration = Duration::from_millis(200);
 const BOARD_HTTP_PORT: u16 = 80;
 /// How long the board may take to come back after a firmware update.
 const BOARD_UPDATE_WAIT: Duration = Duration::from_secs(60);
+/// After an app update: "installed, restarts …" shows this long, then the
+/// app restarts by itself.
+const RESTART_AFTER_UPDATE: Duration = Duration::from_millis(1500);
 
 /// Local path of a file chosen in QML ("file:///home/me/x.uf2", percent
 /// encoded), or None for "".

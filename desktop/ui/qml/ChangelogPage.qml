@@ -68,7 +68,12 @@ AppPage {
         return 0;
     }
 
-    // What an installation is doing, or how it ended.
+    // An installation runs: the app (until it restarts), the board's firmware
+    // over the network (until the board is back) or over USB. One at a time.
+    readonly property bool installing: AppController.updateBusy || AppController.usbBusy
+
+    // What an installation is doing, or how it ended. The app restarts by
+    // itself after its update: "Restart now" only when that failed.
     Banner {
         kind: AppController.updateLevel === "warn" ? "warn" : AppController.updateLevel === "ok" ? "ok" : "info"
         visible: AppController.updateStatus !== ""
@@ -77,6 +82,7 @@ AppPage {
             text: I18n.tr("Restart now")
             highlighted: true
             visible: AppController.appUpdated
+            enabled: !page.installing
             onClicked: AppController.restartApp()
         }
     }
@@ -88,7 +94,7 @@ AppPage {
             text: I18n.tr("Update app")
             highlighted: true
             visible: AppController.canUpdateApp
-            enabled: !AppController.updateBusy
+            enabled: !page.installing
             onClicked: AppController.updateApp()
         }
     }
@@ -242,14 +248,17 @@ AppPage {
                         spacing: 6
                         Controls.Label {
                             Layout.fillWidth: true
-                            text: I18n.tr("Desktop app: replaces this one, your settings stay (a copy of them is kept). Restart the app afterwards.")
+                            text: I18n.tr("Desktop app: replaces this one, then the app restarts by itself; your settings stay (a copy of them is kept).")
+                                  + (page.compareVersions(version.release.version, AppController.version) < 0
+                                     ? " " + I18n.tr("An older version offers the newest one again when it looks for updates (switch that off on \"Firmware & updates\").")
+                                     : "")
                             color: Style.muted
                             wrapMode: Text.WordWrap
                         }
                         AppButton {
                             text: I18n.trf("Install app %1", version.release.version)
                             highlighted: true
-                            enabled: !AppController.updateBusy
+                            enabled: !page.installing
                             onClicked: {
                                 version.asking = false;
                                 AppController.installAppVersion(version.release.tag);
@@ -271,12 +280,19 @@ AppPage {
                         AppButton {
                             text: I18n.trf("Install firmware %1 on the board", version.release.version)
                             highlighted: !version.appOk
-                            enabled: !AppController.updateBusy && !AppController.active
+                            enabled: !page.installing && !AppController.active
                             onClicked: {
                                 version.asking = false;
                                 AppController.installBoardVersion(version.release.tag);
                             }
                         }
+                    }
+                    Controls.Label {
+                        Layout.fillWidth: true
+                        visible: page.installing
+                        text: I18n.tr("Another installation is running: wait until it is done.")
+                        color: Style.stateColor("warn")
+                        wrapMode: Text.WordWrap
                     }
                     Controls.Label {
                         Layout.fillWidth: true
