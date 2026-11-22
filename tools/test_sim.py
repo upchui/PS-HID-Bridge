@@ -466,6 +466,7 @@ class MoveTests(unittest.TestCase):
         if not os.environ.get("PSHB_CLI"):
             self.skipTest("no --cli given")
         self.procs = []
+        self.readers = []
         self.files = []
 
     def tearDown(self):
@@ -473,6 +474,10 @@ class MoveTests(unittest.TestCase):
             if p.poll() is None:
                 p.kill()
             p.wait(timeout=5)
+        for r in self.readers:
+            r.thread.join(timeout=5)  # ends at EOF
+        for p in self.procs:
+            p.stdout.close()
         for sim in getattr(self, "sims", []):
             sim.close()
         for f in self.files:
@@ -497,7 +502,9 @@ class MoveTests(unittest.TestCase):
                               "--config", f.name + ".none.toml", *extra],
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
         self.procs.append(p)
-        return Timed(p.stdout)
+        timed = Timed(p.stdout)
+        self.readers.append(timed)
+        return timed
 
     def held(self, line: str) -> bool:
         return line.startswith("KBD") and "keys=04" in line

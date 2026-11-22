@@ -1442,20 +1442,24 @@ fn update_firmware(
         }
     };
     println!("Installing on the board ({} KiB) …", image.len() / 1024);
+    // Taken before the upload: the board restarts as soon as it has sent
+    // its answer, which can be before this program sees that answer. A
+    // time taken afterwards would lie after the restart, and "started
+    // since" would never come true.
+    let sent = Instant::now();
     update::board_ota(&addr.ip().to_string(), http_port, &key, &image)?;
-    let uploaded = Instant::now();
     println!("Written and checked; the board restarts into the new firmware …");
-    let deadline = uploaded + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_secs(60);
     thread::sleep(Duration::from_secs(2));
     loop {
         let late = Instant::now() > deadline;
         match board_running(ctx, board, http_port) {
             Ok((v, uptime_ms)) => {
                 // A file has no version to wait for: the board must have
-                // started since the upload (or, without an uptime, run
-                // another version than before).
+                // started since the upload began (or, without an uptime,
+                // run another version than before).
                 let restarted = match uptime_ms {
-                    Some(ms) => Duration::from_millis(ms) < uploaded.elapsed(),
+                    Some(ms) => Duration::from_millis(ms) < sent.elapsed(),
                     None => before != Some(v),
                 };
                 if expected.map_or(restarted, |e| v == e) {
