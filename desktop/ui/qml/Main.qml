@@ -69,6 +69,19 @@ Controls.ApplicationWindow {
         { name: "changelog", text: I18n.tr("Changelog"), icon: "changelog" }
     ]
     readonly property var pageNames: pages.map(p => p.name)
+    // Markers in the sidebar: where something waits for you.
+    readonly property var markers: ({
+        "status": Warnings.count > 0 ? {
+            badge: String(Warnings.count),
+            level: Warnings.level,
+            note: Warnings.count === 1 ? I18n.tr("1 notice") : I18n.trf("%1 notices", Warnings.count)
+        } : {},
+        "firmware": AppController.appUpdateAvailable || AppController.boardUpdateAvailable ? {
+            dot: true,
+            level: "accent",
+            note: I18n.tr("Update available")
+        } : {}
+    })
     readonly property var pageComponents: ({
         "status": statusPage,
         "input": inputPage,
@@ -121,6 +134,7 @@ Controls.ApplicationWindow {
                 spacing: 4
 
                 RowLayout {
+                    Layout.fillWidth: true
                     Layout.margins: 6
                     Layout.bottomMargin: 14
                     spacing: 10
@@ -145,9 +159,19 @@ Controls.ApplicationWindow {
                             color: Style.text
                             font.weight: Font.DemiBold
                         }
+                        // Up to three lines (the longer states, e.g. "Please
+                        // release all keys …"); all of it in a tooltip if
+                        // that is still too short.
                         RowLayout {
+                            Layout.fillWidth: true
                             spacing: 5
+                            FontMetrics {
+                                id: statusMetrics
+                                font: statusLine.font
+                            }
                             Rectangle {
+                                Layout.alignment: Qt.AlignTop
+                                Layout.topMargin: Math.max(0, Math.round((statusMetrics.height - height) / 2))
                                 implicitWidth: 8
                                 implicitHeight: 8
                                 radius: 4
@@ -156,15 +180,24 @@ Controls.ApplicationWindow {
                                      : AppController.connected ? Style.accent : Style.muted
                             }
                             Controls.Label {
+                                id: statusLine
                                 // The same words as the Status page (also "Paused",
                                 // "Please release all keys …", "Connecting …").
                                 Layout.fillWidth: true
+                                wrapMode: Text.Wrap
+                                maximumLineCount: 3
                                 text: AppController.statusText !== "" ? AppController.statusText
                                       : AppController.active ? I18n.tr("Bridge on") : AppController.connected ? I18n.tr("Ready")
                                       : I18n.tr("Not connected")
                                 elide: Text.ElideRight
                                 color: Style.muted
                                 font.pointSize: Style.fontSize * 0.9
+                                HoverHandler {
+                                    id: statusHover
+                                }
+                                Controls.ToolTip.visible: statusHover.hovered && statusLine.truncated
+                                Controls.ToolTip.text: statusLine.text
+                                Controls.ToolTip.delay: 500
                             }
                         }
                     }
@@ -174,9 +207,14 @@ Controls.ApplicationWindow {
                     model: root.pages
                     delegate: NavItem {
                         required property var modelData
+                        readonly property var marker: root.markers[modelData.name] ?? {}
                         text: modelData.text
                         iconName: modelData.icon
                         current: root.currentPage === modelData.name
+                        badge: marker.badge ?? ""
+                        dot: marker.dot ?? false
+                        level: marker.level ?? "accent"
+                        note: marker.note ?? ""
                         onClicked: root.showPage(modelData.name)
                     }
                 }
