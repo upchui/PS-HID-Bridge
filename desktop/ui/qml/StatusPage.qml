@@ -5,6 +5,8 @@ import PSHIDBridge
 
 AppPage {
     id: page
+    // All of them in full: the place to see what needs doing.
+    ownWarnings: ["access", "board", "counter", "adapter"]
     // Show another page (Main.qml): "What's new" opens the changelog.
     signal openPage(string name)
     // Every latency in µs (most are well below a millisecond), from 1 ms on in ms.

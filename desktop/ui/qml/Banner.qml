@@ -11,6 +11,8 @@ Rectangle {
     property string kind: "info"
     property string text
     property alias actions: actionRow.data
+    /// The text on one line, cut off at the end if it is longer.
+    property bool oneLine: false
     readonly property string level: kind === "error" ? "bad" : kind === "info" ? "accent" : kind
 
     Layout.fillWidth: true
@@ -37,7 +39,8 @@ Rectangle {
             Layout.fillWidth: true
             text: banner.text
             color: Style.text
-            wrapMode: Text.WordWrap
+            wrapMode: banner.oneLine ? Text.NoWrap : Text.WordWrap
+            elide: banner.oneLine ? Text.ElideRight : Text.ElideNone
         }
         RowLayout {
             id: actionRow

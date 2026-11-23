@@ -10,6 +10,7 @@ AppPage {
     id: page
     title: I18n.tr("Latency")
     subtitle: I18n.tr("Measured by the board itself, from the network chip's interrupt to the report the PlayStation fetches; at the end, what this PC adds.")
+    ownWarnings: ["adapter"]
 
     readonly property var info: {
         try {

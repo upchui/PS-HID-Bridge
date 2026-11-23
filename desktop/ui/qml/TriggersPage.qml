@@ -6,6 +6,8 @@ import PSHIDBridge
 AppPage {
     title: I18n.tr("Triggers")
     subtitle: I18n.tr("How you switch between the desktop and the PlayStation. Changes are saved right away (a trigger once it has keys).")
+    // Triggers work on every keyboard: the ones the app cannot read yet matter here.
+    ownWarnings: ["access"]
 
     Component.onCompleted: AppController.refreshDevices()
 

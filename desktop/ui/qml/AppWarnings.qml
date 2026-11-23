@@ -2,30 +2,35 @@ import QtQuick
 import QtQuick.Layouts
 import PSHIDBridge
 
-// Warnings that concern the whole app and need something done: on top of
-// every page (AppPage), each once. Messages about something done on one
-// page stay on that page.
+// Warnings that concern the whole app and need something done (Warnings),
+// on top of every page (AppPage), each once. A page shows the ones that
+// belong to it (`own`) in full, errors always; the others are summed up in
+// one line that opens them. Messages about something done on one page stay
+// on that page.
 ColumnLayout {
     id: warnings
 
-    // Selected devices the app may not read: from the device list (also
-    // while the bridge service does not run) and from the service (a device
-    // plugged in since the list was made).
-    readonly property int selectedBlocked: Math.max(
-        AppController.devicesBlocked,
-        JSON.parse(AppController.devicesJson).filter(g => g.selected && !g.accessible).length)
-    readonly property int keyboardsBlocked: AppController.otherKeyboardsBlocked
-    readonly property bool access: selectedBlocked > 0 || keyboardsBlocked > 0 || AppController.accessMessage !== ""
-    readonly property bool adapter: AppController.adapterMode === "delaying"
+    /// Keys (Warnings.list) shown in full on this page.
+    property var own: []
+    /// The summed-up ones opened.
+    property bool expanded: false
+
+    readonly property int selectedBlocked: Warnings.selectedBlocked
+    readonly property int keyboardsBlocked: Warnings.keyboardsBlocked
+    // The ones in the line.
+    readonly property var folded: Warnings.list.filter(w => w.key !== "error" && own.indexOf(w.key) < 0)
     // Something to show (empty, the column takes no room on the page).
-    readonly property bool any: access || adapter || AppController.lastError !== ""
-                                || AppController.boardWarning !== "" || AppController.counterError !== ""
+    readonly property bool any: Warnings.count > 0
+
+    function shows(key) {
+        return Warnings.active(key) && (key === "error" || own.indexOf(key) >= 0 || expanded);
+    }
 
     spacing: Style.gap
 
     Banner {
         kind: "error"
-        visible: AppController.lastError !== ""
+        visible: warnings.shows("error")
         text: AppController.lastError
         actions: AppButton {
             text: I18n.tr("Dismiss")
@@ -34,11 +39,25 @@ ColumnLayout {
         }
     }
 
+    Banner {
+        kind: "warn"
+        visible: warnings.folded.length > 0
+        oneLine: true
+        text: warnings.folded.length === 1
+              ? I18n.trf("Notice: %1", warnings.folded[0].name)
+              : I18n.trf("%1 notices: %2", warnings.folded.length, warnings.folded.map(w => w.name).join(" · "))
+        actions: AppButton {
+            text: warnings.expanded ? I18n.tr("Hide") : I18n.tr("Show")
+            flat: true
+            onClicked: warnings.expanded = !warnings.expanded
+        }
+    }
+
     // Device access: selected devices (their input) and other keyboards
     // (triggers and the emergency stop work there too), one setup for both.
     Banner {
         kind: "warn"
-        visible: warnings.selectedBlocked > 0 || warnings.keyboardsBlocked > 0
+        visible: warnings.shows("access") && (warnings.selectedBlocked > 0 || warnings.keyboardsBlocked > 0)
         text: warnings.selectedBlocked > 0 && warnings.keyboardsBlocked > 0
               ? I18n.trf("%1 selected devices and %2 other keyboards (for triggers and the emergency stop) cannot be read yet. The app sets up access once (administrator password).",
                          warnings.selectedBlocked, warnings.keyboardsBlocked)
@@ -61,13 +80,13 @@ ColumnLayout {
     }
     Banner {
         kind: "warn"
-        visible: AppController.accessMessage !== ""
+        visible: warnings.shows("access") && AppController.accessMessage !== ""
         text: AppController.accessMessage
     }
 
     Banner {
         kind: "warn"
-        visible: AppController.boardWarning !== ""
+        visible: warnings.shows("board")
         text: AppController.boardWarning
         actions: AppButton {
             text: I18n.tr("Dismiss")
@@ -77,14 +96,14 @@ ColumnLayout {
     }
     Banner {
         kind: "warn"
-        visible: AppController.counterError !== ""
+        visible: warnings.shows("counter")
         text: I18n.trf("The packet counter cannot be saved (%1). Input still works; "
                        + "free up disk space or fix the folder's permissions, the app keeps trying. Until then, a restart "
                        + "with the computer's clock set back could reuse values that protect your input.", AppController.counterError)
     }
     Banner {
         kind: "warn"
-        visible: warnings.adapter
+        visible: warnings.shows("adapter")
         text: I18n.trf("The network adapter %1 holds every packet back up to about %2 before sending it, to bundle packets (USB adapter, cdc_ncm). "
                        + "This comes on top of “Input → network” and shows in the round trip. "
                        + "Set up once (administrator password); after that the adapter sends at once while the app runs and bundles again when it is closed, without a password.",

@@ -15,6 +15,7 @@ fn main() {
         .qml_file(QmlFile::from("qml/Icons.qml").singleton(true))
         // The texts in the chosen language (I18n.tr).
         .qml_file(QmlFile::from("qml/I18n.qml").singleton(true))
+        .qml_file(QmlFile::from("qml/Warnings.qml").singleton(true))
         .qml_files([
             "qml/Main.qml",
             // pages

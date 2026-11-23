@@ -8,6 +8,7 @@ AppPage {
     id: page
     title: I18n.tr("Board")
     subtitle: I18n.tr("The small board at the PlayStation's USB port, reached over the network.")
+    ownWarnings: ["board"]
 
     property string error: ""
     property bool saved: false

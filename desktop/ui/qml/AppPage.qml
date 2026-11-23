@@ -17,6 +17,9 @@ Item {
     property alias footer: footerRow.data
     // The app-wide warnings on top (the wizard shows its own per step).
     property bool warnings: true
+    // Those of them that belong to this page (keys of Warnings.list), in
+    // full; the others are summed up in one line.
+    property var ownWarnings: []
 
     ColumnLayout {
         anchors.fill: parent
@@ -91,6 +94,7 @@ Item {
                         id: appWarnings
                         Layout.fillWidth: true
                         visible: page.warnings && appWarnings.any
+                        own: page.ownWarnings
                     }
                 }
             }

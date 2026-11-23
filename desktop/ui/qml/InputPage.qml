@@ -9,6 +9,7 @@ AppPage {
     id: page
     title: I18n.tr("Input")
     subtitle: I18n.tr("Selected devices go to the PlayStation while the bridge is on; all others stay with the desktop.")
+    ownWarnings: ["access"]
 
     Component.onCompleted: AppController.refreshDevices()
     // A slider let go just before leaving the page: still saved.
