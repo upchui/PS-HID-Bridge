@@ -31,7 +31,6 @@ AppPage {
     readonly property bool offline: Qt.application.arguments.indexOf("--self-test") >= 0
                                     || Qt.application.arguments.indexOf("--screenshot") >= 0
     // Not a text: the same in every language.
-    readonly property string copyright: "Copyright © 2026 Alexander Huthansl"
     readonly property string licenseId: "GPL-2.0-or-later"
 
     // A link as a button that opens it in the browser.
@@ -193,20 +192,10 @@ AppPage {
             color: Style.text
             wrapMode: Text.WordWrap
         }
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 12
-            Controls.Label {
-                Layout.fillWidth: true
-                text: page.copyright
-                color: Style.muted
-                wrapMode: Text.WordWrap
-            }
-            LinkButton {
-                text: I18n.tr("License text")
-                flat: true
-                url: page.repoUrl + "/blob/main/LICENSE"
-            }
+        LinkButton {
+            text: I18n.tr("License text")
+            flat: true
+            url: page.repoUrl + "/blob/main/LICENSE"
         }
     }
 
