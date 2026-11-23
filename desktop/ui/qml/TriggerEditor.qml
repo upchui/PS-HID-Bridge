@@ -121,40 +121,19 @@ ColumnLayout {
                 anchors.margins: 12
                 spacing: 10
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    Segmented {
-                        value: row.kind
-                        model: editor.kinds
-                        onActivated: v => editor.setField(row.index, "kind", v)
-                    }
-                    Item { Layout.fillWidth: true }
-                    AppButton {
-                        flat: true
-                        icon.name: "trash"
-                        icon.color: Style.muted
-                        Accessible.name: I18n.tr("Remove trigger")
-                        Controls.ToolTip.visible: hovered
-                        Controls.ToolTip.text: I18n.tr("Remove")
-                        onClicked: {
-                            // Keep a running recording on its row: stop it if
-                            // that row goes, follow it if an earlier one goes.
-                            if (editor.recordingIndex === row.index) {
-                                AppController.recordTrigger(false);
-                                editor.recordingIndex = -1;
-                            } else if (editor.recordingIndex > row.index) {
-                                editor.recordingIndex -= 1;
-                            }
-                            triggerModel.remove(row.index);
-                            saveSoon.restart();
-                        }
-                    }
+                Segmented {
+                    value: row.kind
+                    model: editor.kinds
+                    onActivated: v => editor.setField(row.index, "kind", v)
                 }
 
+                // The keys, recording and removing: the field gives way in a
+                // narrow window (next to the choice above, the remove button
+                // pushed the row out of its frame).
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
-                    Controls.TextField {
+                    AppTextField {
                         Layout.fillWidth: true
                         visible: !row.recording
                         text: row.keys
@@ -185,15 +164,39 @@ ColumnLayout {
                             }
                         }
                     }
+                    AppButton {
+                        flat: true
+                        icon.name: "trash"
+                        icon.color: Style.muted
+                        Accessible.name: I18n.tr("Remove trigger")
+                        Controls.ToolTip.visible: hovered
+                        Controls.ToolTip.text: I18n.tr("Remove")
+                        onClicked: {
+                            // Keep a running recording on its row: stop it if
+                            // that row goes, follow it if an earlier one goes.
+                            if (editor.recordingIndex === row.index) {
+                                AppController.recordTrigger(false);
+                                editor.recordingIndex = -1;
+                            } else if (editor.recordingIndex > row.index) {
+                                editor.recordingIndex -= 1;
+                            }
+                            triggerModel.remove(row.index);
+                            saveSoon.restart();
+                        }
+                    }
                 }
 
                 RowLayout {
+                    Layout.fillWidth: true
                     spacing: 8
                     Controls.Label {
+                        // The sentence for "hold" wraps in a narrow window.
+                        Layout.fillWidth: row.kind === "hold"
                         text: row.kind === "hold" ? I18n.tr("The bridge is on while these keys are held.") : I18n.tr("Action")
                         color: Style.muted
+                        wrapMode: Text.WordWrap
                     }
-                    Controls.ComboBox {
+                    AppComboBox {
                         visible: row.kind !== "hold"
                         model: editor.actionTexts
                         currentIndex: editor.actionValues.indexOf(row.action)

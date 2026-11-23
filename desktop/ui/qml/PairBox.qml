@@ -28,7 +28,7 @@ ColumnLayout {
         columns: box.width > 480 ? 2 : 1
         columnSpacing: 8
         rowSpacing: 6
-        Controls.TextField {
+        AppTextField {
             id: password
             Layout.fillWidth: true
             Layout.minimumWidth: 60
@@ -54,7 +54,7 @@ ColumnLayout {
         Layout.fillWidth: true
         visible: AppController.pairNeedsNewPassword
         spacing: 6
-        Controls.TextField {
+        AppTextField {
             id: newPassword
             Layout.fillWidth: true
             Layout.minimumWidth: 60
@@ -63,7 +63,7 @@ ColumnLayout {
             placeholderText: I18n.tr("Your own web password (8 to 64 characters)")
             Accessible.name: I18n.tr("New web password")
         }
-        Controls.TextField {
+        AppTextField {
             id: repeat
             Layout.fillWidth: true
             Layout.minimumWidth: 60

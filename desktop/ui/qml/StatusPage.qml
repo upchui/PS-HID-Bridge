@@ -477,7 +477,7 @@ AppPage {
                 text: I18n.tr("Profile")
                 color: Style.text
             }
-            Controls.ComboBox {
+            AppComboBox {
                 model: parent.names
                 currentIndex: parent.names.indexOf(AppController.activeProfile)
                 onActivated: i => AppController.chooseProfile(i)

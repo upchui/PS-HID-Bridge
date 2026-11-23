@@ -76,7 +76,7 @@ ColumnLayout {
     Step {
         number: 2
         text: I18n.tr("Choose what to install.")
-        Controls.ComboBox {
+        AppComboBox {
             id: imageBox
             Layout.fillWidth: true
             Layout.maximumWidth: 460

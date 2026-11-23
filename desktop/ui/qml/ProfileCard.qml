@@ -46,7 +46,7 @@ Card {
     RowLayout {
         Layout.fillWidth: true
         spacing: 8
-        Controls.ComboBox {
+        AppComboBox {
             id: picker
             Layout.fillWidth: true
             Layout.maximumWidth: 320
@@ -103,7 +103,7 @@ Card {
         Layout.fillWidth: true
         visible: card.naming !== ""
         spacing: 8
-        Controls.TextField {
+        AppTextField {
             id: nameField
             Layout.fillWidth: true
             Layout.maximumWidth: 320
@@ -164,7 +164,7 @@ Card {
             text: I18n.tr("Window")
             color: Style.text
         }
-        Controls.TextField {
+        AppTextField {
             id: windowField
             Layout.fillWidth: true
             text: card.profile.window ?? ""

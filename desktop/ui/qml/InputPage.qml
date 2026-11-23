@@ -97,7 +97,7 @@ AppPage {
                 text: I18n.tr("Speed")
                 color: Style.text
             }
-            Controls.Slider {
+            AppSlider {
                 id: touchSpeed
                 Layout.fillWidth: true
                 // The range the app accepts (also set with pshb-cli).

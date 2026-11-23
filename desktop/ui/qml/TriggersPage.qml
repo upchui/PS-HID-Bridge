@@ -32,7 +32,7 @@ AppPage {
             Accessible.name: I18n.tr("Window rule")
         }
 
-        Controls.TextField {
+        AppTextField {
             Layout.fillWidth: true
             enabled: AppController.windowRuleAvailable && AppController.windowRuleEnabled
             text: AppController.windowRule

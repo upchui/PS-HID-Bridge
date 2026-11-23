@@ -148,7 +148,7 @@ Card {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 6
-                    Controls.TextField {
+                    AppTextField {
                         Layout.fillWidth: true
                         visible: !(card.recordingRow === row.index && card.recordingField === "from")
                         text: row.from
@@ -185,7 +185,7 @@ Card {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 6
-                    Controls.TextField {
+                    AppTextField {
                         id: toField
                         Layout.fillWidth: true
                         visible: !(card.recordingRow === row.index && card.recordingField === "to")
@@ -223,14 +223,38 @@ Card {
                         Controls.ToolTip.visible: hovered
                         Controls.ToolTip.text: I18n.tr("Mouse buttons and off")
                         onClicked: presetMenu.popup()
+                        // On a card like AppComboBox's list.
                         Controls.Menu {
                             id: presetMenu
+                            padding: 4
+                            background: Rectangle {
+                                implicitWidth: 200
+                                radius: Style.radius
+                                color: Style.surface
+                                border.color: Style.border
+                            }
                             Repeater {
                                 model: card.presets
                                 delegate: Controls.MenuItem {
+                                    id: preset
                                     required property var modelData
                                     text: modelData.text
+                                    hoverEnabled: true
+                                    leftPadding: 10
+                                    rightPadding: 10
+                                    topPadding: 6
+                                    bottomPadding: 6
                                     onTriggered: card.setField(row.index, "to", modelData.value)
+                                    background: Rectangle {
+                                        radius: 5
+                                        color: preset.pressed ? Style.tint(Style.accent, 0.24)
+                                             : preset.highlighted ? Style.tint(Style.accent, 0.14) : "transparent"
+                                    }
+                                    contentItem: Controls.Label {
+                                        text: preset.text
+                                        color: Style.text
+                                        elide: Text.ElideRight
+                                    }
                                 }
                             }
                         }

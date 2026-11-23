@@ -55,6 +55,9 @@ fn main() {
             "qml/PairBox.qml",
             "qml/InstallBanner.qml",
             "qml/AppWarnings.qml",
+            "qml/AppTextField.qml",
+            "qml/AppComboBox.qml",
+            "qml/AppSlider.qml",
         ]);
 
     // The app icon (also in the AppImage's .desktop entry), for the windows:

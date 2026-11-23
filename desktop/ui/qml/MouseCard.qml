@@ -65,7 +65,7 @@ Card {
             text: I18n.tr("Sensitivity")
             color: Style.text
         }
-        Controls.Slider {
+        AppSlider {
             id: sens
             Layout.fillWidth: true
             // The range the app accepts (also set with pshb-cli).
@@ -85,7 +85,7 @@ Card {
             text: I18n.tr("Acceleration")
             color: Style.text
         }
-        Controls.Slider {
+        AppSlider {
             id: accel
             Layout.fillWidth: true
             from: 0
@@ -104,7 +104,7 @@ Card {
             text: I18n.tr("Vertical speed")
             color: Style.text
         }
-        Controls.Slider {
+        AppSlider {
             id: yRatio
             Layout.fillWidth: true
             from: 0.25
@@ -124,7 +124,7 @@ Card {
             text: I18n.tr("Wheel")
             color: Style.text
         }
-        Controls.Slider {
+        AppSlider {
             id: wheel
             Layout.fillWidth: true
             from: 0.25

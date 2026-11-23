@@ -8,6 +8,7 @@ QtObject {
         "bolt": { s: "M13 2L4 14h7l-1 8 9-12h-7z", f: "" },
         "changelog": { s: "M9 6h11M9 12h11M9 18h7M4.5 6h.01M4.5 12h.01M4.5 18h.01", f: "" },
         "check": { s: "M5 12l5 5 9-10", f: "" },
+        "chevron": { s: "M6 9l6 6 6-6", f: "" },
         "download": { s: "M12 3v12M7 10l5 5 5-5M5 21h14", f: "" },
         "error": { s: "M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0ZM9 9l6 6M15 9l-6 6", f: "" },
         "external": { s: "M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5", f: "" },

@@ -233,7 +233,7 @@ AppPage {
                         text: I18n.tr("Address")
                         color: Style.text
                     }
-                    Controls.TextField {
+                    AppTextField {
                         id: address
                         Layout.fillWidth: true
                         Layout.maximumWidth: 360
@@ -244,7 +244,7 @@ AppPage {
                         text: I18n.tr("Key")
                         color: Style.text
                     }
-                    Controls.TextField {
+                    AppTextField {
                         id: psk
                         Layout.fillWidth: true
                         Layout.maximumWidth: 360

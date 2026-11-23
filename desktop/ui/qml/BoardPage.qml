@@ -71,7 +71,7 @@ AppPage {
                 text: I18n.tr("Address")
                 color: Style.text
             }
-            Controls.TextField {
+            AppTextField {
                 id: address
                 Layout.fillWidth: true
                 text: AppController.boardAddress
@@ -84,7 +84,7 @@ AppPage {
                 text: I18n.tr("Key")
                 color: Style.text
             }
-            Controls.TextField {
+            AppTextField {
                 id: psk
                 Layout.fillWidth: true
                 echoMode: showKey.checked ? TextInput.Normal : TextInput.Password
@@ -154,7 +154,7 @@ AppPage {
         RowLayout {
             Layout.fillWidth: true
             spacing: 8
-            Controls.TextField {
+            AppTextField {
                 id: nameField
                 Layout.fillWidth: true
                 text: AppController.boardName

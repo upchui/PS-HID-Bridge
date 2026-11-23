@@ -23,7 +23,7 @@ Card {
     RowLayout {
         Layout.fillWidth: true
         spacing: 8
-        Controls.TextField {
+        AppTextField {
             id: field
             Layout.fillWidth: true
             Layout.minimumWidth: 60
@@ -80,7 +80,7 @@ Card {
             text: I18n.tr("Keyboard language on the PlayStation")
             color: Style.text
         }
-        Controls.ComboBox {
+        AppComboBox {
             Layout.preferredWidth: 180
             model: card.layouts.map(l => l.name)
             currentIndex: card.layouts.findIndex(l => l.id === AppController.psLayout)
@@ -109,9 +109,26 @@ Card {
     }
 
     Controls.ProgressBar {
+        id: progress
         Layout.fillWidth: true
         visible: AppController.typingBusy
         value: AppController.typingProgress
+        // A track like AppSlider's.
+        background: Rectangle {
+            implicitWidth: 160
+            implicitHeight: 4
+            radius: 2
+            color: Style.tint(Style.text, 0.15)
+        }
+        contentItem: Item {
+            implicitHeight: 4
+            Rectangle {
+                width: progress.visualPosition * parent.width
+                height: parent.height
+                radius: 2
+                color: Style.accent
+            }
+        }
     }
 
     Controls.Label {
