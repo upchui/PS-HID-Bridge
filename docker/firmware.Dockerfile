@@ -22,8 +22,10 @@ RUN apt-get update \
 
 COPY scripts/fetch-verify.sh /usr/local/bin/fetch-verify.sh
 
+# Since 15.3.rel1 Arm publishes the toolchain on its GitLab (the
+# arm-gnu-toolchain-*.tar.xz.sha256asc next to it holds the checksum).
 RUN fetch-verify.sh \
-        "https://developer.arm.com/-/media/Files/downloads/gnu/${ARM_TOOLCHAIN_VERSION}/binrel/arm-gnu-toolchain-${ARM_TOOLCHAIN_VERSION}-x86_64-arm-none-eabi.tar.xz" \
+        "https://gitlab.arm.com/api/v4/projects/10698/packages/generic/gnu-toolchain/${ARM_TOOLCHAIN_VERSION}/arm-gnu-toolchain-${ARM_TOOLCHAIN_VERSION}-x86_64-arm-none-eabi.tar.xz" \
         "${ARM_TOOLCHAIN_SHA256}" /tmp/arm.tar.xz \
  && mkdir -p /opt/arm \
  && tar -xJf /tmp/arm.tar.xz -C /opt/arm --strip-components=1 \
