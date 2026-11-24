@@ -21,7 +21,9 @@
 // Events from the USB interrupt to tud_task(). With 16 (the default) a main
 // loop stalled for ~8 ms (SPI mutex held by core 1) could drop a "transfer
 // complete", which leaves that endpoint busy and the mouse dead until the
-// next bus reset.
+// next bus reset. One tud_task() handles at most 16 of them
+// (CFG_TUD_TASK_EVENTS_PER_RUN, TinyUSB's default): the rest waits in the
+// queue for the next round of the main loop, between net_service() calls.
 #define CFG_TUD_TASK_QUEUE_SZ 64
 
 #endif

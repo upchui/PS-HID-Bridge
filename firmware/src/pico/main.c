@@ -486,7 +486,9 @@ int main(void) {
     critical_section_init(&s_cfg_lock);
     load_settings(stored);
     hid_out_init(&g_input);
-    tud_init(0);
+    // USB device on port 0 at full speed (what the old tud_init(0) did).
+    const tusb_rhport_init_t usb_init = {.role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_FULL};
+    tusb_init(0, &usb_init);
 
     crypto_select();
     crypto_help_init_core0();
