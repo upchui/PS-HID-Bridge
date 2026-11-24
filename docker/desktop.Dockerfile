@@ -18,7 +18,7 @@
 # (*_SHA256 for x86_64, *_SHA256_AARCH64).
 
 # Default only silences a docker lint; the Makefile passes versions.env.
-ARG ALMA_TAG=9.8
+ARG ALMA_TAG=9.9
 
 ############################################################################
 FROM almalinux:${ALMA_TAG} AS base
