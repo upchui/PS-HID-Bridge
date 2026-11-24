@@ -282,7 +282,7 @@ AppPage {
                         }
                         AppButton {
                             text: I18n.trf("Install firmware %1 on the board", version.release.version)
-                            highlighted: !version.appOk
+                            highlighted: true
                             enabled: !page.installing && !AppController.active
                             onClicked: {
                                 version.asking = false;
